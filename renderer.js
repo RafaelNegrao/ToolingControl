@@ -63,6 +63,7 @@ let replacementIdOptionsPromise = null;
 
 const STATUS_STORAGE_KEY = 'toolingStatusOptions';
 const DEFAULT_STATUS_OPTIONS = [
+  'ACTIVE',
   'CONCLUDED',
   'UNDER ANALYSIS',
   'UNDER CONSTRUCTION',
@@ -877,6 +878,122 @@ function closeSupplierFilterOverlay() {
   }
 }
 
+// Variável para gerenciar timeout do toast
+let toastTimeout = null;
+
+// Função para mostrar mensagens toast
+function showToast(message, type = 'success') {
+  const toast = document.getElementById('toast');
+  const toastMessage = document.getElementById('toastMessage');
+  const toastIcon = toast.querySelector('.toast-icon i');
+  
+  // Limpar timeout anterior se existir
+  if (toastTimeout) {
+    clearTimeout(toastTimeout);
+    toastTimeout = null;
+  }
+  
+  // Remover classe show temporariamente para forçar re-render
+  toast.classList.remove('show');
+  
+  // Aguardar frame seguinte antes de mostrar novamente
+  requestAnimationFrame(() => {
+    // Definir ícone baseado no tipo
+    if (type === 'success') {
+      toastIcon.className = 'ph ph-check-circle';
+      toast.style.background = 'linear-gradient(135deg, #10b981 0%, #059669 100%)';
+    } else if (type === 'error') {
+      toastIcon.className = 'ph ph-x-circle';
+      toast.style.background = 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)';
+    } else if (type === 'info') {
+      toastIcon.className = 'ph ph-info';
+      toast.style.background = 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)';
+    }
+    
+    toastMessage.textContent = message;
+    toast.classList.add('show');
+    
+    toastTimeout = setTimeout(() => {
+      toast.classList.remove('show');
+      toastTimeout = null;
+    }, 4000);
+  });
+}
+
+// Habilitar/desabilitar botões de exportar/importar
+function updateSupplierDataButtons(enabled) {
+  const exportBtn = document.getElementById('exportSupplierBtn');
+  const importBtn = document.getElementById('importSupplierBtn');
+  
+  if (exportBtn) exportBtn.disabled = !enabled;
+  if (importBtn) importBtn.disabled = !enabled;
+}
+
+// Exportar dados do supplier para Excel
+async function exportSupplierData() {
+  if (!currentSupplier) {
+    showToast('Please select a supplier first', 'error');
+    return;
+  }
+
+  try {
+    showToast('Exporting supplier data...', 'info');
+    const result = await window.api.exportSupplierData(currentSupplier);
+    
+    if (result.success) {
+      showToast('Data exported successfully!', 'success');
+    } else {
+      showToast('Export cancelled', 'info');
+    }
+  } catch (error) {
+    console.error('Error exporting data:', error);
+    showToast('Error exporting data. Please try again.', 'error');
+  }
+}
+
+// Importar dados do supplier a partir de Excel
+async function importSupplierData() {
+  if (!currentSupplier) {
+    showToast('Please select a supplier first', 'error');
+    return;
+  }
+
+  try {
+    showToast('Importing supplier data...', 'info');
+    const result = await window.api.importSupplierData(currentSupplier);
+
+    if (!result || !result.success) {
+      if (result && result.message === 'Import cancelled') {
+        showToast('Import cancelled', 'info');
+        return;
+      }
+      const errorMsg = result?.message || 'Error importing data. Please try again.';
+      showToast(errorMsg, 'error');
+      return;
+    }
+
+    const updated = result.updated ?? 0;
+    const created = result.created ?? 0;
+    const skipped = result.skipped ?? 0;
+    
+    let successMsg = 'Import finished: ';
+    const parts = [];
+    if (updated > 0) parts.push(`${updated} updated`);
+    if (created > 0) parts.push(`${created} created`);
+    if (skipped > 0) parts.push(`${skipped} skipped`);
+    successMsg += parts.join(', ');
+    
+    showToast(successMsg, 'success');
+
+    await loadToolingBySupplier(currentSupplier);
+    await loadSuppliers();
+  } catch (error) {
+    console.error('Error importing data:', error);
+    const fallbackMessage = error?.message || 'Error importing data. Please try again.';
+    showToast(fallbackMessage, 'error');
+  }
+}
+
 // Exibe cards de fornecedores no sidebar
 function displaySuppliers(suppliers) {
   const supplierList = document.getElementById('supplierList');
@@ -963,8 +1080,29 @@ async function handleSupplierSelection(supplierName, { sourceElement = null, for
   const shouldReload = forceReload || previousSupplier !== normalizedName;
   if (shouldReload) {
     await loadAttachments(normalizedName);
-    await loadToolingBySupplier(normalizedName);
+    
+    // Verificar buscas ativas (geral e por supplier)
+    const searchInput = document.getElementById('searchInput');
+    const currentSearchValue = searchInput ? searchInput.value.trim() : '';
+    const supplierSearchInput = document.getElementById('supplierSearchInput');
+    const supplierSearchTerm = supplierSearchInput ? supplierSearchInput.value.trim() : '';
+    const hasGlobalSearch = currentSearchValue.length >= 2;
+    const hasSupplierSearch = supplierSearchTerm.length >= 1;
+    
+    if (hasGlobalSearch) {
+      // Sincronizar e reaplicar busca global
+      activeSearchTerm = currentSearchValue;
+      await searchTooling(activeSearchTerm);
+    } else if (hasSupplierSearch) {
+      // Reaplicar filtro de suppliers
+      await filterSuppliersAndTooling(supplierSearchTerm);
+    } else {
+      await loadToolingBySupplier(normalizedName);
+    }
   }
+  
+  // Habilitar botões de exportar/importar
+  updateSupplierDataButtons(true);
 }
 
 // Seleciona fornecedor e exibe ferramentais
@@ -990,6 +1128,9 @@ async function selectSupplier(evt, supplierName) {
     const emptyState = document.getElementById('emptyState');
     if (toolingList) toolingList.style.display = 'none';
     if (emptyState) emptyState.style.display = 'none';
+    
+    // Desabilitar botões de exportar/importar
+    updateSupplierDataButtons(false);
     
     return;
   }
@@ -1423,6 +1564,16 @@ async function deleteCardAttachmentFile(supplierName, fileName, itemId) {
 // Carrega ferramentais por fornecedor
 async function loadToolingBySupplier(supplier) {
   try {
+    // Verificar se há busca ativa no input antes de carregar
+    const searchInput = document.getElementById('searchInput');
+    const currentSearchValue = searchInput ? searchInput.value.trim() : '';
+    // Se há busca ativa no input, usar busca ao invés de carregar todos
+    if (currentSearchValue && currentSearchValue.length >= 2) {
+      activeSearchTerm = currentSearchValue;
+      await searchTooling(currentSearchValue);
+      return;
+    }
+
     toolingData = await window.api.getToolingBySupplier(supplier);
     await ensureReplacementIdOptions();
     displayTooling(toolingData);
@@ -2886,8 +3037,6 @@ async function displayTooling(data) {
   const toolingList = document.getElementById('toolingList');
   const emptyState = document.getElementById('emptyState');
 
-  console.log('displayTooling chamado com:', data?.length, 'items');
-
   if (!data || data.length === 0) {
     toolingList.style.display = 'none';
     emptyState.style.display = 'flex';
@@ -4343,6 +4492,15 @@ function loadStatusOptionsFromStorage() {
         const normalized = parsed
           .map(item => (typeof item === 'string' ? item.trim() : ''))
           .filter(item => item.length > 0);
+        
+        // Migração: garantir que ACTIVE está na lista se não estiver
+        if (normalized.length > 0 && !normalized.includes('ACTIVE')) {
+          normalized.unshift('ACTIVE'); // Adiciona no início
+          // Salvar a lista atualizada
+          localStorage.setItem(STATUS_STORAGE_KEY, JSON.stringify(normalized));
+          return Array.from(new Set(normalized));
+        }
+        
         if (normalized.length > 0) {
           return Array.from(new Set(normalized));
         }

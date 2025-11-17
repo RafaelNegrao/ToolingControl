@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld('api', {
   createTooling: (data) => ipcRenderer.invoke('create-tooling', data),
   deleteTooling: (id) => ipcRenderer.invoke('delete-tooling', id),
   
+  // Exportação de dados
+  exportSupplierData: (supplierName) => ipcRenderer.invoke('export-supplier-data', supplierName),
+  importSupplierData: (supplierName) => ipcRenderer.invoke('import-supplier-data', supplierName),
+  
   // Gerenciamento de anexos
   getAttachments: (supplierName, itemId = null) => 
     ipcRenderer.invoke('get-attachments', supplierName, itemId),

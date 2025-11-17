@@ -43,6 +43,8 @@
     "electron-rebuild": "^3.2.9"
   },
   "dependencies": {
-    "sqlite3": "^5.1.7"
+    "exceljs": "^4.4.0",
+    "sqlite3": "^5.1.7",
+    "xlsx": "^0.18.5"
   }
 }

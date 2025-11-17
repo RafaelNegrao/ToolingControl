@@ -94,6 +94,12 @@
                   </div>
                 </div>
                 <div class="attachments-header-actions">
+                  <button class="supplier-data-btn" id="exportSupplierBtn" type="button" title="Export supplier data" onclick="exportSupplierData()" disabled>
+                    <i class="ph ph-export"></i>
+                  </button>
+                  <button class="supplier-data-btn" id="importSupplierBtn" type="button" title="Import supplier data" onclick="importSupplierData()" disabled>
+                    <i class="ph ph-download"></i>
+                  </button>
                   <button class="attachments-counter" id="attachmentsCountBtn" type="button" title="View attachments" onclick="openAttachmentsModal()">
                     <i class="ph ph-files"></i>
                     <span class="attachments-counter-badge" id="attachmentsCountLabel">0</span>
@@ -437,6 +443,45 @@
                 </button>
               </section>
 
+              <section class="settings-card settings-card--wide">
+                <div class="settings-card-header">
+                  <div>
+                    <p class="settings-card-eyebrow">For Suppliers</p>
+                    <h3>Supplier Info & Instructions</h3>
+                  </div>
+                  <i class="ph ph-info" style="font-size: 24px; color: var(--primary-color);"></i>
+                </div>
+                <p class="settings-description">Important information for suppliers filling out tooling data in Excel files.</p>
+                
+                <div class="info-section">
+                  <h4><i class="ph ph-plus-circle"></i> Adding New Tooling Items</h4>
+                  <p>To add a new tooling item to the spreadsheet:</p>
+                  <ul class="info-list">
+                    <li><strong>Leave the ID column empty</strong> - The system will automatically assign an ID when importing</li>
+                    <li><strong>Part Number (PN) is required</strong> - You must fill in the PN for new items</li>
+                    <li><strong>Fill in all relevant data</strong> - Description, quantities, dates, and comments help us track the tooling lifecycle</li>
+                    <li><strong>Add rows at the end</strong> - The PN column is unlocked starting from the first empty row</li>
+                  </ul>
+                </div>
+
+                <div class="info-section">
+                  <h4><i class="ph ph-calendar"></i> Understanding Date Fields</h4>
+                  <p><strong>Production Date:</strong> This is the date when the "Produced" quantity was measured. It represents the production volume on the date the data was collected. Use format: dd/mm/yyyy</p>
+                  <p><strong>Forecast Date:</strong> This is the date when the "Annual Volume Forecast" was calculated or projected. It represents when this forecast estimate was made. Use format: dd/mm/yyyy</p>
+                </div>
+
+                <div class="info-section">
+                  <h4><i class="ph ph-shield-check"></i> File Protection</h4>
+                  <ul class="info-list">
+                    <li>The Excel file is password-protected to maintain data integrity</li>
+                    <li><strong>ID column is locked</strong> - Cannot be modified for existing items</li>
+                    <li><strong>PN column</strong> - Locked for existing items, unlocked for new rows</li>
+                    <li>All other columns (Description, quantities, dates, comments) are editable</li>
+                    <li>Your comments will be timestamped automatically when imported</li>
+                  </ul>
+                </div>
+              </section>
+
               <section class="settings-card settings-card--tech">
                 <h3>Tech Stack</h3>
                 <p class="settings-description">Tecnologias principais que alimentam esta versão.</p>
@@ -519,6 +564,14 @@
         <span class="status-label" id="appVersion"></span>
       </div>
     </footer>
+
+    <!-- Toast notification -->
+    <div id="toast" class="toast">
+      <div class="toast-icon">
+        <i class="ph ph-check-circle"></i>
+      </div>
+      <div class="toast-message" id="toastMessage">Success!</div>
+    </div>
 
     <script src="renderer.js"></script>
   </body>
