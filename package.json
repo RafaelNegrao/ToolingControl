@@ -1,0 +1,48 @@
+{
+  "name": "tooling-control-app",
+  "version": "1.0.0",
+  "description": "Electron app for tooling control with SQLite database",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder",
+    "postinstall": "electron-rebuild"
+  },
+  "build": {
+    "appId": "com.cummins.tooling-control-app",
+    "productName": "Tooling Control App",
+    "artifactName": "${productName}.${ext}",
+    "files": [
+      "**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "ferramentas.ico"
+    },
+    "npmRebuild": false,
+    "buildDependenciesFromSource": false
+  },
+  "keywords": [
+    "tooling",
+    "cummins",
+    "database",
+    "electron"
+  ],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "electron-rebuild": "^3.2.9"
+  },
+  "dependencies": {
+    "sqlite3": "^5.1.7"
+  }
+}
