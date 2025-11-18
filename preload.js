@@ -19,10 +19,14 @@ contextBridge.exposeInMainWorld('api', {
   // Exportação de dados
   exportSupplierData: (supplierName) => ipcRenderer.invoke('export-supplier-data', supplierName),
   importSupplierData: (supplierName) => ipcRenderer.invoke('import-supplier-data', supplierName),
+  exportAllData: () => ipcRenderer.invoke('export-all-data'),
+  importAllData: () => ipcRenderer.invoke('import-all-data'),
   
   // Gerenciamento de anexos
   getAttachments: (supplierName, itemId = null) => 
     ipcRenderer.invoke('get-attachments', supplierName, itemId),
+  getAttachmentsCountBatch: (supplierName, itemIds) =>
+    ipcRenderer.invoke('get-attachments-count-batch', supplierName, itemIds),
   uploadAttachment: (supplierName, itemId = null) => 
     ipcRenderer.invoke('upload-attachment', supplierName, itemId),
   uploadAttachmentFromPaths: (supplierName, filePaths, itemId = null) => 

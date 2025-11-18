@@ -60,6 +60,13 @@ let expirationFilterEnabled = false;
 let replacementIdOptions = [];
 let replacementIdOptionsLoaded = false;
 let replacementIdOptionsPromise = null;
+let supplierFilterRequestId = 0;
+let globalSearchRequestId = 0;
+let currentToolingRenderToken = 0;
+let supplierSearchDebouncedHandler = null;
+let globalSearchDebouncedHandler = null;
+
+const ASYNC_METADATA_CONCURRENCY = 6;
 
 const STATUS_STORAGE_KEY = 'toolingStatusOptions';
 const DEFAULT_STATUS_OPTIONS = [
@@ -83,6 +90,55 @@ let statusSettingsElements = {
 
 const TEXT_INPUT_TYPES = new Set(['text', 'search', '']);
 let uppercaseInputHandlerInitialized = false;
+
+function debounce(fn, delay = 250) {
+  let timeoutId = null;
+  function debounced(...args) {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+    timeoutId = setTimeout(() => {
+      timeoutId = null;
+      fn(...args);
+    }, delay);
+  }
+  debounced.cancel = () => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+  };
+  return debounced;
+}
+
+async function runTasksWithLimit(items, limit, task) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return;
+  }
+
+  const workerCount = Math.min(Math.max(limit, 1), items.length);
+  let cursor = 0;
+
+  async function worker() {
+    while (true) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) {
+        break;
+      }
+      try {
+        await task(items[index], index);
+      } catch (error) {
+      }
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, worker));
+}
+
+function isActiveToolingRenderToken(token) {
+  return token === currentToolingRenderToken;
+}
 
 function enforceUppercaseValue(element) {
   if (!element || typeof element.value !== 'string') {
@@ -269,7 +325,6 @@ async function refreshReplacementIdOptions(force = false) {
       return replacementIdOptions;
     })
     .catch((error) => {
-      console.error('Erro ao carregar IDs para substituição:', error);
       replacementIdOptions = [];
       replacementIdOptionsLoaded = false;
       return [];
@@ -475,6 +530,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initAttachmentsDragAndDrop();
   initExpirationInfoModal();
   initProductionInfoModal();
+  initSettingsCarouselScrollListener();
 
   if (attachmentsCounterBadge) {
     attachmentsCounterBadge.textContent = '0';
@@ -546,14 +602,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Funcionalidade de pesquisa
   if (searchInput) {
-    searchInput.addEventListener('input', async (e) => {
+    globalSearchDebouncedHandler = debounce((term) => {
+      activeSearchTerm = term;
+      searchTooling(term);
+    }, 250);
+
+    searchInput.addEventListener('input', (e) => {
       const searchTerm = e.target.value.trim();
       if (searchTerm.length >= 2) {
         activeSearchTerm = searchTerm;
-        await searchTooling(searchTerm);
-        updateSearchIndicators();
+        globalSearchDebouncedHandler(searchTerm);
       } else if (searchTerm.length === 0) {
-        await clearSearch({ keepOverlayOpen: true });
+        globalSearchDebouncedHandler?.cancel?.();
+        clearSearch({ keepOverlayOpen: true });
       }
     });
   }
@@ -604,12 +665,16 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Listener para a barra de pesquisa de suppliers
   if (supplierSearchInput) {
-    supplierSearchInput.addEventListener('input', async (e) => {
+    supplierSearchDebouncedHandler = debounce((term) => {
+      filterSuppliersAndTooling(term);
+    }, 200);
+
+    supplierSearchInput.addEventListener('input', (e) => {
       const searchTerm = e.target.value.trim();
       if (clearSupplierSearchBtn) {
         clearSupplierSearchBtn.style.display = searchTerm ? 'flex' : 'none';
       }
-      await filterSuppliersAndTooling(searchTerm);
+      supplierSearchDebouncedHandler(searchTerm);
     });
   }
 
@@ -700,6 +765,7 @@ async function handleSearchAction() {
 async function clearSearch(options = {}) {
   const { closeOverlay = false, keepOverlayOpen = false } = options;
   const searchInput = document.getElementById('searchInput');
+  globalSearchDebouncedHandler?.cancel?.();
 
   activeSearchTerm = '';
   if (searchInput) {
@@ -761,20 +827,6 @@ document.addEventListener('click', (event) => {
   closeAllReplacementPickers();
 });
 
-// Fecha card de ferramental ao clicar fora
-document.addEventListener('click', (event) => {
-  const toolingCard = event.target.closest('.tooling-card');
-  const expandedCard = document.querySelector('.tooling-card.expanded');
-  
-  // Se há um card expandido e o clique foi fora dele
-  if (expandedCard && !toolingCard) {
-    const cardIndex = Array.from(document.querySelectorAll('.tooling-card')).indexOf(expandedCard);
-    if (cardIndex !== -1) {
-      toggleCard(cardIndex);
-    }
-  }
-});
-
 // Fecha overlay com tecla ESC
 document.addEventListener('keydown', (e) => {
   const overlay = document.getElementById('searchOverlay');
@@ -814,11 +866,9 @@ document.addEventListener('keydown', (e) => {
 async function loadSuppliers() {
   try {
     suppliersData = await window.api.getSuppliersWithStats();
-    console.log('Suppliers loaded:', suppliersData);
     applyExpirationFilter();
     populateAddToolingSuppliers();
   } catch (error) {
-    console.error('Error loading suppliers:', error);
     showNotification('Error loading suppliers', 'error');
   }
 }
@@ -878,6 +928,45 @@ function closeSupplierFilterOverlay() {
   }
 }
 
+// Export all data (ID, PN, Supplier, Forecast, Forecast Date)
+async function exportAllData() {
+  try {
+    const result = await window.api.exportAllData();
+    if (result.success) {
+      showNotification(`Data exported successfully to: ${result.filePath}`);
+      closeSupplierFilterOverlay();
+    } else {
+      showNotification('Failed to export data', 'error');
+    }
+  } catch (error) {
+    showNotification('Error exporting data', 'error');
+  }
+}
+
+// Import data and update Forecast and Forecast Date by ID
+async function importAllData() {
+  try {
+    const result = await window.api.importAllData();
+    if (result.success) {
+      showNotification(`Successfully updated ${result.updatedCount} records`);
+      closeSupplierFilterOverlay();
+      
+      // Reload data
+      await loadSuppliers();
+      await loadAnalytics();
+      if (selectedSupplier) {
+        await loadToolingBySupplier(selectedSupplier);
+      }
+    } else if (result.cancelled) {
+      // User cancelled
+    } else {
+      showNotification(result.error || 'Failed to import data', 'error');
+    }
+  } catch (error) {
+    showNotification('Error importing data', 'error');
+  }
+}
+
 // Variável para gerenciar timeout do toast
 let toastTimeout = null;
 
@@ -924,9 +1013,90 @@ function showToast(message, type = 'success') {
 function updateSupplierDataButtons(enabled) {
   const exportBtn = document.getElementById('exportSupplierBtn');
   const importBtn = document.getElementById('importSupplierBtn');
+  const commentBtn = document.getElementById('supplierCommentBtn');
   
   if (exportBtn) exportBtn.disabled = !enabled;
   if (importBtn) importBtn.disabled = !enabled;
+  if (commentBtn) commentBtn.disabled = !enabled;
+}
+
+// Abrir modal de comentários do supplier
+function openSupplierComments() {
+  if (!currentSupplier) {
+    showNotification('Please select a supplier first', 'error');
+    return;
+  }
+  
+  const modal = document.getElementById('supplierCommentsModal');
+  const subtitle = document.getElementById('supplierCommentsSubtitle');
+  
+  if (subtitle) {
+    subtitle.textContent = currentSupplier;
+  }
+  
+  // Load existing comments/tasks from localStorage
+  loadSupplierCommentsData();
+  
+  if (modal) {
+    modal.classList.add('active');
+  }
+}
+
+function closeSupplierCommentsModal() {
+  const modal = document.getElementById('supplierCommentsModal');
+  if (modal) {
+    modal.classList.remove('active');
+  }
+}
+
+function loadSupplierCommentsData() {
+  if (!currentSupplier) {
+    return;
+  }
+
+  const notesTextarea = document.getElementById('supplierNotesText');
+  if (!notesTextarea) {
+    return;
+  }
+
+  const storageKey = `supplier_comments_${currentSupplier}`;
+  const rawValue = localStorage.getItem(storageKey);
+  let savedNotes = '';
+
+  if (rawValue) {
+    try {
+      const parsed = JSON.parse(rawValue);
+      if (typeof parsed === 'string') {
+        savedNotes = parsed;
+      } else if (parsed && typeof parsed === 'object' && typeof parsed.notes === 'string') {
+        savedNotes = parsed.notes;
+      }
+    } catch (error) {
+      savedNotes = rawValue;
+    }
+  }
+
+  notesTextarea.value = savedNotes;
+}
+
+function saveSupplierComments() {
+  if (!currentSupplier) {
+    return;
+  }
+
+  const notesTextarea = document.getElementById('supplierNotesText');
+  if (!notesTextarea) {
+    return;
+  }
+
+  const storageKey = `supplier_comments_${currentSupplier}`;
+  const data = {
+    notes: notesTextarea.value || ''
+  };
+
+  localStorage.setItem(storageKey, JSON.stringify(data));
+  showNotification('Supplier comments saved successfully!', 'success');
+  closeSupplierCommentsModal();
 }
 
 // Exportar dados do supplier para Excel
@@ -946,7 +1116,6 @@ async function exportSupplierData() {
       showToast('Export cancelled', 'info');
     }
   } catch (error) {
-    console.error('Error exporting data:', error);
     showToast('Error exporting data. Please try again.', 'error');
   }
 }
@@ -988,7 +1157,6 @@ async function importSupplierData() {
     await loadToolingBySupplier(currentSupplier);
     await loadSuppliers();
   } catch (error) {
-    console.error('Error importing data:', error);
     const fallbackMessage = error?.message || 'Error importing data. Please try again.';
     showToast(fallbackMessage, 'error');
   }
@@ -1059,7 +1227,7 @@ function setActiveSupplierCard(supplierName, explicitElement = null) {
   return targetCard;
 }
 
-async function handleSupplierSelection(supplierName, { sourceElement = null, forceReload = false } = {}) {
+function handleSupplierSelection(supplierName, { sourceElement = null, forceReload = false } = {}) {
   const normalizedName = typeof supplierName === 'string' ? supplierName.trim() : '';
   if (!normalizedName) {
     return;
@@ -1076,37 +1244,60 @@ async function handleSupplierSelection(supplierName, { sourceElement = null, for
     attachmentsContainer.style.display = 'block';
     currentSupplierName.textContent = normalizedName;
   }
+  
+  // Habilitar botões de exportar/importar IMEDIATAMENTE
+  updateSupplierDataButtons(true);
+  
+  // Mostra área de tooling IMEDIATAMENTE (vazia)
+  const toolingList = document.getElementById('toolingList');
+  const emptyState = document.getElementById('emptyState');
+  if (toolingList) {
+    toolingList.style.display = 'flex';
+    toolingList.innerHTML = '';
+  }
+  if (emptyState) {
+    emptyState.style.display = 'none';
+  }
 
   const shouldReload = forceReload || previousSupplier !== normalizedName;
   if (shouldReload) {
-    await loadAttachments(normalizedName);
-    
-    // Verificar buscas ativas (geral e por supplier)
-    const searchInput = document.getElementById('searchInput');
-    const currentSearchValue = searchInput ? searchInput.value.trim() : '';
-    const supplierSearchInput = document.getElementById('supplierSearchInput');
-    const supplierSearchTerm = supplierSearchInput ? supplierSearchInput.value.trim() : '';
-    const hasGlobalSearch = currentSearchValue.length >= 2;
-    const hasSupplierSearch = supplierSearchTerm.length >= 1;
-    
-    if (hasGlobalSearch) {
-      // Sincronizar e reaplicar busca global
-      activeSearchTerm = currentSearchValue;
-      await searchTooling(activeSearchTerm);
-    } else if (hasSupplierSearch) {
-      // Reaplicar filtro de suppliers
-      await filterSuppliersAndTooling(supplierSearchTerm);
-    } else {
-      await loadToolingBySupplier(normalizedName);
-    }
+    // Carrega tudo em background DEPOIS da UI responder
+    setTimeout(() => {
+      loadAttachments(normalizedName).catch(err => {});
+      
+      // Verifica AMBOS campos de pesquisa
+      const searchInput = document.getElementById('searchInput');
+      const supplierSearchInput = document.getElementById('supplierSearchInput');
+      const globalSearchValue = searchInput ? searchInput.value.trim() : '';
+      const supplierSearchValue = supplierSearchInput ? supplierSearchInput.value.trim() : '';
+      
+      const hasGlobalSearch = globalSearchValue.length >= 2;
+      const hasSupplierSearch = supplierSearchValue.length >= 1;
+      
+      if (hasGlobalSearch) {
+        // Usa busca global que já filtra por supplier selecionado
+        activeSearchTerm = globalSearchValue;
+        searchTooling(activeSearchTerm).catch(err => {});
+      } else if (hasSupplierSearch) {
+        // Filtra por termo da barra lateral E supplier selecionado
+        window.api.searchTooling(supplierSearchValue).then(allResults => {
+          const filteredResults = allResults.filter(item => {
+            const itemSupplier = String(item.supplier || '').trim();
+            return itemSupplier === normalizedName;
+          });
+          toolingData = filteredResults;
+          displayTooling(filteredResults);
+        }).catch(err => {});
+      } else {
+        // Sem nenhuma busca, carrega todos do supplier
+        loadToolingBySupplier(normalizedName).catch(err => {});
+      }
+    }, 0);
   }
-  
-  // Habilitar botões de exportar/importar
-  updateSupplierDataButtons(true);
 }
 
 // Seleciona fornecedor e exibe ferramentais
-async function selectSupplier(evt, supplierName) {
+function selectSupplier(evt, supplierName) {
   const cardElement = evt?.currentTarget || evt?.target?.closest('.supplier-card');
   
   // Se clicar no supplier já selecionado, deseleciona
@@ -1135,7 +1326,7 @@ async function selectSupplier(evt, supplierName) {
     return;
   }
   
-  await handleSupplierSelection(supplierName, { sourceElement: cardElement, forceReload: true });
+  handleSupplierSelection(supplierName, { sourceElement: cardElement, forceReload: true });
 }
 
 function initAttachmentsDragAndDrop() {
@@ -1302,7 +1493,121 @@ async function handleAttachmentFiles(files) {
 
     await loadAttachments(currentSupplier);
   } catch (error) {
-    console.error('Error attaching files via drag and drop:', error);
+    showNotification('Error attaching files.', 'error');
+  }
+}
+
+// Initialize drag and drop for card attachment dropzones
+function initCardAttachmentDragAndDrop(dropzoneElement, itemId) {
+  if (!dropzoneElement) return;
+
+  dropzoneElement.addEventListener('dragenter', (e) => handleCardDropzoneDragEnter(e, dropzoneElement), false);
+  dropzoneElement.addEventListener('dragover', (e) => handleCardDropzoneDragOver(e, dropzoneElement), false);
+  dropzoneElement.addEventListener('dragleave', (e) => handleCardDropzoneDragLeave(e, dropzoneElement), false);
+  dropzoneElement.addEventListener('drop', (e) => handleCardDropzoneDrop(e, dropzoneElement, itemId), false);
+}
+
+function handleCardDropzoneDragEnter(event, dropzone) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  dropzone.classList.add('drop-active');
+}
+
+function handleCardDropzoneDragOver(event, dropzone) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy';
+  }
+  dropzone.classList.add('drop-active');
+}
+
+function handleCardDropzoneDragLeave(event, dropzone) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  
+  // Only remove class if leaving the dropzone itself
+  if (event.target === dropzone) {
+    dropzone.classList.remove('drop-active');
+  }
+}
+
+async function handleCardDropzoneDrop(event, dropzone, itemId) {
+  if (!isFileDrag(event)) return;
+  
+  event.preventDefault();
+  event.stopPropagation();
+  dropzone.classList.remove('drop-active');
+
+  const files = Array.from(event.dataTransfer?.files || []);
+  if (!files.length) return;
+
+  await handleCardAttachmentFiles(files, itemId);
+}
+
+async function handleCardAttachmentFiles(files, itemId) {
+  if (!files || files.length === 0) return;
+  // Try to get item from toolingData first
+  let { normalizedId, toolingItem } = findToolingItem(itemId);
+  // If not found in array, try to get from card DOM
+  if (normalizedId === null || !toolingItem) {
+    const card = document.querySelector(`.tooling-card[data-item-id="${itemId}"]`);
+    if (card) {
+      // Always normalize the ID from DOM attribute
+      normalizedId = normalizeItemId(card.dataset.itemId || itemId);
+
+      // Get supplier from data attribute or fields
+      const supplierAttr = card.getAttribute('data-supplier');
+      const supplierField = card.querySelector('[data-field="supplier"]');
+      const supplier = (supplierField?.value || supplierAttr || '').trim();
+      if (supplier) {
+        toolingItem = { id: normalizedId, supplier };
+      }
+    }
+  }
+  
+  if (normalizedId === null || !toolingItem) {
+    showNotification('Invalid tooling item.', 'error');
+    return;
+  }
+
+  if (!toolingItem.supplier) {
+    showNotification('Supplier not found for this tooling.', 'error');
+    return;
+  }
+  const paths = files.map(file => file?.path).filter(Boolean);
+  if (paths.length === 0) {
+    showNotification('Unable to read the dragged files.', 'error');
+    return;
+  }
+
+  try {
+    const result = await window.api.uploadAttachmentFromPaths(toolingItem.supplier, paths, normalizedId);
+
+    if (!result) {
+      showNotification('Unable to attach the files.', 'error');
+      return;
+    }
+
+    const failures = Array.isArray(result.results)
+      ? result.results.filter(item => item?.success !== true)
+      : [];
+
+    if (failures.length > 0 || result.success !== true) {
+      const errorMessage = failures[0]?.error || result.error || 'Error attaching files.';
+      showNotification(errorMessage, 'error');
+    } else {
+      const successMessage = paths.length > 1
+        ? 'Files attached successfully!'
+        : 'File attached successfully!';
+      showNotification(successMessage);
+    }
+
+    await loadCardAttachments(normalizedId);
+  } catch (error) {
     showNotification('Error attaching files.', 'error');
   }
 }
@@ -1313,7 +1618,6 @@ async function loadAttachments(supplierName) {
     const attachments = await window.api.getAttachments(supplierName);
     displayAttachments(attachments);
   } catch (error) {
-    console.error('Error loading attachments:', error);
     displayAttachments([]);
   }
 }
@@ -1494,14 +1798,12 @@ async function uploadAttachment() {
         const failures = result.results.filter(r => !r.success);
         if (failures.length > 0) {
           const errorMsg = failures.map(f => `${f.fileName}: ${f.error}`).join('\n');
-          console.error('Upload failures:', errorMsg);
         }
       }
     } else {
       showNotification('Error attaching file(s)', 'error');
     }
   } catch (error) {
-    console.error('Error uploading file:', error);
     alert('Error uploading file');
   }
 }
@@ -1511,7 +1813,6 @@ async function openAttachment(supplierName, fileName) {
   try {
     await window.api.openAttachment(supplierName, fileName);
   } catch (error) {
-    console.error('Error opening file:', error);
     alert('Error opening file');
   }
 }
@@ -1528,7 +1829,6 @@ async function deleteAttachment(supplierName, fileName) {
       await loadAttachments(supplierName);
     }
   } catch (error) {
-    console.error('Error deleting file:', error);
     alert('Error deleting file');
   }
 }
@@ -1538,7 +1838,6 @@ async function openCardAttachmentFile(supplierName, fileName, itemId) {
   try {
     await window.api.openAttachment(supplierName, fileName, itemId);
   } catch (error) {
-    console.error('Error opening card attachment:', error);
     showNotification('Error opening file', 'error');
   }
 }
@@ -1556,7 +1855,6 @@ async function deleteCardAttachmentFile(supplierName, fileName, itemId) {
       await loadCardAttachments(itemId);
     }
   } catch (error) {
-    console.error('Error deleting card attachment:', error);
     showNotification('Error deleting file', 'error');
   }
 }
@@ -1574,22 +1872,80 @@ async function loadToolingBySupplier(supplier) {
       return;
     }
 
+    // Mostrar skeleton loading
+    showSkeletonLoading();
+    
+    // Carregar dados
     toolingData = await window.api.getToolingBySupplier(supplier);
     await ensureReplacementIdOptions();
-    displayTooling(toolingData);
+    
+    // Renderizar em chunks para não travar a UI
+    await displayToolingInChunks(toolingData);
   } catch (error) {
-    console.error('Erro ao carregar ferramentais:', error);
     showNotification('Erro ao carregar ferramentais', 'error');
+    hideSkeletonLoading();
   }
+}
+
+function showSkeletonLoading() {
+  const toolingList = document.getElementById('toolingList');
+  const emptyState = document.getElementById('emptyState');
+  
+  if (emptyState) emptyState.style.display = 'none';
+  if (!toolingList) return;
+  
+  toolingList.style.display = 'flex';
+  toolingList.innerHTML = Array.from({ length: 6 }, () => `
+    <div class="skeleton-card">
+      <div class="skeleton-header">
+        <div class="skeleton-line skeleton-title"></div>
+        <div class="skeleton-line skeleton-badge"></div>
+      </div>
+      <div class="skeleton-body">
+        <div class="skeleton-line skeleton-text"></div>
+        <div class="skeleton-line skeleton-text short"></div>
+        <div class="skeleton-line skeleton-text"></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function hideSkeletonLoading() {
+  const toolingList = document.getElementById('toolingList');
+  if (toolingList) {
+    toolingList.innerHTML = '';
+  }
+}
+
+async function displayToolingInChunks(data, chunkSize = 10) {
+  // Usar a função displayTooling existente, mas de forma não-bloqueante
+  hideSkeletonLoading();
+  
+  // Pequeno delay para permitir que a UI atualize
+  await new Promise(resolve => setTimeout(resolve, 0));
+  
+  // Chamar displayTooling normalmente
+  await displayTooling(data);
 }
 
 // Busca ferramentais
 async function searchTooling(term) {
+  const normalizedTerm = typeof term === 'string' ? term.trim() : '';
+  if (!normalizedTerm) {
+    displayTooling([]);
+    updateSearchIndicators();
+    return;
+  }
+
+  const requestId = ++globalSearchRequestId;
+
   try {
-    const results = await window.api.searchTooling(term);
+    const results = await window.api.searchTooling(normalizedTerm);
+    if (requestId !== globalSearchRequestId) {
+      return;
+    }
     await ensureReplacementIdOptions();
     
-    // Filtrar resultados pelo supplier selecionado, se houver
     let filteredResults = results;
     if (selectedSupplier) {
       filteredResults = results.filter(item => {
@@ -1602,7 +1958,6 @@ async function searchTooling(term) {
     displayTooling(filteredResults);
     updateSearchIndicators();
   } catch (error) {
-    console.error('Erro na busca:', error);
   }
 }
 
@@ -1687,15 +2042,10 @@ function calculateLifecycle(cardIndex) {
   }
   
   // Atualiza barra de progresso interna (aba Data)
-  const progressFill = card.querySelector('.progress-fill:not([data-progress-fill])');
-  const progressLabel = card.querySelector('.progress-label');
-  
-  if (progressFill) {
-    progressFill.style.width = percent + '%';
-  }
-  
-  if (progressLabel) {
-    progressLabel.textContent = `${produced} / ${toolingLife} (${percent}%)`;
+  const lifecycleProgressFill = card.querySelector('[data-lifecycle-progress-fill]');
+
+  if (lifecycleProgressFill) {
+    lifecycleProgressFill.style.width = percent + '%';
   }
   
   // Atualiza barra de progresso externa (header)
@@ -1719,10 +2069,9 @@ function calculateLifecycle(cardIndex) {
 
 // Calcula data de vencimento baseada no annual forecast
 // Calcula a data de validade
-function calculateExpirationDate(cardIndex, providedItem = null) {
+function calculateExpirationDate(cardIndex, providedItem = null, skipSave = false) {
   const card = document.getElementById(`card-${cardIndex}`);
   if (!card) {
-    console.warn(`Card #${cardIndex} não encontrado`);
     return;
   }
   
@@ -1744,7 +2093,6 @@ function calculateExpirationDate(cardIndex, providedItem = null) {
   
   const expirationInput = card.querySelector(`[data-field="expiration_date"]`);
   if (!expirationInput) {
-    console.error(`Input expiration_date não encontrado no card ${cardIndex}`);
     return;
   }
   
@@ -1760,15 +2108,31 @@ function calculateExpirationDate(cardIndex, providedItem = null) {
   if (formattedDate) {
     expirationInput.value = formattedDate;
     item.expiration_date = formattedDate;
-    console.log(`✓ Expiration atualizado no input: remaining=${remaining}, forecast=${forecast}, productionDate=${productionDateValue}, date=${formattedDate}`);
+    // Atualizar header do card em tempo real
+    const card = document.getElementById(`card-${cardIndex}`);
+    if (card) {
+      const expirationDisplay = card.querySelector('[data-card-expiration]');
+      if (expirationDisplay) {
+        expirationDisplay.textContent = formatDate(formattedDate);
+      }
+    }
   } else {
     expirationInput.value = '';
     item.expiration_date = '';
-    console.log(`Não foi possível calcular expiration: remaining=${remaining}, forecast=${forecast}, productionDate=${productionDateValue}`);
+    // Limpar header do card
+    const card = document.getElementById(`card-${cardIndex}`);
+    if (card) {
+      const expirationDisplay = card.querySelector('[data-card-expiration]');
+      if (expirationDisplay) {
+        expirationDisplay.textContent = 'N/A';
+      }
+    }
   }
   
-  // Salva automaticamente
-  autoSaveTooling(itemId);
+  // Salva automaticamente apenas se não for skipSave
+  if (!skipSave) {
+    autoSaveTooling(itemId);
+  }
 }
 
 function handleProducedChange(cardIndex) {
@@ -1807,6 +2171,39 @@ function updateCardHeaderStatus(cardIndex, statusValue) {
   }
 }
 
+function updateCardHeaderSteps(cardIndex, stepsValue) {
+  const card = document.getElementById(`card-${cardIndex}`);
+  if (!card) {
+    return;
+  }
+  const display = card.querySelector('[data-card-steps]');
+  if (display) {
+    display.textContent = stepsValue || 'N/A';
+  }
+}
+
+function handleStepsSelectChange(cardIndex, itemId, selectEl) {
+  if (selectEl) {
+    const value = (selectEl.value || '').trim();
+    updateCardHeaderSteps(cardIndex, value);
+  }
+  autoSaveTooling(itemId);
+}
+
+function handlePNChange(cardIndex, itemId, inputEl) {
+  if (inputEl) {
+    const value = (inputEl.value || '').trim();
+    const card = document.getElementById(`card-${cardIndex}`);
+    if (card) {
+      const pnDisplay = card.querySelector('.tooling-info-value.highlight');
+      if (pnDisplay) {
+        pnDisplay.textContent = value || 'N/A';
+      }
+    }
+  }
+  autoSaveTooling(itemId);
+}
+
 function updateCardStatusAttribute(cardIndex, statusValue) {
   const card = document.getElementById(`card-${cardIndex}`);
   if (!card) {
@@ -1816,6 +2213,36 @@ function updateCardStatusAttribute(cardIndex, statusValue) {
   card.dataset.status = normalized;
   card.classList.toggle('is-obsolete', normalized === 'obsolete');
   syncObsoleteLinkVisibility(card, normalized === 'obsolete');
+  updateCardStatusIcon(card, normalized);
+}
+
+function updateCardStatusIcon(card, normalizedStatus) {
+  const statusIconContainer = card.querySelector('.card-status-icon');
+  const isObsolete = normalizedStatus === 'obsolete';
+  
+  if (isObsolete) {
+    // Show obsolete icon
+    if (statusIconContainer) {
+      statusIconContainer.className = 'card-status-icon status-icon-obsolete';
+      statusIconContainer.innerHTML = '<i class="ph ph-fill ph-archive-box"></i>';
+      statusIconContainer.title = 'Obsolete';
+    } else {
+      // Create icon if it doesn't exist
+      const headerTop = card.querySelector('.tooling-card-header-top');
+      if (headerTop) {
+        const iconDiv = document.createElement('div');
+        iconDiv.className = 'card-status-icon status-icon-obsolete';
+        iconDiv.innerHTML = '<i class="ph ph-fill ph-archive-box"></i>';
+        iconDiv.title = 'Obsolete';
+        headerTop.insertBefore(iconDiv, headerTop.firstChild);
+      }
+    }
+  } else {
+    // Remove obsolete icon if not obsolete anymore
+    if (statusIconContainer && statusIconContainer.classList.contains('status-icon-obsolete')) {
+      statusIconContainer.remove();
+    }
+  }
 }
 
 function syncObsoleteLinkVisibility(card, isObsolete) {
@@ -1893,6 +2320,9 @@ function syncReplacementLinkControls(cardIndex, replacementId) {
   }
 
   syncReplacementPickerLabel(card, sanitizedValue);
+  
+  // Atualiza o ícone de corrente (chain indicator)
+  updateChainIndicatorForCard(card, sanitizedValue);
 }
 
 function syncReplacementPickerLabel(card, replacementId) {
@@ -1910,6 +2340,37 @@ function syncReplacementPickerLabel(card, replacementId) {
   const optionLabel = getReplacementOptionLabelById(sanitizedValue) || `${sanitizedValue}`;
   label.textContent = optionLabel;
   trigger.classList.add('has-selection');
+}
+
+function updateChainIndicatorForCard(card, replacementId) {
+  if (!card) {
+    return;
+  }
+  const chainIndicator = card.querySelector('.tooling-chain-indicator');
+  if (!chainIndicator) {
+    return;
+  }
+  const hasLink = Boolean(sanitizeReplacementId(replacementId));
+  
+  // Também verifica se este card é alvo de algum replacement
+  const cardId = card.dataset.itemId;
+  let isTarget = false;
+  if (cardId) {
+    const allCards = document.querySelectorAll('.tooling-card');
+    allCards.forEach((otherCard) => {
+      const otherReplacementId = sanitizeReplacementId(otherCard.dataset.replacementId);
+      if (otherReplacementId === cardId) {
+        isTarget = true;
+      }
+    });
+  }
+  
+  // Mostra o ícone se tem link de saída ou é alvo de entrada
+  if (hasLink || isTarget) {
+    chainIndicator.removeAttribute('hidden');
+  } else {
+    chainIndicator.setAttribute('hidden', 'true');
+  }
 }
 
 async function toggleReplacementPicker(event, cardIndex) {
@@ -2004,7 +2465,6 @@ async function openReplacementTimelineOverlay(startId) {
     const chain = await buildReplacementTimeline(normalizedId);
     renderReplacementTimeline(chain);
   } catch (error) {
-    console.error('Erro ao montar linha temporal de substituições:', error);
     showNotification('Não foi possível carregar a linha temporal de substituições.', 'error');
     renderReplacementTimeline([]);
   }
@@ -2060,7 +2520,12 @@ function renderReplacementTimeline(chain = []) {
         <div class="timeline-item-content">
           <div class="timeline-item-header">
             <span class="timeline-item-id">#${toolingId}</span>
-            <span class="timeline-status-badge ${badgeClass}">${label}</span>
+            <div class="timeline-header-right">
+              <span class="timeline-status-badge ${badgeClass}">${label}</span>
+              <button class="timeline-item-action" type="button" onclick="handleTimelineCardNavigate(event, '${toolingId}')" title="Open card">
+                <i class="ph ph-arrow-square-out"></i>
+              </button>
+            </div>
           </div>
           <div class="timeline-meta-row">
             <span><span class="timeline-meta-label">PN:</span> ${pn}</span>
@@ -2068,9 +2533,6 @@ function renderReplacementTimeline(chain = []) {
           </div>
           <p class="timeline-item-description">${description}</p>
         </div>
-        <button class="timeline-item-action" type="button" onclick="handleTimelineCardNavigate('${toolingId}')" title="Open card">
-          <i class="ph ph-arrow-square-out"></i>
-        </button>
       </div>
     `;
   }).join('');
@@ -2158,7 +2620,6 @@ async function fetchToolingRecordById(recordId) {
   try {
     return await window.api.getToolingById(numericId);
   } catch (error) {
-    console.error('Erro ao buscar ferramental por ID:', error);
     return null;
   }
 }
@@ -2185,12 +2646,14 @@ async function fetchParentReplacementRecord(childId) {
     }
     return null;
   } catch (error) {
-    console.error('Erro ao buscar ferramental predecessor:', error);
     return null;
   }
 }
 
-function handleTimelineCardNavigate(itemId) {
+function handleTimelineCardNavigate(event, itemId) {
+  if (event) {
+    event.stopPropagation();
+  }
   if (!itemId) {
     return;
   }
@@ -2201,36 +2664,43 @@ function handleTimelineCardNavigate(itemId) {
 function updateCardUIAfterReorder(itemId, newStatus, newReplacementId) {
   const card = document.querySelector(`.tooling-card[data-item-id="${itemId}"]`);
   if (!card) {
-    console.log(`[UI Update] Card #${itemId} não encontrado na UI`);
     return;
   }
   
-  // Update status field
+  const cardIndex = parseInt(card.id.replace('card-', ''), 10);
+  if (isNaN(cardIndex)) {
+    return;
+  }
+  
+  // Update status field and visual attributes
   const statusField = card.querySelector('[data-card-status]');
   if (statusField) {
     statusField.textContent = newStatus || 'N/A';
-    console.log(`[UI Update] Card #${itemId} status → '${newStatus}'`);
   }
+  
+  // Update status dropdown/select
+  const statusSelect = card.querySelector('select[data-field="status"]');
+  if (statusSelect) {
+    statusSelect.value = newStatus || '';
+  }
+  
+  // Update card status attributes and visibility
+  updateCardStatusAttribute(cardIndex, newStatus);
   
   // Update replacement link hidden input
   const replacementInput = card.querySelector('[data-field="replacement_tooling_id"]');
   if (replacementInput) {
     replacementInput.value = newReplacementId || '';
-    console.log(`[UI Update] Card #${itemId} replacement_tooling_id → ${newReplacementId || 'null'}`);
   }
   
   // Update link controls
-  const cardIndex = parseInt(card.id.replace('card-', ''), 10);
-  if (!isNaN(cardIndex)) {
-    syncReplacementLinkControls(cardIndex, newReplacementId || '');
-  }
+  syncReplacementLinkControls(cardIndex, newReplacementId || '');
   
   // Update global toolingData
   const dataIndex = toolingData.findIndex(item => String(item.id) === String(itemId));
   if (dataIndex !== -1) {
     toolingData[dataIndex].status = newStatus;
     toolingData[dataIndex].replacement_tooling_id = newReplacementId;
-    console.log(`[UI Update] toolingData[${dataIndex}] atualizado`);
   }
 }
 
@@ -2318,17 +2788,12 @@ function handleTimelineDragEnd(event) {
 async function updateReplacementChainAfterReorder() {
   const list = replacementTimelineElements.list;
   if (!list) {
-    console.error('[Timeline] Lista não encontrada');
     return;
   }
   
   const items = Array.from(list.querySelectorAll('.timeline-item'));
   const orderedIds = items.map(item => item.dataset.recordId).filter(Boolean);
-  
-  console.log('[Timeline] IDs reorganizados:', orderedIds);
-  
   if (orderedIds.length === 0) {
-    console.warn('[Timeline] Nenhum ID encontrado');
     return;
   }
   
@@ -2341,53 +2806,38 @@ async function updateReplacementChainAfterReorder() {
       const isLast = i === orderedIds.length - 1;
       
       if (isLast) {
-        // Last item: clear status and link
+        // Last item: ACTIVE status and no replacement link
         await window.api.updateTooling(Number(currentId), {
           replacement_tooling_id: null,
-          status: ''
+          status: 'ACTIVE'
         });
-        console.log(`[Timeline] Último item #${currentId}: status='', replacement_tooling_id=null`);
       } else {
-        // All others: Obsolete + link to next
+        // All others: OBSOLETE + link to next
         await window.api.updateTooling(Number(currentId), {
           replacement_tooling_id: Number(orderedIds[i + 1]),
-          status: 'Obsolete'
+          status: 'OBSOLETE'
         });
-        console.log(`[Timeline] Item #${currentId}: status='Obsolete', replacement_tooling_id=${orderedIds[i + 1]}`);
       }
     }
     
     showNotification('Cadeia reorganizada e salva com sucesso.', 'success');
     
     // Update cards UI immediately
-    console.log('[Timeline] Atualizando UI dos cards...');
     for (let i = 0; i < orderedIds.length; i++) {
       const currentId = orderedIds[i];
       const isLast = i === orderedIds.length - 1;
       const nextId = isLast ? null : Number(orderedIds[i + 1]);
-      const newStatus = isLast ? '' : 'Obsolete';
+      const newStatus = isLast ? 'ACTIVE' : 'OBSOLETE';
       
       updateCardUIAfterReorder(currentId, newStatus, nextId);
     }
     
-    // Reload data to refresh all cards
-    console.log('[Timeline] Recarregando dados...');
-    if (typeof loadToolingData === 'function') {
-      await loadToolingData();
-    }
-    
-    // Wait a bit for data to refresh
-    await new Promise(resolve => setTimeout(resolve, 300));
-    
     // Rebuild timeline with updated data
-    console.log('[Timeline] Reconstruindo timeline...');
     const rootId = orderedIds[0];
     const chain = await buildReplacementTimeline(rootId);
-    console.log('[Timeline] Nova cadeia:', chain.map(c => ({ id: c.id, status: c.status })));
     renderReplacementTimeline(chain);
     
   } catch (error) {
-    console.error('Erro ao atualizar cadeia de substituição:', error);
     showNotification('Erro ao atualizar a ordem da cadeia.', 'error');
   } finally {
     isReorderingTimeline = false;
@@ -2454,65 +2904,92 @@ function handleReplacementLinkChipClick(event, buttonEl) {
 
 async function navigateToLinkedCard(targetId) {
   const normalizedId = sanitizeReplacementId(targetId);
-  console.log('navigateToLinkedCard:', { targetId, normalizedId });
-  
   if (!normalizedId) {
     showNotification('Informe um ID de substituição válido.', 'error');
     return;
   }
 
   let targetCard = document.querySelector(`.tooling-card[data-item-id="${normalizedId}"]`);
-  console.log('targetCard initial:', targetCard);
-  
   if (!targetCard) {
-    console.log('Card não encontrado, tentando carregar...');
     const cardLoaded = await ensureCardLoadedById(normalizedId);
-    console.log('cardLoaded:', cardLoaded);
-    
     if (!cardLoaded) {
-      showNotification(`O card #${normalizedId} não foi encontrado.`, 'warning');
+      showNotification(`O card #${normalizedId} não foi encontrado. Verifique se o registro existe.`, 'warning');
       return;
     }
     
-    // Aguarda um pouco para o DOM ser atualizado
-    await new Promise(resolve => setTimeout(resolve, 200));
+    // Aguarda um pouco mais para o DOM ser atualizado
+    await new Promise(resolve => setTimeout(resolve, 400));
     targetCard = document.querySelector(`.tooling-card[data-item-id="${normalizedId}"]`);
-    console.log('targetCard after load:', targetCard);
+    // Tenta novamente com um tempo maior se ainda não encontrou
+    if (!targetCard) {
+      await new Promise(resolve => setTimeout(resolve, 400));
+      targetCard = document.querySelector(`.tooling-card[data-item-id="${normalizedId}"]`);
+    }
   }
 
   if (!targetCard) {
-    showNotification(`Não foi possível exibir o card #${normalizedId}.`, 'warning');
+    showNotification(`Não foi possível exibir o card #${normalizedId}. O registro pode não existir mais.`, 'warning');
     return;
   }
 
   const cardIndex = parseInt(targetCard.id.replace('card-', ''), 10);
-  console.log('cardIndex:', cardIndex);
-  
-  // Expand the card if not already expanded
-  if (!targetCard.classList.contains('expanded')) {
-    // Save any previously expanded cards
-    const expandedCards = document.querySelectorAll('.tooling-card.expanded');
-    for (const expandedCard of expandedCards) {
+  const wasExpanded = targetCard.classList.contains('expanded');
+  // Save any previously expanded cards (except the target)
+  const expandedCards = document.querySelectorAll('.tooling-card.expanded');
+  for (const expandedCard of expandedCards) {
+    if (expandedCard !== targetCard) {
       const itemId = expandedCard.getAttribute('data-item-id');
       if (itemId) {
         await saveToolingQuietly(itemId);
       }
-    }
-    
-    // Expand the target card
-    targetCard.classList.add('expanded');
-    
-    // Add blur effect to other cards
-    const allCards = document.querySelectorAll('.tooling-card');
-    allCards.forEach(c => c.classList.add('has-expanded-sibling'));
-    
-    // Calculate expiration and load attachments
-    calculateExpirationDate(cardIndex);
-    const itemId = targetCard.getAttribute('data-item-id');
-    if (itemId) {
-      await loadCardAttachments(itemId);
+      expandedCard.classList.remove('expanded');
     }
   }
+  
+  // LAZY LOAD: Carrega body apenas se ainda não foi carregado (igual ao toggleCard)
+  const bodyLoaded = targetCard.getAttribute('data-body-loaded') === 'true';
+  if (!bodyLoaded) {
+    const itemId = targetCard.getAttribute('data-item-id');
+    const item = toolingData.find(t => String(t.id) === String(itemId));
+    
+    if (item) {
+      // Gera o body completo agora
+      const supplierContext = selectedSupplier || currentSupplier || '';
+      const chainMembership = new Map(); // Já foi computado antes
+      const bodyHTML = buildToolingCardBodyHTML(item, cardIndex, chainMembership, supplierContext);
+      
+      // Insere o body no card
+      targetCard.insertAdjacentHTML('beforeend', bodyHTML);
+      targetCard.setAttribute('data-body-loaded', 'true');
+      
+      // Initialize drag and drop for attachment dropzone
+      const dropzone = targetCard.querySelector('.card-attachments-dropzone');
+      if (dropzone && itemId) {
+        initCardAttachmentDragAndDrop(dropzone, itemId);
+      }
+    }
+  }
+  
+  // Always expand the target card
+  targetCard.classList.add('expanded');
+  
+  // Add blur effect to other cards
+  const allCards = document.querySelectorAll('.tooling-card');
+  allCards.forEach(c => {
+    if (c !== targetCard) {
+      c.classList.add('has-expanded-sibling');
+    }
+  });
+  
+  // Calculate expiration and load attachments in background
+  setTimeout(() => {
+    calculateExpirationDate(cardIndex, null, true); // skipSave = true
+    const itemId = targetCard.getAttribute('data-item-id');
+    if (itemId) {
+      loadCardAttachments(itemId).catch(err => {
+      });
+    }
+  }, 0);
   
   ensureCardVisible(targetCard);
   flashCardHighlight(targetCard);
@@ -2530,18 +3007,18 @@ async function ensureCardLoadedById(cardId) {
 
   try {
     const record = await window.api.getToolingById(numericId);
+    
     if (!record) {
       return false;
     }
     const supplierName = String(record.supplier || '').trim();
+    
     if (!supplierName) {
       return false;
     }
     await handleSupplierSelection(supplierName, { forceReload: true });
     return true;
   } catch (error) {
-    console.error('Erro ao localizar card vinculado:', error);
-    showNotification('Erro ao localizar o card vinculado.', 'error');
     return false;
   }
 }
@@ -2594,11 +3071,125 @@ function showDateHighlight(input) {
 
 // Debounce para salvar automaticamente
 let autoSaveTimeouts = {};
+const cardSnapshotStore = new Map();
+let interfaceRefreshTimerId = null;
+let pendingInterfaceRefreshReason = null;
+const INTERFACE_REFRESH_DELAY_MS = 800;
+const NUMERIC_CARD_FIELDS = [
+  'tooling_life_qty',
+  'produced',
+  'annual_volume_forecast',
+  'remaining_tooling_life_pcs',
+  'percent_tooling_life',
+  'amount_brl',
+  'tool_quantity'
+];
+
+function getSnapshotKey(id) {
+  return String(id ?? '');
+}
+
+function collectCardDomValues(id) {
+  const snapshotKey = getSnapshotKey(id);
+  if (!snapshotKey) {
+    return null;
+  }
+  const elements = document.querySelectorAll(`[data-id="${snapshotKey}"]`);
+  if (!elements || elements.length === 0) {
+    return null;
+  }
+  const values = {};
+  elements.forEach((element) => {
+    const field = element.getAttribute('data-field');
+    if (!field || typeof field !== 'string') {
+      return;
+    }
+    
+    // Validar nome do campo
+    const fieldName = field.trim();
+    if (fieldName === '' || fieldName.length === 0) {
+      return;
+    }
+    
+    if (element instanceof HTMLInputElement && element.type === 'checkbox') {
+      values[fieldName] = element.checked ? '1' : '0';
+    } else {
+      values[fieldName] = element.value ?? '';
+    }
+  });
+  return values;
+}
+
+function serializeCardValues(values) {
+  if (!values) {
+    return '';
+  }
+  const sortedKeys = Object.keys(values).sort();
+  const normalized = sortedKeys.map(key => [key, values[key]]);
+  return JSON.stringify(normalized);
+}
+
+function normalizeCardPayload(values) {
+  if (!values) {
+    return null;
+  }
+  const payload = { ...values };
+  NUMERIC_CARD_FIELDS.forEach((field) => {
+    if (Object.prototype.hasOwnProperty.call(payload, field) && payload[field] !== '') {
+      const parsed = Number(payload[field]);
+      payload[field] = Number.isNaN(parsed) ? 0 : parsed;
+    }
+  });
+  return payload;
+}
+
+function buildCardPayloadFromDom(id) {
+  const rawValues = collectCardDomValues(id);
+  if (!rawValues) {
+    return null;
+  }
+  const serialized = serializeCardValues(rawValues);
+  const snapshotKey = getSnapshotKey(id);
+  const hasChanges = cardSnapshotStore.get(snapshotKey) !== serialized;
+  return {
+    payload: normalizeCardPayload(rawValues),
+    serialized,
+    hasChanges
+  };
+}
+
+function primeCardSnapshots(items) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return;
+  }
+  requestAnimationFrame(() => {
+    items.forEach((item) => {
+      const values = collectCardDomValues(item.id);
+      if (!values) {
+        return;
+      }
+      cardSnapshotStore.set(getSnapshotKey(item.id), serializeCardValues(values));
+    });
+  });
+}
+
+function scheduleInterfaceRefresh(reason = 'auto', delay = INTERFACE_REFRESH_DELAY_MS) {
+  pendingInterfaceRefreshReason = reason;
+  if (interfaceRefreshTimerId) {
+    return;
+  }
+  interfaceRefreshTimerId = setTimeout(async () => {
+    interfaceRefreshTimerId = null;
+    try {
+      await updateInterfaceAfterSave();
+    } catch (error) {
+    }
+  }, Math.max(delay, 0));
+}
 
 function autoSaveTooling(id, immediate = false) {
   // Skip autosave during timeline reordering
   if (isReorderingTimeline) {
-    console.log(`[AutoSave] Skipped for #${id} (reordering in progress)`);
     return;
   }
   
@@ -2687,20 +3278,198 @@ function normalizeExpirationDate(rawValue, itemId) {
     const date = new Date(excelEpoch.getTime() + (days * 86400000) + milliseconds);
     if (!Number.isNaN(date.getTime())) {
       const iso = date.toISOString().split('T')[0];
-      console.debug('Data normalizada (excel)', { itemId, rawValue, iso });
       return iso;
     }
   } else {
     const parsed = new Date(rawString);
     if (!Number.isNaN(parsed.getTime())) {
       const iso = parsed.toISOString().split('T')[0];
-      console.debug('Data normalizada (string)', { itemId, rawValue, iso });
       return iso;
     }
   }
-
-  console.warn('Data de expiração inválida detectada', { itemId, rawValue });
   return null;
+}
+
+function computeLocalChainMembership(data) {
+  const membership = new Map();
+  if (!Array.isArray(data) || data.length === 0) {
+    return membership;
+  }
+
+  const incomingLookup = new Map();
+  data.forEach((item) => {
+    const targetId = sanitizeReplacementId(item?.replacement_tooling_id);
+    if (targetId) {
+      incomingLookup.set(targetId, true);
+    }
+  });
+
+  data.forEach((item) => {
+    const itemId = String(item?.id || '').trim();
+    if (!itemId) {
+      return;
+    }
+    const hasOutgoingLink = Boolean(sanitizeReplacementId(item?.replacement_tooling_id));
+    const hasIncomingLink = incomingLookup.has(itemId);
+    membership.set(itemId, hasOutgoingLink || hasIncomingLink);
+  });
+
+  return membership;
+}
+
+// Versão async que processa em chunks pequenos sem travar a UI
+async function computeChainMembershipAsync(data, targetMap, renderToken) {
+  if (!Array.isArray(data) || data.length === 0) {
+    return;
+  }
+  
+  // Fase 1: Construir lookup de incoming links em chunks
+  const incomingLookup = new Map();
+  const CHUNK_SIZE = 100; // Processar 100 items por vez
+  
+  for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+    if (renderToken !== currentToolingRenderToken) return; // Cancelado
+    
+    const chunk = data.slice(i, Math.min(i + CHUNK_SIZE, data.length));
+    chunk.forEach((item) => {
+      const targetId = sanitizeReplacementId(item?.replacement_tooling_id);
+      if (targetId) {
+        incomingLookup.set(targetId, true);
+      }
+    });
+    
+    // Yield para não travar a UI
+    if (i + CHUNK_SIZE < data.length) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+  
+  // Fase 2: Computar membership e atualizar ícones em chunks
+  for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+    if (renderToken !== currentToolingRenderToken) return; // Cancelado
+    
+    const chunk = data.slice(i, Math.min(i + CHUNK_SIZE, data.length));
+    chunk.forEach((item) => {
+      const itemId = String(item?.id || '').trim();
+      if (!itemId) return;
+      
+      const hasOutgoingLink = Boolean(sanitizeReplacementId(item?.replacement_tooling_id));
+      const hasIncomingLink = incomingLookup.has(itemId);
+      const inChain = hasOutgoingLink || hasIncomingLink;
+      
+      targetMap.set(itemId, inChain);
+      
+      // Atualizar ícone imediatamente se o card estiver renderizado
+      const card = document.querySelector(`.tooling-card[data-card-id="${itemId}"]`);
+      if (card) {
+        const chainIcon = card.querySelector('.chain-indicator');
+        if (chainIcon) {
+          if (inChain) {
+            chainIcon.removeAttribute('hidden');
+          } else {
+            chainIcon.setAttribute('hidden', '');
+          }
+        }
+      }
+    });
+    
+    // Yield para não travar a UI
+    if (i + CHUNK_SIZE < data.length) {
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
+  }
+}
+
+function updateAttachmentCountBadge(toolingId, count, renderToken) {
+  if (!isActiveToolingRenderToken(renderToken)) {
+    return;
+  }
+  const badge = document.querySelector(`.tooling-attachment-count[data-item-id="${toolingId}"]`);
+  if (!badge) {
+    return;
+  }
+  const valueElement = badge.querySelector('span');
+  if (valueElement) {
+    valueElement.textContent = String(Number.isFinite(count) ? count : 0);
+  }
+  if (count > 0) {
+    badge.removeAttribute('hidden');
+  } else {
+    badge.setAttribute('hidden', 'true');
+  }
+}
+
+async function hydrateAttachmentBadges(items, renderToken, supplierName) {
+  if (!Array.isArray(items) || items.length === 0 || !supplierName) {
+    return;
+  }
+
+  const normalizedItems = items.filter(item => Number.isFinite(Number(item?.id)));
+  if (normalizedItems.length === 0) {
+    return;
+  }
+
+  const supplierSnapshot = supplierName;
+  const itemIds = normalizedItems.map(item => item.id);
+
+  try {
+    const counts = await window.api.getAttachmentsCountBatch(supplierSnapshot, itemIds);
+    
+    if (supplierSnapshot !== (selectedSupplier || currentSupplier || '')) {
+      return;
+    }
+
+    normalizedItems.forEach((item) => {
+      const count = counts[item.id] || 0;
+      updateAttachmentCountBadge(item.id, count, renderToken);
+    });
+  } catch (error) {
+  }
+}
+
+function updateChainIndicatorVisibility(toolingId, hasChain, renderToken) {
+  if (!isActiveToolingRenderToken(renderToken)) {
+    return;
+  }
+  const indicator = document.querySelector(`.tooling-chain-indicator[data-item-id="${toolingId}"]`);
+  if (!indicator) {
+    return;
+  }
+  if (hasChain) {
+    indicator.removeAttribute('hidden');
+  } else {
+    indicator.setAttribute('hidden', 'true');
+  }
+}
+
+async function hydrateChainIndicators(items, renderToken, baseMap = new Map()) {
+  if (!Array.isArray(items) || items.length === 0) {
+    return;
+  }
+
+  const pendingItems = items.filter((item) => {
+    const itemId = String(item?.id || '').trim();
+    if (!itemId) {
+      return false;
+    }
+    return !baseMap.get(itemId);
+  });
+
+  if (pendingItems.length === 0) {
+    return;
+  }
+
+  const concurrency = Math.max(2, Math.floor(ASYNC_METADATA_CONCURRENCY / 2));
+
+  await runTasksWithLimit(pendingItems, concurrency, async (item) => {
+    try {
+      const parents = await window.api.getToolingByReplacementId(Number(item.id));
+      if (Array.isArray(parents) && parents.length > 0) {
+        updateChainIndicatorVisibility(item.id, true, renderToken);
+      }
+    } catch (error) {
+    }
+  });
 }
 
 // Converte string numérica localizada (pt-BR) para Number
@@ -2797,7 +3566,6 @@ function confirmDeleteTooling(id) {
   const inputEl = document.getElementById('deleteConfirmInput');
 
   if (!overlay || !descriptionEl || !codeEl || !inputEl) {
-    console.error('Elementos da confirmação de exclusão não encontrados.');
     return;
   }
 
@@ -2919,8 +3687,15 @@ function openAddToolingModal() {
 
 function closeAddToolingModal() {
   const { overlay, pnInput, supplierInput, lifeInput, producedInput } = addToolingElements;
+  const pnDescriptionInput = document.getElementById('addToolingPNDescription');
+  const descriptionInput = document.getElementById('addToolingDescription');
+  const forecastInput = document.getElementById('addToolingForecast');
+  const productionDateInput = document.getElementById('addToolingProductionDate');
+  const forecastDateInput = document.getElementById('addToolingForecastDate');
+  
   if (overlay) overlay.classList.remove('active');
   if (pnInput) pnInput.value = '';
+  if (pnDescriptionInput) pnDescriptionInput.value = '';
   if (supplierInput) {
     supplierInput.value = '';
     const defaultPlaceholder = supplierInput.getAttribute('data-default-placeholder');
@@ -2928,12 +3703,21 @@ function closeAddToolingModal() {
       supplierInput.placeholder = defaultPlaceholder;
     }
   }
+  if (descriptionInput) descriptionInput.value = '';
   if (lifeInput) lifeInput.value = '';
   if (producedInput) producedInput.value = '';
+  if (forecastInput) forecastInput.value = '';
+  if (productionDateInput) productionDateInput.value = '';
+  if (forecastDateInput) forecastDateInput.value = '';
 }
 
 async function submitAddToolingForm() {
   const { form, pnInput, supplierInput, lifeInput, producedInput } = addToolingElements;
+  const pnDescriptionInput = document.getElementById('addToolingPNDescription');
+  const descriptionInput = document.getElementById('addToolingDescription');
+  const forecastInput = document.getElementById('addToolingForecast');
+  const productionDateInput = document.getElementById('addToolingProductionDate');
+  const forecastDateInput = document.getElementById('addToolingForecastDate');
 
   if (!pnInput || !supplierInput || !lifeInput || !producedInput) {
     return;
@@ -2944,9 +3728,14 @@ async function submitAddToolingForm() {
   }
 
   const pn = pnInput.value.trim();
+  const pnDescription = pnDescriptionInput ? pnDescriptionInput.value.trim() : '';
   const supplier = supplierInput.value.trim();
+  const toolDescription = descriptionInput ? descriptionInput.value.trim() : '';
   const toolingLife = parseLocalizedNumber(lifeInput.value);
   const produced = parseLocalizedNumber(producedInput.value);
+  const forecast = forecastInput ? parseLocalizedNumber(forecastInput.value) : 0;
+  const productionDate = productionDateInput ? productionDateInput.value : null;
+  const forecastDate = forecastDateInput ? forecastDateInput.value : null;
 
   if (!pn) {
     showNotification('Informe o PN do ferramental.', 'error');
@@ -2973,9 +3762,15 @@ async function submitAddToolingForm() {
   try {
     const payload = {
       pn,
+      pn_description: pnDescription,
       supplier,
+      tool_description: toolDescription,
       tooling_life_qty: toolingLife,
-      produced
+      produced,
+      date_remaining_tooling_life: productionDate,
+      annual_volume_forecast: forecast > 0 ? forecast : null,
+      date_annual_volume: forecastDate,
+      status: 'ACTIVE'
     };
     const result = await window.api.createTooling(payload);
 
@@ -2989,11 +3784,20 @@ async function submitAddToolingForm() {
     selectedSupplier = supplier;
     currentSupplier = supplier;
 
+    // Salvar filtro ativo antes de recarregar
+    const supplierSearchInput = document.getElementById('supplierSearchInput');
+    const activeFilter = supplierSearchInput ? supplierSearchInput.value.trim() : '';
+
     await loadSuppliers();
     await loadAnalytics();
     await refreshReplacementIdOptions(true);
     await loadToolingBySupplier(supplier);
     await loadAttachments(supplier);
+    
+    // Reaplicar filtro se estava ativo
+    if (activeFilter.length >= 1) {
+      await filterSuppliersAndTooling(activeFilter);
+    }
 
     const attachmentsContainer = document.getElementById('attachmentsContainer');
     const currentSupplierName = document.getElementById('currentSupplierName');
@@ -3004,7 +3808,6 @@ async function submitAddToolingForm() {
 
     showNotification('Ferramental criado com sucesso!');
   } catch (error) {
-    console.error('Erro ao criar ferramental:', error);
     showNotification('Erro ao criar ferramental', 'error');
   }
 }
@@ -3027,7 +3830,6 @@ async function deleteToolingItem(id) {
       displayTooling([]);
     }
   } catch (error) {
-    console.error('Erro ao excluir ferramental:', error);
     showNotification('Erro ao excluir ferramental', 'error');
   }
 }
@@ -3042,6 +3844,14 @@ async function displayTooling(data) {
     emptyState.style.display = 'flex';
     return;
   }
+
+  // Mostra UI imediatamente, processa em background
+  emptyState.style.display = 'none';
+  toolingList.style.display = 'flex';
+  toolingList.innerHTML = '<div class="loading-cards">Loading cards...</div>';
+
+  // Defer processing para não travar
+  await new Promise(resolve => setTimeout(resolve, 0));
 
   // Aplica filtro de expiração se estiver ativo
   let filteredData = data;
@@ -3075,6 +3885,9 @@ async function displayTooling(data) {
     return;
   }
 
+  // Yield antes do sort pesado
+  await new Promise(resolve => setTimeout(resolve, 0));
+
   // Ordena automaticamente por % de progresso (maior para menor)
   const sortedData = [...filteredData].sort((a, b) => {
     const lifeA = parseLocalizedNumber(a.tooling_life_qty) || 0;
@@ -3088,48 +3901,478 @@ async function displayTooling(data) {
     return percentB - percentA;
   });
 
-  // Carrega contagem de anexos para cada item
-  const attachmentCounts = {};
-  for (const item of sortedData) {
-    try {
-      const attachments = await window.api.getAttachments(selectedSupplier, item.id);
-      attachmentCounts[item.id] = attachments.length;
-    } catch (error) {
-      console.error('Erro ao carregar anexos do item', item.id, error);
-      attachmentCounts[item.id] = 0;
-    }
-  }
-
-  // Atualiza o estado global
+  cardSnapshotStore.clear();
   toolingData = sortedData;
-
-  // Pre-compute chain membership for all items
+  currentToolingRenderToken += 1;
+  const renderToken = currentToolingRenderToken;
+  const supplierContext = selectedSupplier || currentSupplier || '';
+  
+  // NÃO computar chain membership aqui - vai travar com muitos cards!
+  // Criar Map vazio, será preenchido em background
   const chainMembership = new Map();
-  for (const item of sortedData) {
-    const itemId = String(item.id);
-    const hasOutgoingLink = sanitizeReplacementId(item.replacement_tooling_id) !== '';
-    
-    // Check if any item in current data points to this item
-    const hasIncomingLinkInData = sortedData.some(t => 
-      sanitizeReplacementId(t.replacement_tooling_id) === itemId
-    );
-    
-    // Also check database for incoming links (items from other suppliers)
-    let hasIncomingLinkInDB = false;
-    try {
-      const dbResults = await window.api.getToolingByReplacementId(Number(itemId));
-      hasIncomingLinkInDB = dbResults && dbResults.length > 0;
-    } catch (error) {
-      console.error('Error checking chain membership for', itemId, error);
+  
+  // Limpa loading e começa render
+  toolingList.innerHTML = '';
+  
+  // CHUNK PEQUENO: cada card gera ~500 linhas de HTML!
+  // 10 cards = ~5000 linhas por vez, não trava
+  const CHUNK_SIZE = 10;
+  let currentIndex = 0;
+  
+  const renderNextChunk = () => {
+    if (renderToken !== currentToolingRenderToken) {
+      return; // Render foi cancelado
     }
     
-    chainMembership.set(itemId, hasOutgoingLink || hasIncomingLinkInData || hasIncomingLinkInDB);
+    const endIndex = Math.min(currentIndex + CHUNK_SIZE, sortedData.length);
+    const chunk = sortedData.slice(currentIndex, endIndex);
+    
+    // Gera apenas HEADERS (super leve!) - body carrega on-demand
+    const htmlChunks = [];
+    chunk.forEach((item, relativeIndex) => {
+      const index = currentIndex + relativeIndex;
+      htmlChunks.push(buildToolingCardHeaderHTML(item, index, chainMembership));
+    });
+    
+    // Insere tudo de uma vez
+    toolingList.insertAdjacentHTML('beforeend', htmlChunks.join(''));
+    
+    currentIndex = endIndex;
+    
+    if (currentIndex < sortedData.length) {
+      setTimeout(renderNextChunk, 0);
+    } else {
+      // Render completo - AGORA computa chain em background sem travar
+      computeChainMembershipAsync(sortedData, chainMembership, renderToken);
+      
+      // Hidrata dados em background
+      setTimeout(() => {
+        if (renderToken !== currentToolingRenderToken) return;
+        hydrateCardsAfterRender(sortedData, renderToken, supplierContext, chainMembership);
+      }, 0);
+    }
+  };
+  
+  renderNextChunk();
+}
+
+// Gera apenas o HEADER do card (versão super leve para lista inicial)
+function buildToolingCardHeaderHTML(item, index, chainMembership) {
+  const toolingLife = Number(item.tooling_life_qty) || 0;
+  const produced = Number(item.produced) || 0;
+  
+  let expirationDateValue = normalizeExpirationDate(item.expiration_date, item.id);
+  if (!expirationDateValue) {
+    const remaining = toolingLife - produced;
+    const forecast = Number(item.annual_volume_forecast) || 0;
+    const productionDateValue = item.date_remaining_tooling_life || '';
+    const calculatedExpiration = calculateExpirationFromFormula({
+      remaining,
+      forecast,
+      productionDate: productionDateValue
+    });
+    if (calculatedExpiration) {
+      expirationDateValue = calculatedExpiration;
+    }
   }
 
-  emptyState.style.display = 'none';
-  toolingList.style.display = 'flex';
+  const expirationDisplay = formatDate(expirationDateValue || '');
+  const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
+  const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
+  const lastUpdateDisplay = formatDateTime(item.last_update);
+  const normalizedStatus = (item.status || '').toString().trim().toLowerCase();
+  const isObsolete = normalizedStatus === 'obsolete';
+  const replacementIdValue = sanitizeReplacementId(item.replacement_tooling_id);
+  const hasReplacementLink = replacementIdValue !== '';
+  const hasInitialChainLink = chainMembership.get(String(item.id)) || false;
   
-  toolingList.innerHTML = sortedData.map((item, index) => {
+  const expirationStatus = getExpirationStatus(expirationDateValue || '');
+  let statusIconHtml = '';
+  let statusIconClass = '';
+  const isExpiredByPercent = percentUsedValue >= 100;
+  
+  if (isObsolete) {
+    statusIconHtml = '<i class="ph ph-fill ph-archive-box"></i>';
+    statusIconClass = 'status-icon-obsolete';
+  } else if (isExpiredByPercent || expirationStatus.class === 'expired') {
+    statusIconHtml = '<i class="ph ph-fill ph-warning-circle"></i>';
+    statusIconClass = 'status-icon-expired';
+  } else if (expirationStatus.class === 'warning') {
+    statusIconHtml = '<i class="ph ph-fill ph-warning"></i>';
+    statusIconClass = 'status-icon-warning';
+  }
+  
+  return `
+    <div class="tooling-card" id="card-${index}" data-item-id="${item.id}" data-status="${normalizedStatus}" data-replacement-id="${hasReplacementLink ? replacementIdValue : ''}" data-body-loaded="false" data-supplier="${escapeHtml(item.supplier || '')}">
+      <div class="tooling-card-header" onclick="toggleCard(${index})">
+        <div class="tooling-card-header-top">
+          ${statusIconHtml ? `<div class="card-status-icon ${statusIconClass}" title="${isObsolete ? 'Obsolete' : expirationStatus.label}">${statusIconHtml}</div>` : ''}
+          <div class="tooling-card-primary">
+            <div class="tooling-info-item tooling-info-pn">
+              <div class="tooling-info-stack">
+                <div class="tooling-info-pn-row">
+                  <span class="tooling-info-id">#${item.id}</span>
+                  <span class="tooling-info-separator">•</span>
+                  <span class="tooling-info-value highlight">${item.pn || 'N/A'}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="tooling-card-top-meta">
+            <div class="tooling-info-stack tooling-info-last-update">
+              <span class="tooling-info-label">Last Update</span>
+              <span class="tooling-info-value">${lastUpdateDisplay}</span>
+            </div>
+            <button type="button" class="tooling-chain-indicator" data-item-id="${item.id}" ${hasInitialChainLink ? '' : 'hidden'} title="View replacement chain" onclick="event.stopPropagation(); openReplacementTimelineForCard(document.getElementById('card-${index}'))">
+              <i class="ph ph-git-branch"></i>
+            </button>
+            <div class="tooling-attachment-count" data-attachment-count data-item-id="${item.id}" hidden>
+              <i class="ph ph-paperclip"></i>
+              <span>0</span>
+            </div>
+            <div class="tooling-card-expand">
+              <i class="ph ph-caret-down"></i>
+            </div>
+          </div>
+        </div>
+        <div class="tooling-card-header-divider"></div>
+        <div class="tooling-card-main-info">
+          <div class="tooling-info-item tooling-info-description">
+            <span class="tooling-info-label">Description</span>
+            <span class="tooling-info-value">${item.tool_description || 'N/A'}</span>
+          </div>
+          <div class="tooling-info-item card-collapsible">
+            <span class="tooling-info-label">Expiration</span>
+            <span class="tooling-info-value" data-card-expiration>${expirationDisplay}</span>
+          </div>
+          <div class="tooling-info-item card-collapsible">
+            <span class="tooling-info-label">Status</span>
+            <span class="tooling-info-value" data-card-status>${item.status || 'N/A'}</span>
+          </div>
+          <div class="tooling-info-item card-collapsible">
+            <span class="tooling-info-label">Steps</span>
+            <span class="tooling-info-value" data-card-steps>${item.steps || 'N/A'}</span>
+          </div>
+          <div class="tooling-info-item tooling-info-progress">
+            <div class="progress-bar">
+              <div class="progress-fill" style="width: ${percentUsed}%" data-progress-fill></div>
+            </div>
+            <span class="progress-percentage" data-progress-percent>${percentUsed}%</span>
+          </div>
+        </div>
+      </div>
+      <!-- Body será carregado dinamicamente ao expandir -->
+    </div>
+  `;
+}
+
+// Gera apenas o BODY do card (chamado on-demand ao expandir)
+function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext) {
+  const toolingLife = Number(item.tooling_life_qty) || 0;
+  const produced = Number(item.produced) || 0;
+  const remaining = toolingLife - produced;
+  const forecast = Number(item.annual_volume_forecast) || 0;
+  const hasForecast = String(item.annual_volume_forecast ?? '').trim() !== '';
+  
+  let expirationDateValue = normalizeExpirationDate(item.expiration_date, item.id);
+  if (!expirationDateValue) {
+    const productionDateValue = item.date_remaining_tooling_life || '';
+    const calculatedExpiration = calculateExpirationFromFormula({
+      remaining,
+      forecast,
+      productionDate: productionDateValue
+    });
+    if (calculatedExpiration) {
+      expirationDateValue = calculatedExpiration;
+    }
+  }
+
+  const expirationInputValue = expirationDateValue || '';
+  const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
+  const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
+  const remainingQty = remaining;
+  const lifecycleProgressPercent = Math.min(Math.max(percentUsedValue, 0), 100);
+  const amountBrlValue = (() => {
+    const raw = item.amount_brl;
+    if (raw === null || raw === undefined) return '';
+    const trimmed = String(raw).trim();
+    if (trimmed === '') return '';
+    const parsed = parseLocalizedNumber(trimmed);
+    return Number.isNaN(parsed) ? '' : parsed;
+  })();
+  
+  const statusOptionsMarkup = buildStatusOptionsMarkup(item.status);
+  const normalizedStatus = (item.status || '').toString().trim().toLowerCase();
+  const isObsolete = normalizedStatus === 'obsolete';
+  const replacementIdValue = sanitizeReplacementId(item.replacement_tooling_id);
+  const hasReplacementLink = replacementIdValue !== '';
+  const replacementPickerOptionsMarkup = buildReplacementPickerOptionsMarkup(item, index);
+  const replacementPickerLabel = escapeHtml(
+    hasReplacementLink
+      ? (getReplacementOptionLabelById(replacementIdValue) || `${replacementIdValue}`)
+      : DEFAULT_REPLACEMENT_PICKER_LABEL
+  );
+  const replacementEditorVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
+  
+  // Resto do body vem da função original buildToolingCardHTML...
+  // Vou copiar só a parte do <div class="tooling-card-body"> em diante
+  return `
+    <div class="tooling-card-body">
+      <!-- Abas do Card -->
+      <div class="card-tabs">
+        <button class="card-tab active" onclick="switchCardTab(${index}, 'data')">
+          <i class="ph ph-database"></i>
+          <span>Data</span>
+        </button>
+        <button class="card-tab" onclick="switchCardTab(${index}, 'documentation')">
+          <i class="ph ph-folder"></i>
+          <span>Documentation</span>
+        </button>
+        <button class="card-tab" onclick="switchCardTab(${index}, 'comments')">
+          <i class="ph ph-chat-circle-text"></i>
+          <span>Comments</span>
+        </button>
+        <button class="card-tab" onclick="switchCardTab(${index}, 'attachments')">
+          <i class="ph ph-paperclip"></i>
+          <span>Attachments</span>
+        </button>
+      </div>
+
+      <!-- Aba Data -->
+      <div class="card-tab-content active" data-tab="data">
+      <div class="details-carousel-wrapper">
+        <button class="carousel-nav carousel-nav-prev" onclick="navigateCarousel(${index}, 'prev')" aria-label="Previous">
+          <i class="ph ph-caret-left"></i>
+        </button>
+        <div class="tooling-details-carousel">
+          <div class="tooling-details-grid" data-carousel-track>
+            <!-- Column 1: Lifecycle -->
+            <div class="detail-group detail-grid">
+              <div class="detail-group-title lifecycle-title">
+                <span>Lifecycle</span>
+                <div class="lifecycle-progress">
+                  <div class="lifecycle-progress-bar">
+                    <div class="lifecycle-progress-fill" style="width: ${lifecycleProgressPercent}%" data-lifecycle-progress-fill></div>
+                  </div>
+                </div>
+              </div>
+              <div class="detail-item detail-item-full">
+                <span class="detail-label">Tooling Life (Qty)</span>
+                <input type="number" class="detail-input" value="${toolingLife}" data-field="tooling_life_qty" data-id="${item.id}" onchange="calculateLifecycle(${index})" oninput="calculateLifecycle(${index})" min="0" step="1">
+              </div>
+              <div class="detail-item detail-pair">
+                <div class="detail-item">
+                  <span class="detail-label">Produced</span>
+                  <input type="number" class="detail-input" value="${produced}" data-field="produced" data-id="${item.id}" onchange="handleProducedChange(${index})" oninput="handleProducedChange(${index})" min="0" step="1">
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">
+                    Production Date
+                    <i class="ph ph-info tooltip-icon" title="Whenever Produced changes, update this date to keep the timeline accurate." role="button" tabindex="0" onclick="openProductionInfoModal(event)" onkeydown="handleProductionInfoIconKey(event)"></i>
+                  </span>
+                  <input type="date" class="detail-input" value="${item.date_remaining_tooling_life || ''}" data-field="date_remaining_tooling_life" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                </div>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">
+                  Remaining
+                  <i class="ph ph-info tooltip-icon" title="Formula: uses \\"Tooling Life (Qty)\\" minus \\"Produced\\"."></i>
+                </span>
+                <input type="text" class="detail-input calculated" value="${remainingQty.toLocaleString('pt-BR', {minimumFractionDigits: 0, maximumFractionDigits: 0})}" data-field="remaining_tooling_life_pcs" data-id="${item.id}" readonly>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">
+                  % Used
+                  <i class="ph ph-info tooltip-icon" title="Formula: (\\"Produced\\" ÷ \\"Tooling Life (Qty)\\") × 100."></i>
+                </span>
+                <input type="text" class="detail-input calculated" value="${percentUsed}%" data-field="percent_tooling_life" data-id="${item.id}" readonly>
+              </div>
+              <div class="detail-item detail-pair">
+                <div class="detail-item">
+                  <span class="detail-label">Annual Forecast</span>
+                  <input type="number" class="detail-input" value="${hasForecast ? forecast : ''}" data-field="annual_volume_forecast" data-id="${item.id}" onchange="handleForecastChange(${index})" min="0" step="1">
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Forecast Date</span>
+                  <input type="date" class="detail-input" value="${item.date_annual_volume || ''}" data-field="date_annual_volume" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                </div>
+              </div>
+              <div class="detail-item detail-item-full">
+                <span class="detail-label">
+                  Expiration (Calculated)
+                  <i class="ph ph-info tooltip-icon" title="Formula: today's date + (\\"Remaining\\" ÷ \\"Annual Forecast\\") years." role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
+                </span>
+                <input type="date" class="detail-input calculated" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
+              </div>
+            </div>
+            
+            <!-- Column 2: Identification -->
+            <div class="detail-group detail-grid">
+              <div class="detail-group-title">Identification</div>
+          <div class="detail-item detail-item-full">
+            <span class="detail-label">PN</span>
+            <input type="text" class="detail-input" value="${item.pn || ''}" data-field="pn" data-id="${item.id}" onchange="handlePNChange(${index}, ${item.id}, this)">
+          </div>
+          <div class="detail-item detail-item-full">
+            <span class="detail-label">PN Description</span>
+            <input type="text" class="detail-input" value="${item.pn_description || ''}" data-field="pn_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">BU</span>
+            <input type="text" class="detail-input" value="${item.bu || ''}" data-field="bu" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Category</span>
+            <input type="text" class="detail-input" value="${item.category || ''}" data-field="category" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item detail-item-full">
+            <span class="detail-label">Responsável</span>
+            <input type="text" class="detail-input" value="${item.cummins_responsible || ''}" data-field="cummins_responsible" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Status</span>
+            <select class="detail-input" data-field="status" data-id="${item.id}" onchange="handleStatusSelectChange(${index}, ${item.id}, this)">
+              ${statusOptionsMarkup}
+            </select>
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Steps</span>
+            <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)">
+              <option value="" ${!item.steps ? 'selected' : ''}>Select...</option>
+              <option value="1" ${item.steps === '1' ? 'selected' : ''}>1</option>
+              <option value="2" ${item.steps === '2' ? 'selected' : ''}>2</option>
+              <option value="3" ${item.steps === '3' ? 'selected' : ''}>3</option>
+              <option value="4" ${item.steps === '4' ? 'selected' : ''}>4</option>
+              <option value="5" ${item.steps === '5' ? 'selected' : ''}>5</option>
+              <option value="6" ${item.steps === '6' ? 'selected' : ''}>6</option>
+              <option value="7" ${item.steps === '7' ? 'selected' : ''}>7</option>
+            </select>
+          </div>
+          <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
+            <span class="detail-label">Replacement Tooling</span>
+            <div class="replacement-link-field">
+              <div class="replacement-dropdown" data-replacement-picker>
+                <button type="button" class="replacement-dropdown-trigger ${hasReplacementLink ? 'has-selection' : ''}" data-replacement-picker-button onclick="toggleReplacementPicker(event, ${index})">
+                  <span data-replacement-picker-label>${replacementPickerLabel}</span>
+                  <i class="ph ph-caret-down"></i>
+                </button>
+                <div class="replacement-dropdown-panel" data-replacement-picker-panel hidden>
+                  <div class="replacement-dropdown-search">
+                    <input type="text" placeholder="Search ID or PN" data-replacement-picker-search oninput="handleReplacementPickerSearch(${index}, this.value)">
+                  </div>
+                  <div class="replacement-dropdown-list" data-replacement-picker-list>
+                    ${replacementPickerOptionsMarkup}
+                  </div>
+                </div>
+              </div>
+              <input type="text" class="replacement-hidden-input" value="${hasReplacementLink ? replacementIdValue : ''}" data-field="replacement_tooling_id" data-id="${item.id}" hidden aria-hidden="true">
+              <button type="button" class="btn-link-card" data-replacement-open-btn ${hasReplacementLink ? '' : 'disabled'} data-target-id="${hasReplacementLink ? replacementIdValue : ''}" onclick="handleReplacementLinkButtonClick(event, this)">
+                Go to card
+              </button>
+            </div>
+            <p class="detail-help">Appears when status is Obsolete. Use the ID displayed on the replacement card.</p>
+          </div>
+        </div>
+        
+            
+            <!-- Column 3: Supplier & Tooling -->
+            <div class="detail-group detail-grid">
+              <div class="detail-group-title">Supplier & Tooling</div>
+          <div class="detail-item detail-item-full">
+            <span class="detail-label">Tooling Description</span>
+            <input type="text" class="detail-input" value="${item.tool_description || ''}" data-field="tool_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Supplier</span>
+            <input type="text" class="detail-input" value="${item.supplier || ''}" data-field="supplier" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Ownership</span>
+            <input type="text" class="detail-input" value="${item.tool_ownership || ''}" data-field="tool_ownership" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Customer</span>
+            <input type="text" class="detail-input" value="${item.customer || ''}" data-field="customer" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Tool Number</span>
+            <input type="text" class="detail-input" value="${item.tool_number_arb || ''}" data-field="tool_number_arb" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Quantity</span>
+            <input type="text" class="detail-input" value="${item.tool_quantity || ''}" data-field="tool_quantity" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Value (BRL)</span>
+            <input type="number" class="detail-input" value="${amountBrlValue}" data-field="amount_brl" data-id="${item.id}" onchange="autoSaveTooling(${item.id})" inputmode="decimal" step="0.01" min="0">
+              </div>
+            </div>
+          </div>
+        </div>
+        <button class="carousel-nav carousel-nav-next" onclick="navigateCarousel(${index}, 'next')" aria-label="Next">
+          <i class="ph ph-caret-right"></i>
+        </button>
+      </div>
+      </div>
+
+      <!-- Aba Documentation -->
+      <div class="card-tab-content" data-tab="documentation">
+        <div class="detail-group detail-grid">
+          <div class="detail-item">
+            <span class="detail-label">Bailment Agreement Signed</span>
+            <input type="text" class="detail-input" value="${item.bailment_agreement_signed || ''}" data-field="bailment_agreement_signed" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Tooling Book</span>
+            <input type="text" class="detail-input" value="${item.tooling_book || ''}" data-field="tooling_book" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+          <div class="detail-item">
+            <span class="detail-label">Disposition</span>
+            <input type="text" class="detail-input" value="${item.disposition || ''}" data-field="disposition" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          </div>
+        </div>
+      </div>
+
+      <!-- Aba Comments -->
+      <div class="card-tab-content" data-tab="comments">
+        <div class="card-comments-container">
+          <textarea 
+            class="card-comments-textarea" 
+            placeholder="Add comments or notes here..."
+            data-field="comments" 
+            data-id="${item.id}"
+            onchange="autoSaveTooling(${item.id})"
+          >${item.comments || ''}</textarea>
+        </div>
+      </div>
+
+      <!-- Aba Attachments -->
+      <div class="card-tab-content" data-tab="attachments">
+        <div class="card-attachments" data-card-id="${item.id}">
+          <div class="card-attachments-list" id="cardAttachments-${item.id}"></div>
+          <div class="card-attachments-dropzone" onclick="uploadCardAttachment(${item.id})">
+            <i class="ph ph-upload-simple"></i>
+            <p>Drop files here or click to upload</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer com Botões -->
+      <div class="tooling-card-footer">
+        <button class="btn-delete" onclick="confirmDeleteTooling(${item.id})">
+          <i class="ph ph-trash"></i>
+          Delete
+        </button>
+        <button class="btn-save" onclick="saveTooling(${item.id})">
+          <i class="ph ph-floppy-disk"></i>
+          Save Changes
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
     // Calcula expiration_date se não existir
     const toolingLife = Number(item.tooling_life_qty) || 0;
     const produced = Number(item.produced) || 0;
@@ -3148,32 +4391,16 @@ async function displayTooling(data) {
       });
       if (calculatedExpiration) {
         expirationDateValue = calculatedExpiration;
-        console.debug('Data de expiração recalculada', {
-          itemId: item.id,
-          forecast,
-          remaining,
-          productionDate: productionDateValue,
-          expirationDateValue
-        });
       }
     }
 
     const expirationInputValue = expirationDateValue || '';
     const expirationDisplay = formatDate(expirationInputValue);
 
-    console.log(`Card ${index} renderizado:`, {
-      itemId: item.id,
-      expirationInputValue,
-      expirationDisplay,
-      remaining,
-      forecast
-    });
-    
     const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
     const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
     const remainingQty = remaining;
     const lifecycleProgressPercent = Math.min(Math.max(percentUsedValue, 0), 100);
-    const lifecycleProgressLabel = `${produced.toLocaleString('pt-BR', {minimumFractionDigits: 0, maximumFractionDigits: 0})} / ${toolingLife.toLocaleString('pt-BR', {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
     const amountBrlValue = (() => {
       const raw = item.amount_brl;
       if (raw === null || raw === undefined) {
@@ -3187,7 +4414,6 @@ async function displayTooling(data) {
       return Number.isNaN(parsed) ? '' : parsed;
     })();
     const lastUpdateDisplay = formatDateTime(item.last_update);
-    const attachmentCount = attachmentCounts[item.id] || 0;
     const statusOptionsMarkup = buildStatusOptionsMarkup(item.status);
     const normalizedStatus = (item.status || '').toString().trim().toLowerCase();
     const isObsolete = normalizedStatus === 'obsolete';
@@ -3203,7 +4429,7 @@ async function displayTooling(data) {
     const replacementEditorVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
     
     // Check if item is part of a replacement chain using pre-computed map
-    const isInChain = chainMembership.get(String(item.id)) || false;
+    const hasInitialChainLink = chainMembership.get(String(item.id)) || false;
     
     // Calcula status de vencimento para ícone
     const expirationStatus = getExpirationStatus(expirationInputValue);
@@ -3226,7 +4452,7 @@ async function displayTooling(data) {
     }
     
     return `
-      <div class="tooling-card" id="card-${index}" data-item-id="${item.id}" data-status="${normalizedStatus}" data-replacement-id="${hasReplacementLink ? replacementIdValue : ''}">
+      <div class="tooling-card" id="card-${index}" data-item-id="${item.id}" data-status="${normalizedStatus}" data-replacement-id="${hasReplacementLink ? replacementIdValue : ''}" data-supplier="${escapeHtml(item.supplier || '')}">
         <div class="tooling-card-header" onclick="toggleCard(${index})">
           <div class="tooling-card-header-top">
             ${statusIconHtml ? `<div class="card-status-icon ${statusIconClass}" title="${isObsolete ? 'Obsolete' : expirationStatus.label}">${statusIconHtml}</div>` : ''}
@@ -3246,17 +4472,13 @@ async function displayTooling(data) {
                 <span class="tooling-info-label">Last Update</span>
                 <span class="tooling-info-value">${lastUpdateDisplay}</span>
               </div>
-              ${isInChain ? `
-              <button type="button" class="tooling-chain-indicator" title="View replacement chain" onclick="event.stopPropagation(); openReplacementTimelineForCard(document.getElementById('card-${index}'))">
+              <button type="button" class="tooling-chain-indicator" data-item-id="${item.id}" ${hasInitialChainLink ? '' : 'hidden'} title="View replacement chain" onclick="event.stopPropagation(); openReplacementTimelineForCard(document.getElementById('card-${index}'))">
                 <i class="ph ph-git-branch"></i>
               </button>
-              ` : ''}
-              ${attachmentCount > 0 ? `
-              <div class="tooling-attachment-count">
+              <div class="tooling-attachment-count" data-attachment-count data-item-id="${item.id}" hidden>
                 <i class="ph ph-paperclip"></i>
-                <span>${attachmentCount}</span>
+                <span>0</span>
               </div>
-              ` : ''}
               <div class="tooling-card-expand">
                 <i class="ph ph-caret-down"></i>
               </div>
@@ -3270,7 +4492,7 @@ async function displayTooling(data) {
             </div>
             <div class="tooling-info-item card-collapsible">
               <span class="tooling-info-label">Expiration</span>
-              <span class="tooling-info-value">${expirationDisplay}</span>
+              <span class="tooling-info-value" data-card-expiration>${expirationDisplay}</span>
             </div>
             <div class="tooling-info-item card-collapsible">
               <span class="tooling-info-label">Status</span>
@@ -3278,7 +4500,7 @@ async function displayTooling(data) {
             </div>
             <div class="tooling-info-item card-collapsible">
               <span class="tooling-info-label">Steps</span>
-              <span class="tooling-info-value">${item.steps || 'N/A'}</span>
+              <span class="tooling-info-value" data-card-steps>${item.steps || 'N/A'}</span>
             </div>
             <div class="tooling-info-item tooling-info-progress">
               <div class="progress-bar">
@@ -3303,10 +4525,6 @@ async function displayTooling(data) {
               <i class="ph ph-chat-circle-text"></i>
               <span>Comments</span>
             </button>
-            <button class="card-tab" onclick="switchCardTab(${index}, 'todos')">
-              <i class="ph ph-check-square"></i>
-              <span>Todos</span>
-            </button>
             <button class="card-tab" onclick="switchCardTab(${index}, 'attachments')">
               <i class="ph ph-paperclip"></i>
               <span>Attachments</span>
@@ -3327,7 +4545,7 @@ async function displayTooling(data) {
                     <span>Lifecycle</span>
                     <div class="lifecycle-progress">
                       <div class="lifecycle-progress-bar">
-                        <div class="lifecycle-progress-fill" style="width: ${lifecycleProgressPercent}%"></div>
+                        <div class="lifecycle-progress-fill" style="width: ${lifecycleProgressPercent}%" data-lifecycle-progress-fill></div>
                       </div>
                     </div>
                   </div>
@@ -3386,7 +4604,7 @@ async function displayTooling(data) {
                   <div class="detail-group-title">Identification</div>
               <div class="detail-item detail-item-full">
                 <span class="detail-label">PN</span>
-                <input type="text" class="detail-input" value="${item.pn || ''}" data-field="pn" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                <input type="text" class="detail-input" value="${item.pn || ''}" data-field="pn" data-id="${item.id}" onchange="handlePNChange(${index}, ${item.id}, this)">
               </div>
               <div class="detail-item detail-item-full">
                 <span class="detail-label">PN Description</span>
@@ -3412,7 +4630,7 @@ async function displayTooling(data) {
               </div>
               <div class="detail-item">
                 <span class="detail-label">Steps</span>
-                <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)">
                   <option value="" ${!item.steps ? 'selected' : ''}>Select...</option>
                   <option value="1" ${item.steps === '1' ? 'selected' : ''}>1</option>
                   <option value="2" ${item.steps === '2' ? 'selected' : ''}>2</option>
@@ -3424,7 +4642,7 @@ async function displayTooling(data) {
                 </select>
               </div>
               <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
-                <span class="detail-label">Replacement ID</span>
+                <span class="detail-label">Replacement Tooling</span>
                 <div class="replacement-link-field">
                   <div class="replacement-dropdown" data-replacement-picker>
                     <button type="button" class="replacement-dropdown-trigger ${hasReplacementLink ? 'has-selection' : ''}" data-replacement-picker-button onclick="toggleReplacementPicker(event, ${index})">
@@ -3492,7 +4710,7 @@ async function displayTooling(data) {
 
           <!-- Aba Documentation -->
           <div class="card-tab-content" data-tab="documentation">
-            <div class="documentation-grid">
+            <div class="detail-group detail-grid">
               <div class="detail-item">
                 <span class="detail-label">Bailment Agreement Signed</span>
                 <input type="text" class="detail-input" value="${item.bailment_agreement_signed || ''}" data-field="bailment_agreement_signed" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
@@ -3531,16 +4749,6 @@ async function displayTooling(data) {
             </div>
           </div>
 
-          <!-- Aba Todos -->
-          <div class="card-tab-content" data-tab="todos">
-            <div class="todos-container" id="todosContainer-${item.id}">
-              <div class="todos-list" id="todosList-${item.id}"></div>
-              <button class="btn-add-todo" onclick="addTodoItem(${item.id})">
-                <i class="ph ph-plus"></i>
-              </button>
-            </div>
-          </div>
-
           <!-- Aba Attachments -->
           <div class="card-tab-content" data-tab="attachments">
             <div class="card-attachments" data-card-id="${item.id}">
@@ -3565,25 +4773,40 @@ async function displayTooling(data) {
         </div>
       </div>
     `;
-  }).join('');
+}
+
+async function hydrateCardsAfterRender(sortedData, renderToken, supplierContext, chainMembership) {
+  if (supplierContext) {
+    hydrateAttachmentBadges(sortedData, renderToken, supplierContext).catch((error) => {
+    });
+  }
+
+  hydrateChainIndicators(sortedData, renderToken, chainMembership).catch((error) => {
+  });
 
   sortedData.forEach((item, index) => {
     syncReplacementLinkControls(index, sanitizeReplacementId(item.replacement_tooling_id));
     updateCardStatusAttribute(index, item.status || '');
-    // Load todos badge for each card
-    updateTodoBadge(item.id);
   });
 
-  setupCardAttachmentDropzones();
+  primeCardSnapshots(sortedData);
 }
 
 // Alterna expansão do card
 async function toggleAllCards() {
   const cards = document.querySelectorAll('.tooling-card');
   const expandBtn = document.getElementById('floatingExpandBtn');
+  
+  if (!expandBtn) {
+    return;
+  }
+  
+  if (cards.length === 0) {
+    return;
+  }
+
   const expandedCards = document.querySelectorAll('.tooling-card.expanded');
   const shouldExpand = expandedCards.length === 0;
-
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
     const isExpanded = card.classList.contains('expanded');
@@ -3610,12 +4833,14 @@ async function toggleAllCards() {
 
   // Atualiza o ícone do botão
   const icon = expandBtn.querySelector('i');
-  if (shouldExpand) {
-    icon.className = 'ph ph-arrows-in';
-    expandBtn.title = 'Collapse All';
-  } else {
-    icon.className = 'ph ph-arrows-out';
-    expandBtn.title = 'Expand All';
+  if (icon) {
+    if (shouldExpand) {
+      icon.className = 'ph ph-arrows-in';
+      expandBtn.title = 'Collapse All';
+    } else {
+      icon.className = 'ph ph-arrows-out';
+      expandBtn.title = 'Expand All';
+    }
   }
 }
 
@@ -3630,18 +4855,27 @@ function navigateCarousel(cardIndex, direction) {
   if (!track || !carousel) return;
   
   const columns = Array.from(track.children);
-  const currentTransform = getComputedStyle(track).transform;
-  let currentIndex = 0;
   
-  if (currentTransform !== 'none') {
-    const matrix = currentTransform.match(/matrix\(([^)]+)\)/);
-    if (matrix) {
-      const currentX = parseFloat(matrix[1].split(',')[4]) || 0;
-      const columnWidth = carousel.offsetWidth;
-      currentIndex = Math.round(Math.abs(currentX) / columnWidth);
+  // Get current carousel width (always fresh)
+  const carouselWidth = carousel.offsetWidth;
+  const gap = 14;
+  
+  // Use stored index when available (fallback to transform parsing)
+  let currentIndex = parseInt(track.dataset.carouselIndex || '0', 10);
+  if (Number.isNaN(currentIndex)) currentIndex = 0;
+  
+  if (!track.dataset.carouselIndex) {
+    const currentTransform = getComputedStyle(track).transform;
+    if (currentTransform !== 'none') {
+      const matrix = currentTransform.match(/matrix\(([^)]+)\)/);
+      if (matrix) {
+        const currentX = parseFloat(matrix[1].split(',')[4]) || 0;
+        currentIndex = Math.round(Math.abs(currentX) / (carouselWidth + gap));
+      }
     }
   }
   
+  // Navigate
   if (direction === 'next') {
     currentIndex++;
     if (currentIndex >= columns.length) currentIndex = columns.length - 1;
@@ -3650,40 +4884,135 @@ function navigateCarousel(cardIndex, direction) {
     if (currentIndex < 0) currentIndex = 0;
   }
   
-  const columnWidth = carousel.offsetWidth;
-  const newX = -(currentIndex * columnWidth);
+  // Calculate new position with current width
+  const newX = -(currentIndex * (carouselWidth + gap));
   
   track.style.transform = `translateX(${newX}px)`;
+  track.dataset.carouselIndex = String(currentIndex);
   
   // Update button states
   if (prevBtn) prevBtn.disabled = currentIndex === 0;
   if (nextBtn) nextBtn.disabled = currentIndex === columns.length - 1;
 }
 
-async function toggleCard(index) {
+// Reset carousel position on window resize
+let resizeTimeout;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimeout);
+  resizeTimeout = setTimeout(() => {
+    const isCarouselMode = window.innerWidth <= 1400;
+    
+    // Reset all carousels and update button states
+    document.querySelectorAll('.tooling-card').forEach(card => {
+      const track = card.querySelector('[data-carousel-track]');
+      const carousel = card.querySelector('.tooling-details-carousel');
+      const prevBtn = card.querySelector('.carousel-nav-prev');
+      const nextBtn = card.querySelector('.carousel-nav-next');
+      
+      if (track && carousel && prevBtn && nextBtn) {
+        const columns = Array.from(track.children);
+        const maxIndex = Math.max(0, columns.length - 1);
+        const gap = 14;
+        
+        if (isCarouselMode) {
+          let currentIndex = parseInt(track.dataset.carouselIndex || '0', 10);
+          if (Number.isNaN(currentIndex)) currentIndex = 0;
+          currentIndex = Math.min(currentIndex, maxIndex);
+          track.dataset.carouselIndex = String(currentIndex);
+          
+          const newColumnWidth = carousel.offsetWidth;
+          const newX = -(currentIndex * (newColumnWidth + gap));
+          track.style.transform = `translateX(${newX}px)`;
+          
+          // Update button states
+          prevBtn.disabled = currentIndex === 0;
+          nextBtn.disabled = maxIndex === 0 || currentIndex === maxIndex;
+        } else {
+          // Reset to first position when exiting carousel mode
+          track.style.transform = 'translateX(0)';
+          delete track.dataset.carouselIndex;
+          prevBtn.disabled = false;
+          nextBtn.disabled = false;
+        }
+      }
+    });
+  }, 150);
+});
+
+function toggleCard(index) {
   const card = document.getElementById(`card-${index}`);
   const wasExpanded = card.classList.contains('expanded');
   
-  // Se está fechando o card, salva antes
+  // Se está fechando o card, salva em background
   if (wasExpanded) {
     const itemId = card.getAttribute('data-item-id');
     if (itemId) {
-      await saveToolingQuietly(itemId);
+      Promise.resolve().then(() => saveToolingQuietly(itemId));
     }
-  }
-  
-  // Se está abrindo um novo card, salva o card anterior que estava aberto
-  if (!wasExpanded) {
+    card.classList.remove('expanded');
+  } else {
+    // Está abrindo o card
+    
+    // Salva cards anteriores em background
     const expandedCards = document.querySelectorAll('.tooling-card.expanded');
-    for (const expandedCard of expandedCards) {
+    expandedCards.forEach(expandedCard => {
       const itemId = expandedCard.getAttribute('data-item-id');
       if (itemId) {
-        await saveToolingQuietly(itemId);
+        Promise.resolve().then(() => saveToolingQuietly(itemId));
+      }
+      expandedCard.classList.remove('expanded');
+    });
+    
+    // LAZY LOAD: Carrega body apenas se ainda não foi carregado
+    const bodyLoaded = card.getAttribute('data-body-loaded') === 'true';
+    if (!bodyLoaded) {
+      const itemId = card.getAttribute('data-item-id');
+      const item = toolingData.find(t => String(t.id) === String(itemId));
+      
+      if (item) {
+        // Gera o body completo agora
+        const supplierContext = selectedSupplier || currentSupplier || '';
+        const chainMembership = new Map(); // Já foi computado antes
+        const bodyHTML = buildToolingCardBodyHTML(item, index, chainMembership, supplierContext);
+        
+        // Insere o body no card
+        card.insertAdjacentHTML('beforeend', bodyHTML);
+        card.setAttribute('data-body-loaded', 'true');
+        
+        // Initialize drag and drop for attachment dropzone
+        const dropzone = card.querySelector('.card-attachments-dropzone');
+        if (dropzone) {
+          initCardAttachmentDragAndDrop(dropzone, itemId);
+        }
       }
     }
+    
+    card.classList.add('expanded');
+    
+    // Initialize carousel buttons state
+    const track = card.querySelector('[data-carousel-track]');
+    const prevBtn = card.querySelector('.carousel-nav-prev');
+    const nextBtn = card.querySelector('.carousel-nav-next');
+    if (track && prevBtn && nextBtn) {
+      const columns = Array.from(track.children);
+      prevBtn.disabled = true; // Start at first column
+      nextBtn.disabled = columns.length <= 1; // Disable if only one column
+      track.style.transform = 'translateX(0)'; // Reset to first column
+      track.dataset.carouselIndex = '0';
+    }
+    
+    // Carrega dados do card em background, sem bloquear
+    setTimeout(() => {
+      calculateExpirationDate(index, null, true); // skipSave = true
+      const itemId = card.getAttribute('data-item-id');
+      if (itemId) {
+        loadCardAttachments(itemId).catch(err => {
+        });
+      }
+    }, 0);
+    
+    ensureCardVisible(card);
   }
-  
-  card.classList.toggle('expanded');
   
   // Adiciona/remove classe de desfoque nos outros cards
   const allCards = document.querySelectorAll('.tooling-card');
@@ -3696,17 +5025,6 @@ async function toggleCard(index) {
       c.classList.remove('has-expanded-sibling');
     }
   });
-  
-  // Recalcula expiration date ao abrir o card
-  if (card.classList.contains('expanded')) {
-    calculateExpirationDate(index);
-    // Carrega anexos do card
-    const itemId = card.getAttribute('data-item-id');
-    if (itemId) {
-      await loadCardAttachments(itemId);
-    }
-    ensureCardVisible(card);
-  }
 }
 
 // Troca de aba dentro do card
@@ -3730,12 +5048,8 @@ function switchCardTab(cardIndex, tabName) {
   
   // Carrega conteúdo específico da aba
   const itemId = card.getAttribute('data-item-id');
-  if (itemId) {
-    if (tabName === 'attachments') {
-      loadCardAttachments(itemId);
-    } else if (tabName === 'todos') {
-      loadTodos(itemId);
-    }
+  if (itemId && tabName === 'attachments') {
+    loadCardAttachments(itemId);
   }
 }
 
@@ -3784,129 +5098,6 @@ function findToolingItem(itemId) {
   return { normalizedId, toolingItem };
 }
 
-function setupCardAttachmentDropzones() {
-  const dropzones = document.querySelectorAll('.card-attachments-dropzone');
-
-  dropzones.forEach(dropzone => {
-    if (!dropzone || dropzone.dataset.ddInitialized === 'true') {
-      return;
-    }
-
-    const cardWrapper = dropzone.closest('.card-attachments');
-    const itemId = cardWrapper?.dataset.cardId;
-    if (!itemId) {
-      return;
-    }
-
-    let dragCounter = 0;
-
-    const handleDragEnter = event => {
-      if (!isFileDrag(event)) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      dragCounter += 1;
-      dropzone.classList.add('drop-active');
-    };
-
-    const handleDragOver = event => {
-      if (!isFileDrag(event)) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = 'copy';
-      }
-      dropzone.classList.add('drop-active');
-    };
-
-    const handleDragLeave = event => {
-      if (!isFileDrag(event)) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      dragCounter = Math.max(dragCounter - 1, 0);
-      if (dragCounter === 0) {
-        dropzone.classList.remove('drop-active');
-      }
-    };
-
-    const handleDrop = event => {
-      if (!isFileDrag(event)) {
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      dragCounter = 0;
-      dropzone.classList.remove('drop-active');
-      const files = Array.from(event.dataTransfer?.files || []);
-      if (files.length === 0) {
-        return;
-      }
-      handleCardAttachmentFiles(itemId, files);
-    };
-
-    dropzone.addEventListener('dragenter', handleDragEnter, false);
-    dropzone.addEventListener('dragover', handleDragOver, false);
-    dropzone.addEventListener('dragleave', handleDragLeave, false);
-    dropzone.addEventListener('drop', handleDrop, false);
-
-    dropzone.dataset.ddInitialized = 'true';
-  });
-}
-
-async function handleCardAttachmentFiles(itemId, files) {
-  if (!files || files.length === 0) {
-    return;
-  }
-
-  const { normalizedId, toolingItem } = findToolingItem(itemId);
-  if (normalizedId === null || !toolingItem || !toolingItem.supplier) {
-    showNotification('Ferramental inválido para anexar arquivos.', 'error');
-    return;
-  }
-
-  const paths = files
-    .map(file => file?.path)
-    .filter(Boolean);
-
-  if (paths.length === 0) {
-    showNotification('Não foi possível ler os arquivos arrastados.', 'error');
-    return;
-  }
-
-  try {
-    const result = await window.api.uploadAttachmentFromPaths(toolingItem.supplier, paths, normalizedId);
-
-    if (!result) {
-      showNotification('Não foi possível anexar os arquivos.', 'error');
-      return;
-    }
-
-    const failures = Array.isArray(result.results)
-      ? result.results.filter(item => item?.success !== true)
-      : [];
-
-    if (failures.length > 0 || result.success !== true) {
-      const errorMessage = failures[0]?.error || result.error || 'Erro ao anexar arquivos.';
-      showNotification(errorMessage, 'error');
-    } else {
-      const successMessage = paths.length > 1
-        ? 'Arquivos anexados com sucesso!'
-        : 'Arquivo anexado com sucesso!';
-      showNotification(successMessage);
-    }
-
-    await loadCardAttachments(normalizedId);
-  } catch (error) {
-    console.error('Erro ao anexar arquivos ao card:', error);
-    showNotification('Erro ao anexar arquivos.', 'error');
-  }
-}
-
 // Atualiza o contador de anexos no header do card
 function updateAttachmentCount(itemId, count) {
   const card = document.querySelector(`[data-item-id="${itemId}"]`);
@@ -3938,12 +5129,7 @@ function updateAttachmentCount(itemId, count) {
 async function loadCardAttachments(itemId) {
   try {
     const { normalizedId, toolingItem } = findToolingItem(itemId);
-    if (normalizedId === null) {
-      console.warn('loadCardAttachments: itemId inválido', itemId);
-      return;
-    }
-
-    if (!toolingItem || !toolingItem.supplier) {
+    if (normalizedId === null || !toolingItem || !toolingItem.supplier) {
       return;
     }
 
@@ -3988,7 +5174,6 @@ async function loadCardAttachments(itemId) {
       `;
     }).join('');
   } catch (error) {
-    console.error('Erro ao carregar anexos do card:', error);
   }
 }
 
@@ -4013,7 +5198,6 @@ async function uploadCardAttachment(itemId) {
       await loadCardAttachments(normalizedId);
     }
   } catch (error) {
-    console.error('Erro ao fazer upload de anexo do card:', error);
     showNotification('Erro ao anexar arquivo', 'error');
   }
 }
@@ -4021,37 +5205,30 @@ async function uploadCardAttachment(itemId) {
 // Salva alterações do ferramental
 async function saveTooling(id) {
   try {
-    // Coleta todos os dados dos inputs do card
-    const inputs = document.querySelectorAll(`[data-id="${id}"]`);
-    const data = {};
-    
-    inputs.forEach(input => {
-      const field = input.getAttribute('data-field');
-      data[field] = input.value;
-    });
+    const prepared = buildCardPayloadFromDom(id);
+    if (!prepared) {
+      showNotification('Não foi possível localizar os dados do card.', 'error');
+      return;
+    }
+    if (!prepared.hasChanges) {
+      showNotification('Nenhuma alteração detectada.', 'info');
+      return;
+    }
 
-    // Normaliza campos numéricos
-    const numericFields = ['tooling_life_qty','produced','annual_volume_forecast','remaining_tooling_life_pcs','percent_tooling_life','amount_brl','tool_quantity'];
-    numericFields.forEach(f => {
-      if (data.hasOwnProperty(f) && data[f] !== '') {
-        const parsed = Number(data[f]);
-        data[f] = Number.isNaN(parsed) ? 0 : parsed;
-      }
-    });
-
-    // Envia para o backend
-    await window.api.updateTooling(id, data);
+    await window.api.updateTooling(id, prepared.payload);
     showNotification('Dados salvos com sucesso!');
-    
-    // Atualiza apenas o item no array local sem recarregar tudo
-    const index = toolingData.findIndex(item => item.id === id);
+
+    const snapshotKey = getSnapshotKey(id);
+    cardSnapshotStore.set(snapshotKey, prepared.serialized);
+
+    const index = toolingData.findIndex(item => Number(item.id) === Number(id));
     if (index !== -1) {
-      toolingData[index] = { ...toolingData[index], ...data };
-      // Recalcula a data de expiração para o card atualizado
+      toolingData[index] = { ...toolingData[index], ...prepared.payload };
       calculateExpirationDate(index);
     }
+
+    scheduleInterfaceRefresh('manual-save');
   } catch (error) {
-    console.error('Erro ao salvar:', error);
     showNotification('Erro ao salvar dados', 'error');
   }
 }
@@ -4059,37 +5236,23 @@ async function saveTooling(id) {
 // Salva sem mostrar notificação (usado ao trocar de card)
 async function saveToolingQuietly(id) {
   try {
-    // Coleta todos os dados dos inputs do card
-    const inputs = document.querySelectorAll(`[data-id="${id}"]`);
-    const data = {};
-    
-    inputs.forEach(input => {
-      const field = input.getAttribute('data-field');
-      data[field] = input.value;
-    });
-
-    // Normaliza campos numéricos
-    const numericFields = ['tooling_life_qty','produced','annual_volume_forecast','remaining_tooling_life_pcs','percent_tooling_life','amount_brl','tool_quantity'];
-    numericFields.forEach(f => {
-      if (data.hasOwnProperty(f) && data[f] !== '') {
-        const parsed = Number(data[f]);
-        data[f] = Number.isNaN(parsed) ? 0 : parsed;
-      }
-    });
-
-    // Envia para o backend
-    await window.api.updateTooling(id, data);
-    
-    // Atualiza apenas o item no array local sem recarregar tudo
-    const index = toolingData.findIndex(item => item.id === id);
-    if (index !== -1) {
-      toolingData[index] = { ...toolingData[index], ...data };
+    const prepared = buildCardPayloadFromDom(id);
+    if (!prepared || !prepared.hasChanges) {
+      return;
     }
-    
-    // Atualiza a interface: suppliers, barra inferior e card header
-    await updateInterfaceAfterSave();
+
+    await window.api.updateTooling(id, prepared.payload);
+
+    const snapshotKey = getSnapshotKey(id);
+    cardSnapshotStore.set(snapshotKey, prepared.serialized);
+
+    const index = toolingData.findIndex(item => Number(item.id) === Number(id));
+    if (index !== -1) {
+      toolingData[index] = { ...toolingData[index], ...prepared.payload };
+    }
+
+    scheduleInterfaceRefresh('autosave');
   } catch (error) {
-    console.error('Erro ao salvar silenciosamente:', error);
   }
 }
 
@@ -4097,7 +5260,80 @@ async function saveToolingQuietly(id) {
 async function updateInterfaceAfterSave() {
   try {
     // Recarrega suppliers com estatísticas atualizadas
-    await loadSuppliers();
+    const oldSuppliersData = suppliersData;
+    suppliersData = await window.api.getSuppliersWithStats();
+    
+    // Verifica se há filtro de busca de supplier ativo
+    const supplierSearchInput = document.getElementById('supplierSearchInput');
+    const supplierSearchTerm = supplierSearchInput ? supplierSearchInput.value.trim() : '';
+    
+    if (supplierSearchTerm.length >= 1) {
+      // Aplicar filtro na lista de suppliers e manter toolings filtrados
+      const normalizedSearch = supplierSearchTerm.toLowerCase().trim();
+      const matchingSuppliers = new Set();
+      
+      // Busca em todos os toolings para saber quais suppliers têm match
+      try {
+        const allResults = await window.api.searchTooling(supplierSearchTerm);
+        allResults.forEach(item => {
+          const supplierName = String(item.supplier || '').trim();
+          if (supplierName) {
+            matchingSuppliers.add(supplierName);
+          }
+        });
+        
+        // Adiciona suppliers cujo nome contém o termo
+        suppliersData.forEach(supplier => {
+          const supplierName = String(supplier.supplier || '').toLowerCase();
+          if (supplierName.includes(normalizedSearch)) {
+            matchingSuppliers.add(supplier.supplier);
+          }
+        });
+        
+        // Filtra a lista de suppliers pela busca
+        let filteredSuppliers = suppliersData.filter(supplier => 
+          matchingSuppliers.has(supplier.supplier)
+        );
+        
+        // Aplica o filtro de expiração se estiver ativo
+        if (expirationFilterEnabled) {
+          filteredSuppliers = filteredSuppliers.filter(supplier => {
+            const expired = parseInt(supplier.expired) || 0;
+            const warning1 = parseInt(supplier.warning_1year) || 0;
+            const warning2 = parseInt(supplier.warning_2years) || 0;
+            const critical = expired + warning1 + warning2;
+            return critical > 0;
+          });
+        }
+        
+        // Atualiza a lista de suppliers
+        displaySuppliers(filteredSuppliers);
+        
+        // Se há um supplier selecionado e ele está nos matching, atualiza seus toolings filtrados
+        if (selectedSupplier && matchingSuppliers.has(selectedSupplier)) {
+          const filteredResults = allResults.filter(item => {
+            const itemSupplier = String(item.supplier || '').trim();
+            return itemSupplier === selectedSupplier;
+          });
+          
+          // Atualiza apenas os dados sem recriar os cards (preserva cards expandidos)
+          toolingData = filteredResults;
+          
+          // Atualiza campos dos cards existentes sem recriar tudo
+          filteredResults.forEach((item, index) => {
+            const card = document.getElementById(`card-${index}`);
+            if (card && card.getAttribute('data-item-id') === String(item.id)) {
+              // Card já existe com o ID correto, apenas atualiza dados se necessário
+              // Não precisa fazer nada pois os inputs já estão sincronizados
+            }
+          });
+        }
+      } catch (error) {
+      }
+    } else {
+      // Sem filtro: aplica apenas filtro de expiração
+      applyExpirationFilter();
+    }
     
     // Atualiza a barra inferior com analytics
     const analytics = await window.api.getAnalytics();
@@ -4107,7 +5343,6 @@ async function updateInterfaceAfterSave() {
       syncStatusBarWithSuppliers();
     }
   } catch (error) {
-    console.error('Erro ao atualizar interface:', error);
   }
 }
 
@@ -4121,44 +5356,6 @@ async function loadAnalytics() {
     document.getElementById('totalSuppliers').textContent = analytics.suppliers || 0;
     document.getElementById('totalResponsibles').textContent = analytics.responsibles || 0;
     
-    // Calcula dados usando suppliersData (mesma lógica da barra inferior)
-    let totalExpired = 0;
-    let totalExpiring = 0;
-    let totalObsolete = 0;
-    
-    if (Array.isArray(suppliersData) && suppliersData.length > 0) {
-      suppliersData.forEach(supplier => {
-        const expired = parseInt(supplier.expired, 10) || 0;
-        const warning1 = parseInt(supplier.warning_1year, 10) || 0;
-        const warning2 = parseInt(supplier.warning_2years, 10) || 0;
-        
-        totalExpired += expired;
-        // Expiring = expired + warning1 + warning2 (igual à barra inferior)
-        totalExpiring += (expired + warning1 + warning2);
-      });
-    }
-    
-    // Conta obsoletos de todos os toolings
-    const allTooling = await window.api.loadTooling();
-    const statusCount = {};
-    
-    allTooling.forEach(item => {
-      const status = String(item.status || 'N/A').trim();
-      statusCount[status] = (statusCount[status] || 0) + 1;
-      
-      if (status.toLowerCase() === 'obsolete') {
-        totalObsolete++;
-      }
-    });
-    
-    // Atualiza métricas de alerta
-    document.getElementById('totalExpired').textContent = totalExpired;
-    document.getElementById('totalExpiring').textContent = totalExpiring;
-    document.getElementById('totalObsolete').textContent = totalObsolete;
-    
-    // Distribui por status
-    displayStatusDistribution(statusCount);
-    
     // Top suppliers
     displayTopSuppliers(suppliersData);
     
@@ -4168,23 +5365,7 @@ async function loadAnalytics() {
       syncStatusBarWithSuppliers();
     }
   } catch (error) {
-    console.error('Erro ao carregar analytics:', error);
   }
-}
-
-function displayStatusDistribution(statusCount) {
-  const container = document.getElementById('statusDistribution');
-  if (!container) return;
-  
-  const sortedStatuses = Object.entries(statusCount)
-    .sort((a, b) => b[1] - a[1]);
-  
-  container.innerHTML = sortedStatuses.map(([status, count]) => `
-    <div class="status-card">
-      <div class="status-card-name">${escapeHtml(status)}</div>
-      <div class="status-card-count">${count}</div>
-    </div>
-  `).join('');
 }
 
 function displayTopSuppliers(suppliers) {
@@ -4193,21 +5374,15 @@ function displayTopSuppliers(suppliers) {
   
   const sortedSuppliers = [...suppliers]
     .sort((a, b) => (parseInt(b.total) || 0) - (parseInt(a.total) || 0))
-    .slice(0, 10);
+    .slice(0, 15);
   
   tableBody.innerHTML = sortedSuppliers.map(supplier => {
     const total = parseInt(supplier.total) || 0;
-    const expired = parseInt(supplier.expired) || 0;
-    const warning1 = parseInt(supplier.warning_1year) || 0;
-    const warning2 = parseInt(supplier.warning_2years) || 0;
-    const expiring = warning1 + warning2;
     
     return `
       <tr>
         <td>${escapeHtml(supplier.supplier)}</td>
         <td><span class="table-number">${total}</span></td>
-        <td><span class="table-number ${expired > 0 ? 'table-number-danger' : ''}">${expired}</span></td>
-        <td><span class="table-number ${expiring > 0 ? 'table-number-warning' : ''}">${expiring}</span></td>
       </tr>
     `;
   }).join('');
@@ -4296,6 +5471,11 @@ class ToastManager {
     toast.appendChild(closeBtn);
 
     this.container.appendChild(toast);
+
+    // Trigger animation
+    requestAnimationFrame(() => {
+      toast.classList.add('show');
+    });
 
     const timeout = setTimeout(() => this.dismiss(toast), duration);
     this.activeTimeouts.set(toast, timeout);
@@ -4479,7 +5659,6 @@ function saveStatusOptionsToStorage() {
   try {
     localStorage.setItem(STATUS_STORAGE_KEY, JSON.stringify(statusOptions));
   } catch (error) {
-    console.error('Erro ao salvar status personalizados:', error);
   }
 }
 
@@ -4507,7 +5686,6 @@ function loadStatusOptionsFromStorage() {
       }
     }
   } catch (error) {
-    console.error('Erro ao carregar status personalizados:', error);
   }
   return [...DEFAULT_STATUS_OPTIONS];
 }
@@ -4530,10 +5708,11 @@ function escapeHtml(value) {
 
 // Função para filtrar suppliers e toolings
 async function filterSuppliersAndTooling(searchTerm) {
-  const normalizedSearch = searchTerm.toLowerCase().trim();
+  const rawTerm = typeof searchTerm === 'string' ? searchTerm : '';
+  const normalizedSearch = rawTerm.toLowerCase().trim();
+  const requestId = ++supplierFilterRequestId;
   
   if (!normalizedSearch) {
-    // Se não há termo de busca, aplica o filtro de expiração normal
     applyExpirationFilter();
     if (selectedSupplier) {
       await loadToolingBySupplier(selectedSupplier);
@@ -4541,14 +5720,14 @@ async function filterSuppliersAndTooling(searchTerm) {
     return;
   }
 
-  // Filtra suppliers que correspondem ao termo
   const matchingSuppliers = new Set();
   
-  // Busca em todos os toolings
   try {
-    const allResults = await window.api.searchTooling(searchTerm);
+    const allResults = await window.api.searchTooling(rawTerm);
+    if (requestId !== supplierFilterRequestId) {
+      return;
+    }
     
-    // Agrupa por supplier
     allResults.forEach(item => {
       const supplierName = String(item.supplier || '').trim();
       if (supplierName) {
@@ -4556,7 +5735,6 @@ async function filterSuppliersAndTooling(searchTerm) {
       }
     });
     
-    // Adiciona suppliers cujo nome contém o termo
     suppliersData.forEach(supplier => {
       const supplierName = String(supplier.supplier || '').toLowerCase();
       if (supplierName.includes(normalizedSearch)) {
@@ -4564,12 +5742,10 @@ async function filterSuppliersAndTooling(searchTerm) {
       }
     });
     
-    // Filtra a lista de suppliers pela busca
     let filteredSuppliers = suppliersData.filter(supplier => 
       matchingSuppliers.has(supplier.supplier)
     );
     
-    // Aplica o filtro de expiração se estiver ativo
     if (expirationFilterEnabled) {
       filteredSuppliers = filteredSuppliers.filter(supplier => {
         const expired = parseInt(supplier.expired) || 0;
@@ -4580,18 +5756,22 @@ async function filterSuppliersAndTooling(searchTerm) {
       });
     }
     
+    if (requestId !== supplierFilterRequestId) {
+      return;
+    }
+
     displaySuppliers(filteredSuppliers);
     
-    // Se há um supplier selecionado, filtra seus toolings
     if (selectedSupplier && matchingSuppliers.has(selectedSupplier)) {
       const filteredResults = allResults.filter(item => {
         const itemSupplier = String(item.supplier || '').trim();
         return itemSupplier === selectedSupplier;
       });
+      
+      toolingData = filteredResults;
       displayTooling(filteredResults);
     }
   } catch (error) {
-    console.error('Erro ao filtrar suppliers e toolings:', error);
   }
 }
 
@@ -4607,6 +5787,7 @@ function clearSupplierSearch() {
   if (clearBtn) {
     clearBtn.style.display = 'none';
   }
+  supplierSearchDebouncedHandler?.cancel?.();
   
   filterSuppliersAndTooling('');
 }
@@ -4630,10 +5811,7 @@ async function loadTodos(toolingId) {
       </div>
     `).join('');
     
-    // Update badge on card header if there are incomplete todos
-    await updateTodoBadge(toolingId);
   } catch (error) {
-    console.error('Error loading todos:', error);
   }
 }
 
@@ -4642,7 +5820,6 @@ async function addTodoItem(toolingId) {
     await window.api.addTodo(toolingId, '');
     await loadTodos(toolingId);
   } catch (error) {
-    console.error('Error adding todo:', error);
     showNotification('Error adding todo', 'error');
   }
 }
@@ -4652,15 +5829,7 @@ async function toggleTodo(todoId, completed) {
     const todoItem = document.querySelector(`[data-todo-id="${todoId}"]`);
     const todoText = todoItem ? todoItem.querySelector('.todo-text').value : '';
     await window.api.updateTodo(todoId, todoText, completed ? 1 : 0);
-    
-    // Update badge for this tooling
-    const container = document.querySelector(`[data-todo-id="${todoId}"]`).closest('.todos-container');
-    if (container) {
-      const toolingId = container.id.replace('todosContainer-', '');
-      await updateTodoBadge(toolingId);
-    }
   } catch (error) {
-    console.error('Error toggling todo:', error);
   }
 }
 
@@ -4671,7 +5840,6 @@ async function updateTodoText(todoId, text) {
     const completed = checkbox ? (checkbox.checked ? 1 : 0) : 0;
     await window.api.updateTodo(todoId, text, completed);
   } catch (error) {
-    console.error('Error updating todo text:', error);
   }
 }
 
@@ -4680,47 +5848,117 @@ async function deleteTodo(todoId, toolingId) {
     await window.api.deleteTodo(todoId);
     await loadTodos(toolingId);
   } catch (error) {
-    console.error('Error deleting todo:', error);
     showNotification('Error deleting todo', 'error');
   }
 }
 
-async function updateTodoBadge(toolingId) {
-  try {
-    const todos = await window.api.getTodos(toolingId);
-    const incompleteTodos = todos.filter(t => !t.completed).length;
-    const totalTodos = todos.length;
-    
-    const card = document.querySelector(`.tooling-card[data-item-id="${toolingId}"]`);
-    if (!card) return;
-    
-    // Remove existing badge
-    const existingBadge = card.querySelector('.todos-badge');
-    if (existingBadge) {
-      existingBadge.remove();
+// Function removed - todo badge no longer displayed on card header
+
+// ===== SETTINGS CAROUSEL NAVIGATION =====
+
+let currentSettingsCarouselIndex = 0;
+
+function navigateSettingsCarousel(direction) {
+  const carousel = document.getElementById('settingsCarousel');
+  const cards = carousel ? carousel.querySelectorAll('.settings-card') : [];
+  const totalCards = cards.length;
+  
+  if (totalCards === 0) return;
+  
+  // Calcular novo índice
+  currentSettingsCarouselIndex += direction;
+  
+  // Circular: voltar ao início ou fim
+  if (currentSettingsCarouselIndex < 0) {
+    currentSettingsCarouselIndex = totalCards - 1;
+  } else if (currentSettingsCarouselIndex >= totalCards) {
+    currentSettingsCarouselIndex = 0;
+  }
+  
+  updateSettingsCarouselPosition();
+}
+
+function goToSettingsCarouselSlide(index) {
+  const carousel = document.getElementById('settingsCarousel');
+  const cards = carousel ? carousel.querySelectorAll('.settings-card') : [];
+  
+  if (index >= 0 && index < cards.length) {
+    currentSettingsCarouselIndex = index;
+    updateSettingsCarouselPosition();
+  }
+}
+
+function updateSettingsCarouselPosition() {
+  const carousel = document.getElementById('settingsCarousel');
+  const indicators = document.querySelectorAll('.carousel-dot');
+  const cards = carousel ? carousel.querySelectorAll('.settings-card') : [];
+  
+  if (!carousel || cards.length === 0) return;
+  
+  // Verificar se está em modo mobile (carrossel ativo)
+  const isMobile = window.innerWidth <= 1200;
+  
+  if (isMobile) {
+    // Scroll para o card ativo
+    if (cards[currentSettingsCarouselIndex]) {
+      cards[currentSettingsCarouselIndex].scrollIntoView({
+        behavior: 'smooth',
+        block: 'nearest',
+        inline: 'start'
+      });
     }
     
-    // Add new badge if there are incomplete todos
-    if (incompleteTodos > 0) {
-      const topMeta = card.querySelector('.tooling-card-top-meta');
-      if (topMeta) {
-        const badge = document.createElement('div');
-        badge.className = 'todos-badge';
-        badge.innerHTML = `
-          <i class="ph ph-check-square"></i>
-          <span>${incompleteTodos}/${totalTodos}</span>
-        `;
-        // Insert before expand button
-        const expandBtn = topMeta.querySelector('.tooling-card-expand');
-        if (expandBtn) {
-          topMeta.insertBefore(badge, expandBtn);
-        } else {
-          topMeta.appendChild(badge);
+    // Atualizar indicadores
+    indicators.forEach((dot, index) => {
+      if (index === currentSettingsCarouselIndex) {
+        dot.classList.add('active');
+      } else {
+        dot.classList.remove('active');
+      }
+    });
+  }
+}
+
+// Detectar scroll manual no carrossel e atualizar indicadores
+function initSettingsCarouselScrollListener() {
+  const carousel = document.getElementById('settingsCarousel');
+  if (!carousel) return;
+  
+  let scrollTimeout;
+  carousel.addEventListener('scroll', () => {
+    const isMobile = window.innerWidth <= 1200;
+    if (!isMobile) return;
+    
+    clearTimeout(scrollTimeout);
+    scrollTimeout = setTimeout(() => {
+      const cards = carousel.querySelectorAll('.settings-card');
+      const scrollLeft = carousel.scrollLeft;
+      const cardWidth = cards[0] ? cards[0].offsetWidth : 0;
+      
+      if (cardWidth > 0) {
+        const newIndex = Math.round(scrollLeft / cardWidth);
+        if (newIndex !== currentSettingsCarouselIndex && newIndex >= 0 && newIndex < cards.length) {
+          currentSettingsCarouselIndex = newIndex;
+          const indicators = document.querySelectorAll('.carousel-dot');
+          indicators.forEach((dot, index) => {
+            if (index === currentSettingsCarouselIndex) {
+              dot.classList.add('active');
+            } else {
+              dot.classList.remove('active');
+            }
+          });
         }
       }
+    }, 100);
+  });
+  
+  // Resetar posição quando sair do modo mobile
+  window.addEventListener('resize', () => {
+    const isMobile = window.innerWidth <= 1200;
+    if (!isMobile) {
+      currentSettingsCarouselIndex = 0;
+      carousel.scrollLeft = 0;
     }
-  } catch (error) {
-    console.error('Error updating todo badge:', error);
-  }
+  });
 }
 

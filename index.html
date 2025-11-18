@@ -100,6 +100,9 @@
                   <button class="supplier-data-btn" id="importSupplierBtn" type="button" title="Import supplier data" onclick="importSupplierData()" disabled>
                     <i class="ph ph-download"></i>
                   </button>
+                  <button class="supplier-data-btn" id="supplierCommentBtn" type="button" title="Supplier comments" onclick="openSupplierComments()" disabled>
+                    <i class="ph ph-chat-circle-text"></i>
+                  </button>
                   <button class="attachments-counter" id="attachmentsCountBtn" type="button" title="View attachments" onclick="openAttachmentsModal()">
                     <i class="ph ph-files"></i>
                     <span class="attachments-counter-badge" id="attachmentsCountLabel">0</span>
@@ -145,6 +148,32 @@
               </div>
             </div>
           </div>
+
+          <!-- Supplier Comments Modal -->
+          <div class="modal-overlay" id="supplierCommentsModal">
+            <div class="modal-card modal-card-comments">
+              <div class="modal-header">
+                <div class="modal-icon">
+                  <i class="ph ph-note-pencil"></i>
+                </div>
+                <h3 class="modal-title">Comments</h3>
+                <p class="modal-subtitle" id="supplierCommentsSubtitle">Loading...</p>
+                <button class="modal-close-btn" type="button" onclick="closeSupplierCommentsModal()" title="Close">
+                  <i class="ph ph-x"></i>
+                </button>
+              </div>
+              <div class="modal-body simple-comments">
+                <label for="supplierNotesText">Notes & Observations</label>
+                <textarea class="comments-textarea" id="supplierNotesText" placeholder="Write your notes here..."></textarea>
+              </div>
+              <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeSupplierCommentsModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="saveSupplierComments()">
+                  <i class="ph ph-check"></i> Save
+                </button>
+              </div>
+            </div>
+          </div>
           
           <div class="content-body scrollable">
             <div class="empty-state" id="emptyState">
@@ -160,9 +189,6 @@
         
         <!-- Floating buttons -->
         <div class="floating-actions">
-          <button class="floating-expand-btn" id="floatingExpandBtn" onclick="toggleAllCards()" title="Expand/Collapse All">
-            <i class="ph ph-arrows-out"></i>
-          </button>
           <button class="floating-add-btn" id="floatingAddBtn" onclick="openAddToolingModal()" title="New Tooling">
             <i class="ph ph-plus"></i>
           </button>
@@ -215,18 +241,42 @@
                 <input type="text" id="addToolingPN" class="modal-input-text" maxlength="120" placeholder="PN code" required />
               </div>
               <div class="modal-field">
+                <label for="addToolingPNDescription">PN Description</label>
+                <input type="text" id="addToolingPNDescription" class="modal-input-text" maxlength="255" placeholder="Optional" />
+              </div>
+              <div class="modal-field">
                 <label for="addToolingSupplier">Supplier *</label>
                 <input list="addToolingSupplierList" id="addToolingSupplier" class="modal-input-text" placeholder="Select or type" required />
                 <datalist id="addToolingSupplierList"></datalist>
+              </div>
+              <div class="modal-field">
+                <label for="addToolingDescription">Tooling Description</label>
+                <input type="text" id="addToolingDescription" class="modal-input-text" maxlength="255" placeholder="Optional" />
               </div>
               <div class="modal-field modal-field-row">
                 <div class="modal-field">
                   <label for="addToolingLife">Tooling Life Qty *</label>
                   <input type="number" id="addToolingLife" class="modal-input-text" min="0" step="1" placeholder="0" required />
                 </div>
+              </div>
+              <div class="modal-field modal-field-row">
                 <div class="modal-field">
                   <label for="addToolingProduced">Produced *</label>
                   <input type="number" id="addToolingProduced" class="modal-input-text" min="0" step="1" placeholder="0" required />
+                </div>
+                <div class="modal-field">
+                  <label for="addToolingProductionDate">Production Date</label>
+                  <input type="date" id="addToolingProductionDate" class="modal-input-text" />
+                </div>
+              </div>
+              <div class="modal-field modal-field-row">
+                <div class="modal-field">
+                  <label for="addToolingForecast">Annual Volume Forecast</label>
+                  <input type="number" id="addToolingForecast" class="modal-input-text" min="0" step="1" placeholder="Optional" />
+                </div>
+                <div class="modal-field">
+                  <label for="addToolingForecastDate">Forecast Date</label>
+                  <input type="date" id="addToolingForecastDate" class="modal-input-text" />
                 </div>
               </div>
             </form>
@@ -244,7 +294,7 @@
             <div class="modal-icon">
               <i class="ph ph-faders"></i>
             </div>
-            <h3>Filter Options</h3>
+            <h3>Supplier Options</h3>
             <div class="filter-options-content">
               <label class="filter-option-item">
                 <div class="filter-option-info">
@@ -254,6 +304,24 @@
                 <input type="checkbox" id="expirationFilterSwitch" class="expiration-switch">
                 <span class="expiration-slider"></span>
               </label>
+              
+              <div class="filter-option-divider"></div>
+              
+              <button class="filter-option-button" type="button" onclick="exportAllData()">
+                <i class="ph ph-download-simple"></i>
+                <div class="filter-option-info">
+                  <span class="filter-option-label">Export Forecast Data</span>
+                  <span class="filter-option-desc">Export ID, PN, Supplier, Forecast, Forecast Date</span>
+                </div>
+              </button>
+              
+              <button class="filter-option-button" type="button" onclick="importAllData()">
+                <i class="ph ph-upload-simple"></i>
+                <div class="filter-option-info">
+                  <span class="filter-option-label">Import Forecast Data</span>
+                  <span class="filter-option-desc">Update Forecast and Forecast Date by ID</span>
+                </div>
+              </button>
             </div>
             <div class="modal-actions">
               <button class="btn-secondary" type="button" onclick="closeSupplierFilterOverlay()">Close</button>
@@ -345,52 +413,16 @@
                   <p class="metric-value" id="totalResponsibles">0</p>
                 </div>
               </div>
-              <div class="metric-card metric-card-alert">
-                <div class="metric-icon metric-icon-danger">
-                  <i class="ph ph-warning-circle"></i>
-                </div>
-                <div class="metric-content">
-                  <h3>Expired</h3>
-                  <p class="metric-value" id="totalExpired">0</p>
-                </div>
-              </div>
-              <div class="metric-card metric-card-warning">
-                <div class="metric-icon metric-icon-warning">
-                  <i class="ph ph-warning"></i>
-                </div>
-                <div class="metric-content">
-                  <h3>Expiring (≤ 2 years)</h3>
-                  <p class="metric-value" id="totalExpiring">0</p>
-                </div>
-              </div>
-              <div class="metric-card metric-card-obsolete">
-                <div class="metric-icon metric-icon-obsolete">
-                  <i class="ph ph-archive-box"></i>
-                </div>
-                <div class="metric-content">
-                  <h3>Obsolete</h3>
-                  <p class="metric-value" id="totalObsolete">0</p>
-                </div>
-              </div>
             </div>
             
             <div class="analytics-section">
-              <h3 class="analytics-section-title">Status Distribution</h3>
-              <div class="analytics-status-grid" id="statusDistribution">
-                <!-- Status cards will be inserted here -->
-              </div>
-            </div>
-            
-            <div class="analytics-section">
-              <h3 class="analytics-section-title">Top Suppliers by Tooling Count</h3>
+              <h3 class="analytics-section-title">Top Suppliers</h3>
               <div class="analytics-table-container">
                 <table class="analytics-table" id="topSuppliersTable">
                   <thead>
                     <tr>
                       <th>Supplier</th>
-                      <th>Total</th>
-                      <th>Expired</th>
-                      <th>Expiring</th>
+                      <th>Tooling Count</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -408,79 +440,44 @@
             <h2>Settings</h2>
           </div>
           <div class="content-body settings-body">
-            <div class="settings-grid">
-              <section class="settings-card settings-card--overview">
-                <div class="settings-card-header">
-                  <div>
-                    <p class="settings-card-eyebrow">Tooling Control</p>
-                    <h3>Application Overview</h3>
+            <div class="settings-carousel-wrapper">
+              <button class="carousel-nav-btn carousel-nav-prev" id="carouselPrevBtn" onclick="navigateSettingsCarousel(-1)" aria-label="Previous card">
+                <i class="ph ph-caret-left"></i>
+              </button>
+              <div class="settings-grid" id="settingsCarousel">
+                <section class="settings-card settings-card--overview">
+                  <div class="settings-card-header">
+                    <div>
+                      <p class="settings-card-eyebrow">Tooling Control</p>
+                      <h3>Application Overview</h3>
+                    </div>
+                    <span class="settings-version-chip" id="appVersionSettings">v0.1.1</span>
                   </div>
-                  <span class="settings-version-chip" id="appVersionSettings">v0.1.1</span>
-                </div>
-                <p class="settings-description">Controle centralizado para ciclo de vida e documentação de ferramentais dos fornecedores.</p>
-                <div class="settings-meta-grid">
-                  <div class="settings-meta">
-                    <span class="meta-label">Ambiente</span>
-                    <span class="meta-value">Desktop</span>
+                  <p class="settings-description">Controle centralizado para ciclo de vida e documentação de ferramentais dos fornecedores.</p>
+                  <div class="settings-meta-grid">
+                    <div class="settings-meta">
+                      <span class="meta-label">Ambiente</span>
+                      <span class="meta-value">Desktop</span>
+                    </div>
+                    <div class="settings-meta">
+                      <span class="meta-label">Banco de dados</span>
+                      <span class="meta-value">SQLite</span>
+                    </div>
+                    <div class="settings-meta">
+                      <span class="meta-label">Atualização</span>
+                      <span class="meta-value">Sob demanda</span>
+                    </div>
                   </div>
-                  <div class="settings-meta">
-                    <span class="meta-label">Banco de dados</span>
-                    <span class="meta-value">SQLite</span>
-                  </div>
-                  <div class="settings-meta">
-                    <span class="meta-label">Atualização</span>
-                    <span class="meta-value">Sob demanda</span>
-                  </div>
-                </div>
-              </section>
+                </section>
 
-              <section class="settings-card">
-                <h3>Data</h3>
-                <p class="settings-description">Recarregue os dados sempre que houver um novo arquivo de referência.</p>
-                <button class="btn-primary" id="reloadData">
-                  <i class="ph ph-arrow-clockwise"></i>
-                  Reload Data
-                </button>
-              </section>
-
-              <section class="settings-card settings-card--wide">
-                <div class="settings-card-header">
-                  <div>
-                    <p class="settings-card-eyebrow">For Suppliers</p>
-                    <h3>Supplier Info & Instructions</h3>
-                  </div>
-                  <i class="ph ph-info" style="font-size: 24px; color: var(--primary-color);"></i>
-                </div>
-                <p class="settings-description">Important information for suppliers filling out tooling data in Excel files.</p>
-                
-                <div class="info-section">
-                  <h4><i class="ph ph-plus-circle"></i> Adding New Tooling Items</h4>
-                  <p>To add a new tooling item to the spreadsheet:</p>
-                  <ul class="info-list">
-                    <li><strong>Leave the ID column empty</strong> - The system will automatically assign an ID when importing</li>
-                    <li><strong>Part Number (PN) is required</strong> - You must fill in the PN for new items</li>
-                    <li><strong>Fill in all relevant data</strong> - Description, quantities, dates, and comments help us track the tooling lifecycle</li>
-                    <li><strong>Add rows at the end</strong> - The PN column is unlocked starting from the first empty row</li>
-                  </ul>
-                </div>
-
-                <div class="info-section">
-                  <h4><i class="ph ph-calendar"></i> Understanding Date Fields</h4>
-                  <p><strong>Production Date:</strong> This is the date when the "Produced" quantity was measured. It represents the production volume on the date the data was collected. Use format: dd/mm/yyyy</p>
-                  <p><strong>Forecast Date:</strong> This is the date when the "Annual Volume Forecast" was calculated or projected. It represents when this forecast estimate was made. Use format: dd/mm/yyyy</p>
-                </div>
-
-                <div class="info-section">
-                  <h4><i class="ph ph-shield-check"></i> File Protection</h4>
-                  <ul class="info-list">
-                    <li>The Excel file is password-protected to maintain data integrity</li>
-                    <li><strong>ID column is locked</strong> - Cannot be modified for existing items</li>
-                    <li><strong>PN column</strong> - Locked for existing items, unlocked for new rows</li>
-                    <li>All other columns (Description, quantities, dates, comments) are editable</li>
-                    <li>Your comments will be timestamped automatically when imported</li>
-                  </ul>
-                </div>
-              </section>
+                <section class="settings-card">
+                  <h3>Data</h3>
+                  <p class="settings-description">Recarregue os dados sempre que houver um novo arquivo de referência.</p>
+                  <button class="btn-primary" id="reloadData">
+                    <i class="ph ph-arrow-clockwise"></i>
+                    Reload Data
+                  </button>
+                </section>
 
               <section class="settings-card settings-card--tech">
                 <h3>Tech Stack</h3>
@@ -537,6 +534,17 @@
                   </button>
                 </div>
               </section>
+              </div>
+              <button class="carousel-nav-btn carousel-nav-next" id="carouselNextBtn" onclick="navigateSettingsCarousel(1)" aria-label="Next card">
+                <i class="ph ph-caret-right"></i>
+              </button>
+            </div>
+            <div class="carousel-indicators" id="carouselIndicators">
+              <span class="carousel-dot active" data-index="0" onclick="goToSettingsCarouselSlide(0)"></span>
+              <span class="carousel-dot" data-index="1" onclick="goToSettingsCarouselSlide(1)"></span>
+              <span class="carousel-dot" data-index="2" onclick="goToSettingsCarouselSlide(2)"></span>
+              <span class="carousel-dot" data-index="3" onclick="goToSettingsCarouselSlide(3)"></span>
+              <span class="carousel-dot" data-index="4" onclick="goToSettingsCarouselSlide(4)"></span>
             </div>
           </div>
         </div>

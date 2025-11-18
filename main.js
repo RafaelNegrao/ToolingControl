@@ -373,15 +373,11 @@ function ensureDatabaseFile(baseDir) {
     const packagedDbPath = path.join(app.getAppPath(), DATABASE_FILE_NAME);
     if (fs.existsSync(packagedDbPath)) {
       fs.copyFileSync(packagedDbPath, targetPath);
-      console.log('Banco de dados copiado para o diretório do executável.');
       return targetPath;
     }
-
-    console.warn('Arquivo do banco não encontrado no pacote. Um novo arquivo vazio será criado.');
     fs.writeFileSync(targetPath, '');
     return targetPath;
   } catch (error) {
-    console.error('Falha ao preparar o banco de dados:', error);
     return targetPath;
   }
 }
@@ -389,24 +385,17 @@ function ensureDatabaseFile(baseDir) {
 // Conectar ao banco de dados
 function connectDatabase() {
   const baseDir = getAppBaseDir();
-  console.log('Base directory detectado:', baseDir);
   const dbPath = ensureDatabaseFile(baseDir);
-  console.log('Caminho do banco de dados:', dbPath);
-  
   return new Promise((resolve, reject) => {
     db = new sqlite3.Database(dbPath, (err) => {
       if (err) {
-        console.error('Erro ao conectar ao banco de dados:', err);
         reject(err);
         return;
       }
-
-      console.log('Conectado ao banco de dados ferramental_database.db');
       checkAndAddColumns()
         .then(() => ensureTodosTable())
         .then(resolve)
         .catch((schemaError) => {
-          console.error('Erro ao ajustar colunas do banco:', schemaError);
           reject(schemaError);
         });
     });
@@ -416,16 +405,38 @@ function connectDatabase() {
 // Verificar e adicionar colunas que possam estar faltando
 function checkAndAddColumns() {
   const columnsToCheck = [
+    { name: 'pn', type: 'TEXT' },
+    { name: 'pn_description', type: 'TEXT' },
+    { name: 'supplier', type: 'TEXT' },
+    { name: 'tool_description', type: 'TEXT' },
     { name: 'tool_number_arb', type: 'TEXT' },
+    { name: 'asset_number', type: 'TEXT' },
+    { name: 'tool_ownership', type: 'TEXT' },
+    { name: 'customer', type: 'TEXT' },
     { name: 'tooling_life_qty', type: 'TEXT' },
-    { name: 'date_remaining_tooling_life', type: 'TEXT' },
+    { name: 'produced', type: 'TEXT' },
+    { name: 'remaining_tooling_life_pcs', type: 'TEXT' },
+    { name: 'percent_tooling_life', type: 'TEXT' },
     { name: 'annual_volume_forecast', type: 'TEXT' },
+    { name: 'date_remaining_tooling_life', type: 'TEXT' },
     { name: 'date_annual_volume', type: 'TEXT' },
-    { name: 'replacement_tooling_id', type: 'INTEGER' },
+    { name: 'expiration_date', type: 'TEXT' },
+    { name: 'finish_due_date', type: 'TEXT' },
+    { name: 'amount_brl', type: 'TEXT' },
+    { name: 'tool_quantity', type: 'TEXT' },
     { name: 'bailment_agreement_signed', type: 'TEXT' },
     { name: 'tooling_book', type: 'TEXT' },
     { name: 'disposition', type: 'TEXT' },
-    { name: 'finish_due_date', type: 'TEXT' }
+    { name: 'status', type: 'TEXT' },
+    { name: 'steps', type: 'TEXT' },
+    { name: 'bu', type: 'TEXT' },
+    { name: 'category', type: 'TEXT' },
+    { name: 'cummins_responsible', type: 'TEXT' },
+    { name: 'comments', type: 'TEXT' },
+    { name: 'todos', type: 'TEXT' },
+    { name: 'stim_tooling_management', type: 'TEXT' },
+    { name: 'vpcr', type: 'TEXT' },
+    { name: 'replacement_tooling_id', type: 'INTEGER' }
   ];
   
   return new Promise((resolve, reject) => {
@@ -452,7 +463,6 @@ function checkAndAddColumns() {
       db.serialize(() => {
         missingColumns.forEach(({ name, type }) => {
           const columnType = type || 'TEXT';
-          console.log(`Adicionando coluna: ${name}`);
           db.run(`ALTER TABLE ferramental ADD COLUMN ${name} ${columnType}`, (alterErr) => {
             if (hasFailed) {
               return;
@@ -460,7 +470,6 @@ function checkAndAddColumns() {
 
             if (alterErr && !/duplicate column/i.test(alterErr.message || '')) {
               hasFailed = true;
-              console.error(`Erro ao adicionar coluna ${name}:`, alterErr);
               reject(alterErr);
               return;
             }
@@ -537,14 +546,12 @@ function ensureTodosTable() {
     // First check if table exists
     db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='todos'", (err, row) => {
       if (err) {
-        console.error('Erro ao verificar tabela todos:', err);
         reject(err);
         return;
       }
 
       if (!row) {
         // Table doesn't exist, create it
-        console.log('Tabela todos não existe, criando...');
         db.run(`
           CREATE TABLE todos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -556,10 +563,8 @@ function ensureTodosTable() {
           )
         `, (createErr) => {
           if (createErr) {
-            console.error('Erro ao criar tabela todos:', createErr);
             reject(createErr);
           } else {
-            console.log('Tabela todos criada com sucesso');
             resolve();
           }
         });
@@ -567,7 +572,6 @@ function ensureTodosTable() {
         // Table exists, verify columns
         db.all("PRAGMA table_info(todos)", (pragmaErr, columns) => {
           if (pragmaErr) {
-            console.error('Erro ao verificar colunas da tabela todos:', pragmaErr);
             reject(pragmaErr);
             return;
           }
@@ -577,16 +581,13 @@ function ensureTodosTable() {
           const missingColumns = requiredColumns.filter(col => !columnNames.includes(col));
 
           if (missingColumns.length > 0) {
-            console.log('Colunas faltando na tabela todos:', missingColumns);
             // Recreate table with all columns
             db.serialize(() => {
               db.run('DROP TABLE IF EXISTS todos_backup', (dropErr) => {
-                if (dropErr) console.error('Erro ao limpar backup:', dropErr);
               });
               
               db.run('ALTER TABLE todos RENAME TO todos_backup', (renameErr) => {
                 if (renameErr) {
-                  console.error('Erro ao renomear tabela todos:', renameErr);
                   reject(renameErr);
                   return;
                 }
@@ -602,7 +603,6 @@ function ensureTodosTable() {
                   )
                 `, (createErr) => {
                   if (createErr) {
-                    console.error('Erro ao recriar tabela todos:', createErr);
                     reject(createErr);
                     return;
                   }
@@ -613,21 +613,16 @@ function ensureTodosTable() {
                     SELECT id, tooling_id, text, completed, created_at FROM todos_backup
                   `, (copyErr) => {
                     if (copyErr) {
-                      console.warn('Não foi possível copiar dados antigos:', copyErr);
                     }
 
                     db.run('DROP TABLE todos_backup', (dropErr) => {
-                      if (dropErr) console.error('Erro ao remover backup:', dropErr);
                     });
-
-                    console.log('Tabela todos recriada com sucesso');
                     resolve();
                   });
                 });
               });
             });
           } else {
-            console.log('Tabela todos verificada - todas as colunas presentes');
             resolve();
           }
         });
@@ -637,9 +632,14 @@ function ensureTodosTable() {
 }
 
 function executeToolingUpdate(id, payload, attempt = 1) {
-  console.log(`[DB Update] ID: ${id}, Payload:`, payload, `Attempt: ${attempt}`);
   return new Promise((resolve, reject) => {
     const data = { ...payload };
+    
+    // Validar se payload não está vazio
+    if (!data || Object.keys(data).length === 0) {
+      resolve({ success: true, changes: 0 });
+      return;
+    }
     
     // Only recalculate lifecycle if tooling_life_qty or produced are in the payload
     if (data.hasOwnProperty('tooling_life_qty') || data.hasOwnProperty('produced')) {
@@ -652,37 +652,50 @@ function executeToolingUpdate(id, payload, attempt = 1) {
       data.percent_tooling_life = percentUsed;
     }
 
-    const allFields = Object.keys(data);
-    const allValues = Object.values(data);
-    const setClause = allFields.map(field => `${field} = ?`).join(', ');
+    // Filtrar campos válidos (remover undefined, null, campos vazios ou com nomes inválidos)
+    const validFields = Object.keys(data).filter(key => {
+      // Verificar se key é válida
+      if (!key || typeof key !== 'string' || key.trim() === '') {
+        return false;
+      }
+      
+      // Verificar se é campo do banco (não começar com símbolos especiais)
+      const fieldName = key.trim();
+      if (fieldName.startsWith('_') || fieldName.startsWith('$')) {
+        return false;
+      }
+      
+      return data[key] !== undefined;
+    });
+    
+    if (validFields.length === 0) {
+      resolve({ success: true, changes: 0 });
+      return;
+    }
+    
+    const validValues = validFields.map(key => data[key]);
+    const setClause = validFields.map(field => `${field.trim()} = ?`).join(', ');
 
     const query = `UPDATE ferramental SET ${setClause}, last_update = datetime('now') WHERE id = ?`;
-    console.log(`[DB Update] SQL:`, query);
-    console.log(`[DB Update] Values:`, [...allValues, id]);
-
     db.run(
       query,
-      [...allValues, id],
+      [...validValues, id],
       async function(err) {
         if (err && isMissingReplacementColumnError(err) && attempt === 1) {
-          console.log('[DB Update] Missing column, retrying...');
           try {
             await ensureReplacementColumnExists(true);
             const retryResult = await executeToolingUpdate(id, payload, attempt + 1);
             resolve(retryResult);
             return;
           } catch (retryError) {
-            console.error('[DB Update] Retry failed:', retryError);
             reject(retryError);
             return;
           }
         }
 
         if (err) {
-          console.error('[DB Update] Error:', err);
           reject(err);
         } else {
-          console.log(`[DB Update] Success! Changes: ${this.changes}`);
           resolve({ success: true, changes: this.changes });
         }
       }
@@ -889,7 +902,6 @@ ipcMain.handle('update-tooling', async (event, id, data) => {
   try {
     await ensureReplacementColumnExists();
   } catch (error) {
-    console.error('Erro ao garantir coluna de substituição:', error);
   }
   return executeToolingUpdate(id, data);
 });
@@ -910,10 +922,13 @@ ipcMain.handle('create-tooling', async (event, data) => {
       const remaining = toolingLife - produced;
       const percent = toolingLife > 0 ? ((produced / toolingLife) * 100).toFixed(1) : 0;
 
+      const toolDescription = (data?.tool_description || '').trim();
+
       db.run(
         `INSERT INTO ferramental (
           pn,
           supplier,
+          tool_description,
           tooling_life_qty,
           produced,
           remaining_tooling_life_pcs,
@@ -921,15 +936,16 @@ ipcMain.handle('create-tooling', async (event, data) => {
           status,
           last_update,
           date_remaining_tooling_life
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
         [
           pn,
           supplier,
+          toolDescription,
           toolingLife,
           produced,
           remaining >= 0 ? remaining : 0,
           percent,
-          'Ativo'
+          'ACTIVE'
         ],
         function(err) {
           if (err) {
@@ -1023,15 +1039,27 @@ ipcMain.handle('export-supplier-data', async (event, supplierName) => {
 
         // Adicionar dados
         rows.forEach(row => {
+          // Converter datas de YYYY-MM-DD para DD/MM/YYYY
+          let prodDate = row.production_date || '';
+          if (prodDate && /^\d{4}-\d{2}-\d{2}$/.test(prodDate)) {
+            const [year, month, day] = prodDate.split('-');
+            prodDate = `${day}/${month}/${year}`;
+          }
+          let foreDate = row.forecast_date || '';
+          if (foreDate && /^\d{4}-\d{2}-\d{2}$/.test(foreDate)) {
+            const [year, month, day] = foreDate.split('-');
+            foreDate = `${day}/${month}/${year}`;
+          }
+          
           worksheet.addRow({
             id: row.id || '',
             pn: row.pn || '',
             description: row.description || '',
             tooling_life_qty: row.tooling_life_qty || '',
             produced: row.produced || '',
-            production_date: row.production_date || '',
+            production_date: prodDate,
             forecast: row.forecast || '',
-            forecast_date: row.forecast_date || '',
+            forecast_date: foreDate,
             supplier_comments: ''
           });
         });
@@ -1137,8 +1165,6 @@ ipcMain.handle('export-supplier-data', async (event, supplierName) => {
         // Criar segunda aba com informações do supplier
         await ensureSupplierMetadataTable();
         const lastImportTimestamp = await getSupplierImportTimestamp(supplierName);
-        console.log('[export] Timestamp recuperado do banco:', lastImportTimestamp);
-
         const supplierSheet = workbook.addWorksheet(SUPPLIER_INFO_SHEET_NAME);
         supplierSheet.columns = [
           { header: 'Field', key: 'field', width: 28 },
@@ -1150,8 +1176,6 @@ ipcMain.handle('export-supplier-data', async (event, supplierName) => {
           SUPPLIER_INFO_TIMESTAMP_LABEL,
           lastImportTimestamp || ''
         );
-        console.log('[export] Supplier Info row criada com timestamp:', lastImportTimestamp || '(vazio)');
-
         // Adicionar instruções para fornecedores
         supplierSheet.addRow({ field: '', value: '' }); // Linha em branco
         supplierSheet.addRow({ field: 'INSTRUCTIONS', value: '' });
@@ -1384,21 +1408,13 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
   }
 
   const timestampStr = getCurrentTimestampBR();
-  console.log('[import] Timestamp gerado:', timestampStr);
-  
   updateSupplierInfoTimestamp(workbook, timestampStr);
-  console.log('[import] Supplier Info sheet atualizada com timestamp');
-  
   await setSupplierImportTimestamp(supplierName, timestampStr);
-  console.log('[import] Timestamp salvo no banco para supplier:', supplierName);
-  
   const verificationSheet = workbook.getWorksheet(VERIFICATION_SHEET_NAME);
   if (verificationSheet) {
     verificationSheet.state = 'veryHidden';
   }
   await workbook.xlsx.writeFile(filePath);
-  console.log('[import] Arquivo Excel atualizado:', filePath);
-
   return {
     success: true,
     updated,
@@ -1414,16 +1430,11 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
 function getAttachmentsDir() {
   const baseDir = getAppBaseDir();
   const attachmentsPath = path.join(baseDir, 'attachments');
-  console.log('[attachments] Base dir:', baseDir);
-  console.log('[attachments] Target path:', attachmentsPath);
-
   // Garante que o diretório de anexos existe
   if (!fs.existsSync(attachmentsPath)) {
     try {
       fs.mkdirSync(attachmentsPath, { recursive: true });
-      console.log('[attachments] Diretório criado:', attachmentsPath);
     } catch (error) {
-      console.error('[attachments] Falha ao criar diretório:', error);
     }
   }
 
@@ -1437,31 +1448,21 @@ ipcMain.handle('get-attachments', async (event, supplierName, itemId = null) => 
   
   if (itemId) {
     targetDir = path.join(attachmentsDir, sanitizeFileName(supplierName), String(itemId));
-    console.log('[get-attachments] Buscando anexos do CARD:', { supplierName, itemId, targetDir });
   } else {
     targetDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
-    console.log('[get-attachments] Buscando anexos GERAIS do supplier:', { supplierName, targetDir });
   }
   
   if (!fs.existsSync(targetDir)) {
-    console.log('[get-attachments] Diretório não existe:', targetDir);
     return [];
   }
   
   try {
     const allItems = fs.readdirSync(targetDir);
-    console.log('[get-attachments] Todos os itens encontrados:', allItems);
-    
-    // Filtra apenas arquivos verificando o caminho completo
     const files = allItems.filter(itemName => {
       const fullPath = path.join(targetDir, itemName);
       const stats = fs.statSync(fullPath);
-      const isFile = stats.isFile();
-      console.log('[get-attachments]', itemName, '-> isFile:', isFile, 'isDirectory:', stats.isDirectory());
-      return isFile;
+      return stats.isFile();
     });
-    
-    console.log('[get-attachments] Total de ARQUIVOS encontrados:', files.length, ':', files);
     
     return files.map(fileName => {
       const filePath = path.join(targetDir, fileName);
@@ -1475,14 +1476,54 @@ ipcMain.handle('get-attachments', async (event, supplierName, itemId = null) => 
       };
     });
   } catch (error) {
-    console.error('[get-attachments] Erro ao listar anexos:', error);
     return [];
   }
 });
 
+// Busca contagem de anexos para múltiplos IDs em lote (otimização)
+ipcMain.handle('get-attachments-count-batch', async (event, supplierName, itemIds) => {
+  if (!supplierName || !Array.isArray(itemIds) || itemIds.length === 0) {
+    return {};
+  }
+
+  const attachmentsDir = getAttachmentsDir();
+  const supplierDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
+  const counts = {};
+
+  if (!fs.existsSync(supplierDir)) {
+    itemIds.forEach(id => { counts[id] = 0; });
+    return counts;
+  }
+
+  itemIds.forEach(itemId => {
+    const targetDir = path.join(supplierDir, String(itemId));
+    if (!fs.existsSync(targetDir)) {
+      counts[itemId] = 0;
+      return;
+    }
+
+    try {
+      const allItems = fs.readdirSync(targetDir);
+      const fileCount = allItems.filter(itemName => {
+        try {
+          const fullPath = path.join(targetDir, itemName);
+          const stats = fs.statSync(fullPath);
+          return stats.isFile();
+        } catch {
+          return false;
+        }
+      }).length;
+      counts[itemId] = fileCount;
+    } catch (error) {
+      counts[itemId] = 0;
+    }
+  });
+
+  return counts;
+});
+
 // Upload de arquivo
 ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) => {
-  console.log('[upload-attachment] Solicitação recebida:', { supplierName, itemId });
   const result = await dialog.showOpenDialog({
     properties: ['openFile', 'multiSelections'],
     filters: [
@@ -1493,7 +1534,6 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
   });
   
   if (result.canceled || result.filePaths.length === 0) {
-    console.log('[upload-attachment] Operação cancelada pelo usuário.');
     return { success: false };
   }
   
@@ -1506,15 +1546,10 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
     targetDir = hasCardScope
       ? path.join(supplierDir, String(itemId))
       : supplierDir;
-    
-    console.log('[upload-attachment] Diretório alvo calculado:', { supplierDir, targetDir, hasCardScope });
-    
     if (!fs.existsSync(targetDir)) {
       try {
         fs.mkdirSync(targetDir, { recursive: true });
-        console.log('[upload-attachment] Diretório criado:', targetDir);
       } catch (error) {
-        console.error('[upload-attachment] Falha ao criar diretório alvo:', error);
         return { success: false, error: 'Não foi possível criar diretório de anexos.' };
       }
     }
@@ -1525,10 +1560,8 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
         const destPath = path.join(targetDir, fileName);
         fs.copyFileSync(sourcePath, destPath);
         const existsAfterCopy = fs.existsSync(destPath);
-        console.log('[upload-attachment] Arquivo copiado:', { sourcePath, destPath, existsAfterCopy });
         return { success: true, fileName };
       } catch (error) {
-        console.error('Erro ao copiar arquivo:', error);
         return { success: false, fileName: path.basename(sourcePath), error: error.message };
       }
     });
@@ -1542,7 +1575,6 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
       message: fileCount > 1 ? `${fileCount} arquivos anexados` : 'Arquivo anexado'
     };
   } catch (error) {
-    console.error('Erro ao fazer upload:', error);
     return { success: false, error: error.message };
   }
 });
@@ -1563,9 +1595,7 @@ ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, fileP
     if (!fs.existsSync(targetDir)) {
       try {
         fs.mkdirSync(targetDir, { recursive: true });
-        console.log('[upload-attachment-from-paths] Diretório criado:', targetDir);
       } catch (error) {
-        console.error('[upload-attachment-from-paths] Falha ao criar diretório alvo:', error);
         return { success: false, error: 'Não foi possível criar diretório de anexos.' };
       }
     }
@@ -1587,7 +1617,6 @@ ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, fileP
         fs.copyFileSync(sourcePath, destPath);
         return { success: true, fileName };
       } catch (error) {
-        console.error('Erro ao copiar arquivo arrastado:', error);
         return { success: false, fileName, error: error.message };
       }
     });
@@ -1601,7 +1630,6 @@ ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, fileP
       message: fileCount > 1 ? `${fileCount} arquivos anexados` : 'Arquivo anexado'
     };
   } catch (error) {
-    console.error('Erro ao processar anexos arrastados:', error);
     return { success: false, error: error.message };
   }
 });
@@ -1625,7 +1653,6 @@ ipcMain.handle('open-attachment', async (event, supplierName, fileName, itemId =
     await shell.openPath(filePath);
     return { success: true };
   } catch (error) {
-    console.error('Erro ao abrir arquivo:', error);
     throw error;
   }
 });
@@ -1649,7 +1676,6 @@ ipcMain.handle('delete-attachment', async (event, supplierName, fileName, itemId
     fs.unlinkSync(filePath);
     return { success: true };
   } catch (error) {
-    console.error('Erro ao excluir arquivo:', error);
     return { success: false, error: error.message };
   }
 });
@@ -1674,16 +1700,12 @@ function createWindow () {
 
   mainWindow.removeMenu();
   mainWindow.loadFile('index.html');
-  
-  // Abrir DevTools em desenvolvimento
-  // mainWindow.webContents.openDevTools();
 }
 
 app.whenReady().then(async () => {
   try {
     await connectDatabase();
   } catch (error) {
-    console.error('Falha ao inicializar o banco de dados:', error);
   }
 
   createWindow();
@@ -1700,7 +1722,6 @@ ipcMain.handle('get-todos', async (event, toolingId) => {
   return new Promise((resolve, reject) => {
     db.all('SELECT * FROM todos WHERE tooling_id = ? ORDER BY created_at ASC', [toolingId], (err, rows) => {
       if (err) {
-        console.error('Erro ao buscar todos:', err);
         reject(err);
       } else {
         resolve(rows);
@@ -1713,7 +1734,6 @@ ipcMain.handle('add-todo', async (event, toolingId, text) => {
   return new Promise((resolve, reject) => {
     db.run('INSERT INTO todos (tooling_id, text, completed) VALUES (?, ?, 0)', [toolingId, text], function(err) {
       if (err) {
-        console.error('Erro ao adicionar todo:', err);
         reject(err);
       } else {
         resolve({ id: this.lastID, tooling_id: toolingId, text, completed: 0 });
@@ -1726,7 +1746,6 @@ ipcMain.handle('update-todo', async (event, todoId, text, completed) => {
   return new Promise((resolve, reject) => {
     db.run('UPDATE todos SET text = ?, completed = ? WHERE id = ?', [text, completed, todoId], (err) => {
       if (err) {
-        console.error('Erro ao atualizar todo:', err);
         reject(err);
       } else {
         resolve({ success: true });
@@ -1739,7 +1758,6 @@ ipcMain.handle('delete-todo', async (event, todoId) => {
   return new Promise((resolve, reject) => {
     db.run('DELETE FROM todos WHERE id = ?', [todoId], (err) => {
       if (err) {
-        console.error('Erro ao deletar todo:', err);
         reject(err);
       } else {
         resolve({ success: true });
@@ -1768,6 +1786,248 @@ ipcMain.on('maximize-window', () => {
 ipcMain.on('close-window', () => {
   if (mainWindow) {
     mainWindow.close();
+  }
+});
+
+// Export all data (ID, PN, Supplier, Forecast, Forecast Date)
+ipcMain.handle('export-all-data', async () => {
+  return new Promise((resolve, reject) => {
+    db.all(`
+      SELECT 
+        id,
+        pn,
+        supplier,
+        annual_volume_forecast as forecast,
+        date_annual_volume as forecast_date
+      FROM ferramental 
+      ORDER BY id
+    `, [], async (err, rows) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+
+      try {
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('All Data');
+
+        worksheet.columns = [
+          { header: 'ID', key: 'id', width: 10 },
+          { header: 'PN', key: 'pn', width: 25 },
+          { header: 'Supplier', key: 'supplier', width: 30 },
+          { header: 'Annual Forecast', key: 'forecast', width: 20 },
+          { header: 'Forecast Date', key: 'forecast_date', width: 20 }
+        ];
+
+        // Header styling
+        const headerRow = worksheet.getRow(1);
+        headerRow.eachCell(cell => {
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFC8102E' }
+          };
+          cell.font = { color: { argb: 'FFFFFFFF' }, bold: true };
+          cell.alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+        headerRow.commit();
+
+        // Add data rows
+        rows.forEach(row => {
+          // Converter data de YYYY-MM-DD para DD/MM/YYYY
+          let foreDate = row.forecast_date || '';
+          if (foreDate && /^\d{4}-\d{2}-\d{2}$/.test(foreDate)) {
+            const [year, month, day] = foreDate.split('-');
+            foreDate = `${day}/${month}/${year}`;
+          }
+          
+          worksheet.addRow({
+            id: row.id || '',
+            pn: row.pn || '',
+            supplier: row.supplier || '',
+            forecast: row.forecast || '',
+            forecast_date: foreDate
+          });
+        });
+
+        // Center align ID and date columns
+        ['A', 'D', 'E'].forEach(columnKey => {
+          const column = worksheet.getColumn(columnKey);
+          column.alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+
+        // Add data validation for Forecast Date column (column E)
+        const lastRow = worksheet.rowCount;
+        for (let i = 2; i <= lastRow; i++) {
+          worksheet.getCell(`E${i}`).dataValidation = {
+            type: 'date',
+            operator: 'greaterThan',
+            showErrorMessage: true,
+            allowBlank: true,
+            formulae: [new Date(1900, 0, 1)],
+            errorStyle: 'error',
+            errorTitle: 'Invalid Date',
+            error: 'Please enter a valid date in format dd/mm/yyyy',
+            promptTitle: 'Date Format',
+            prompt: 'Enter date in format: dd/mm/yyyy'
+          };
+        }
+
+        // Lock ID column (Column A)
+        worksheet.getColumn('A').eachCell({ includeEmpty: true }, (cell, rowNumber) => {
+          if (rowNumber > 1) { // Skip header
+            cell.protection = { locked: true };
+          }
+        });
+
+        // Unlock other columns
+        ['B', 'C', 'D', 'E'].forEach(columnKey => {
+          worksheet.getColumn(columnKey).eachCell({ includeEmpty: true }, (cell, rowNumber) => {
+            if (rowNumber > 1) { // Skip header
+              cell.protection = { locked: false };
+            }
+          });
+        });
+
+        // Protect worksheet with password
+        await worksheet.protect('30625629', {
+          selectLockedCells: true,
+          selectUnlockedCells: true,
+          formatCells: false,
+          formatColumns: false,
+          formatRows: false,
+          insertRows: false,
+          insertColumns: false,
+          deleteRows: false,
+          deleteColumns: false,
+          sort: false,
+          autoFilter: false,
+          pivotTables: false
+        });
+
+        const result = await dialog.showSaveDialog(mainWindow, {
+          title: 'Export Forecast Data',
+          defaultPath: `Forecast-Data-${new Date().toISOString().split('T')[0]}.xlsx`,
+          filters: [{ name: 'Excel Files', extensions: ['xlsx'] }]
+        });
+
+        if (result.canceled) {
+          resolve({ success: false, cancelled: true });
+          return;
+        }
+
+        await workbook.xlsx.writeFile(result.filePath);
+        resolve({ success: true, filePath: result.filePath });
+
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+});
+
+// Import data and update by ID
+ipcMain.handle('import-all-data', async () => {
+  const dialogResult = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import Forecast Data',
+    buttonLabel: 'Import',
+    properties: ['openFile'],
+    filters: [{ name: 'Excel Files', extensions: ['xlsx'] }]
+  });
+
+  if (dialogResult.canceled || !dialogResult.filePaths || dialogResult.filePaths.length === 0) {
+    return { success: false, cancelled: true };
+  }
+
+  try {
+    const filePath = dialogResult.filePaths[0];
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.readFile(filePath);
+    
+    const worksheet = workbook.worksheets[0];
+    if (!worksheet) {
+      return { success: false, error: 'No worksheet found in file' };
+    }
+
+    // Validate header row
+    const expectedHeaders = ['ID', 'PN', 'Supplier', 'Annual Forecast', 'Forecast Date'];
+    const headerRow = worksheet.getRow(1);
+    const actualHeaders = [];
+    
+    for (let col = 1; col <= 5; col++) {
+      const cellValue = headerRow.getCell(col).value;
+      actualHeaders.push(cellValue ? cellValue.toString().trim() : '');
+    }
+
+    // Check if headers match
+    const headersMatch = expectedHeaders.every((expected, index) => 
+      actualHeaders[index] === expected
+    );
+
+    if (!headersMatch) {
+      return { 
+        success: false, 
+        error: `Invalid file format. Expected headers: ${expectedHeaders.join(', ')}. Found: ${actualHeaders.join(', ')}` 
+      };
+    }
+
+    let updatedCount = 0;
+    const errors = [];
+
+    // Skip header row (row 1)
+    for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
+      const row = worksheet.getRow(rowNumber);
+      
+      const id = row.getCell(1).value; // Column A
+      const forecast = row.getCell(4).value; // Column D
+      const forecastDate = row.getCell(5).value; // Column E
+
+      // Skip if no ID
+      if (!id) continue;
+
+      try {
+        // Prepare update data
+        const updateData = {};
+        
+        if (forecast !== null && forecast !== undefined && forecast !== '') {
+          updateData.annual_volume_forecast = forecast;
+        }
+        
+        if (forecastDate !== null && forecastDate !== undefined && forecastDate !== '') {
+          // Handle Excel date format
+          let dateStr = forecastDate;
+          if (forecastDate instanceof Date) {
+            dateStr = forecastDate.toISOString().split('T')[0];
+          } else if (typeof forecastDate === 'number') {
+            // Excel serial date
+            const excelDate = new Date((forecastDate - 25569) * 86400 * 1000);
+            dateStr = excelDate.toISOString().split('T')[0];
+          }
+          updateData.date_annual_volume = dateStr;
+        }
+
+        // Only update if there's data to update
+        if (Object.keys(updateData).length > 0) {
+          await executeToolingUpdate(id, updateData);
+          updatedCount++;
+        }
+
+      } catch (error) {
+        errors.push(`Row ${rowNumber} (ID ${id}): ${error.message}`);
+      }
+    }
+
+    if (errors.length > 0) {
+    }
+
+    return { 
+      success: true, 
+      updatedCount,
+      errors: errors.length > 0 ? errors : undefined
+    };
+
+  } catch (error) {
+    return { success: false, error: error.message };
   }
 });
 
