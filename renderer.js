@@ -15,6 +15,8 @@ let addToolingElements = {
   pnInput: null,
   supplierInput: null,
   supplierList: null,
+  ownerInput: null,
+  ownerList: null,
   lifeInput: null,
   producedInput: null
 };
@@ -37,6 +39,16 @@ let replacementTimelineElements = {
   empty: null,
   loading: null,
   title: null
+};
+
+let replacementPickerOverlayState = {
+  overlay: null,
+  list: null,
+  searchInput: null,
+  title: null,
+  subtitle: null,
+  cardIndex: null,
+  itemId: null
 };
 
 let currentTimelineRootId = null;
@@ -67,6 +79,7 @@ let supplierSearchDebouncedHandler = null;
 let globalSearchDebouncedHandler = null;
 
 const ASYNC_METADATA_CONCURRENCY = 6;
+const DATA_TAB_CAROUSEL_BREAKPOINT = 1200;
 
 const STATUS_STORAGE_KEY = 'toolingStatusOptions';
 const DEFAULT_STATUS_OPTIONS = [
@@ -90,6 +103,138 @@ let statusSettingsElements = {
 
 const TEXT_INPUT_TYPES = new Set(['text', 'search', '']);
 let uppercaseInputHandlerInitialized = false;
+
+// Classe utilitária para calcular métricas de expiração
+class ExpirationMetrics {
+  /**
+   * Calcula métricas de expiração de um supplier
+   * @param {Object} supplier - Objeto do supplier com expired, warning_1year (que já conta até 2 anos)
+   * @returns {Object} - { expired, expiringWithin2Years }
+   */
+  static calculate(supplier) {
+    const expired = parseInt(supplier.expired) || 0;
+    // warning_1year agora contém todos os itens que vencem até 2 anos
+    const expiringWithin2Years = parseInt(supplier.warning_1year) || 0;
+    
+    return {
+      expired,
+      expiringWithin2Years,
+      total: expired + expiringWithin2Years
+    };
+  }
+  
+  /**
+   * Verifica se um supplier tem itens críticos (expired ou expiring)
+   * @param {Object} supplier - Objeto do supplier
+   * @returns {boolean}
+   */
+  static hasCriticalItems(supplier) {
+    const metrics = this.calculate(supplier);
+    return metrics.total > 0;
+  }
+}
+
+function resolveToolingExpirationDate(item) {
+  if (!item) {
+    return '';
+  }
+
+  let expirationDateValue = normalizeExpirationDate(item.expiration_date, item.id);
+  if (!expirationDateValue) {
+    const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || Number(item.tooling_life_qty) || 0;
+    const produced = Number(parseLocalizedNumber(item.produced)) || Number(item.produced) || 0;
+    const remaining = toolingLife - produced;
+    const forecast = Number(parseLocalizedNumber(item.annual_volume_forecast)) || Number(item.annual_volume_forecast) || 0;
+    const productionDateValue = item.date_remaining_tooling_life || '';
+    const calculatedExpiration = calculateExpirationFromFormula({
+      remaining,
+      forecast,
+      productionDate: productionDateValue
+    });
+    if (calculatedExpiration) {
+      expirationDateValue = calculatedExpiration;
+    }
+  }
+  return expirationDateValue;
+}
+
+function classifyToolingExpirationState(item) {
+  if (!item) {
+    return { state: 'ok', label: 'N/A', expirationDate: '' };
+  }
+
+  const normalizedStatus = (item.status || '').toString().trim().toLowerCase();
+  const isObsolete = normalizedStatus === 'obsolete';
+  const replacementIdValue = sanitizeReplacementId(item.replacement_tooling_id);
+  const hasReplacementLink = replacementIdValue !== '';
+  const expirationDateValue = resolveToolingExpirationDate(item) || '';
+  const expirationStatus = getExpirationStatus(expirationDateValue || '');
+
+  if (isObsolete) {
+    return {
+      state: hasReplacementLink ? 'obsolete-replaced' : 'obsolete',
+      label: hasReplacementLink ? 'Obsolete (replacement linked)' : 'Obsolete',
+      expirationDate: expirationDateValue
+    };
+  }
+
+  const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || Number(item.tooling_life_qty) || 0;
+  const produced = Number(parseLocalizedNumber(item.produced)) || Number(item.produced) || 0;
+  const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
+
+  if (percentUsedValue >= 100 || expirationStatus.class === 'expired') {
+    return { state: 'expired', label: 'Expirado', expirationDate: expirationDateValue };
+  }
+
+  if (expirationStatus.class === 'warning') {
+    return { state: 'warning', label: expirationStatus.label, expirationDate: expirationDateValue };
+  }
+
+  return { state: 'ok', label: expirationStatus.label, expirationDate: expirationDateValue };
+}
+
+function computeSupplierMetricsFromItems(items) {
+  return items.reduce((acc, item) => {
+    const classification = classifyToolingExpirationState(item);
+    acc.total += 1;
+    if (classification.state === 'expired') {
+      acc.expired += 1;
+    } else if (classification.state === 'warning') {
+      acc.expiring += 1;
+    }
+    return acc;
+  }, { total: 0, expired: 0, expiring: 0 });
+}
+
+function updateSupplierCardMetricsFromItems(supplierName, items) {
+  if (!supplierName || !Array.isArray(items)) {
+    return;
+  }
+
+  const normalizedKey = encodeURIComponent(supplierName.trim().toLowerCase());
+  const targetCard = document.querySelector(`.supplier-card[data-supplier-key="${normalizedKey}"]`);
+
+  if (!targetCard) {
+    return;
+  }
+
+  const metrics = computeSupplierMetricsFromItems(items);
+  const totalEl = targetCard.querySelector('[data-metric="total"]');
+  const expiredEl = targetCard.querySelector('[data-metric="expired"]');
+  const expiringEl = targetCard.querySelector('[data-metric="expiring"]');
+
+  if (totalEl) {
+    totalEl.textContent = metrics.total;
+  }
+  if (expiredEl) {
+    expiredEl.textContent = metrics.expired;
+    expiredEl.classList.toggle('expired', metrics.expired > 0);
+  }
+  if (expiringEl) {
+    expiringEl.textContent = metrics.expiring;
+    expiringEl.classList.toggle('critical', metrics.expiring > 0);
+  }
+}
 
 function debounce(fn, delay = 250) {
   let timeoutId = null;
@@ -458,6 +603,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const addPN = document.getElementById('addToolingPN');
   const addSupplierInput = document.getElementById('addToolingSupplier');
   const addSupplierList = document.getElementById('addToolingSupplierList');
+  const addOwnerInput = document.getElementById('addToolingOwner');
+  const addOwnerList = document.getElementById('addToolingOwnerList');
   const addLife = document.getElementById('addToolingLife');
   const addProduced = document.getElementById('addToolingProduced');
   const attachmentsDropzone = document.getElementById('attachmentsDropzone');
@@ -474,6 +621,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   const replacementTimelineEmpty = document.getElementById('replacementTimelineEmpty');
   const replacementTimelineLoading = document.getElementById('replacementTimelineLoading');
   const replacementTimelineTitle = document.getElementById('replacementTimelineTitle');
+  const replacementGridCanvas = document.getElementById('replacementGridCanvas');
+  const replacementConnectionsCanvas = document.getElementById('replacementConnectionsCanvas');
   const statusOptionsList = document.getElementById('statusOptionsList');
   const statusOptionInput = document.getElementById('statusOptionInput');
   const addStatusButton = document.getElementById('addStatusButton');
@@ -489,6 +638,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     pnInput: addPN,
     supplierInput: addSupplierInput,
     supplierList: addSupplierList,
+    ownerInput: addOwnerInput,
+    ownerList: addOwnerList,
     lifeInput: addLife,
     producedInput: addProduced
   };
@@ -510,7 +661,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     list: replacementTimelineList,
     empty: replacementTimelineEmpty,
     loading: replacementTimelineLoading,
-    title: replacementTimelineTitle
+    title: replacementTimelineTitle,
+    gridCanvas: replacementGridCanvas,
+    connectionsCanvas: replacementConnectionsCanvas
   };
 
   if (replacementTimelineOverlay) {
@@ -531,6 +684,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initExpirationInfoModal();
   initProductionInfoModal();
   initSettingsCarouselScrollListener();
+  initThousandsMaskBehavior();
 
   if (attachmentsCounterBadge) {
     attachmentsCounterBadge.textContent = '0';
@@ -825,6 +979,7 @@ document.addEventListener('click', (event) => {
     return;
   }
   closeAllReplacementPickers();
+  closeReplacementPickerOverlay();
 });
 
 // Fecha overlay com tecla ESC
@@ -859,6 +1014,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Escape') {
     closeAllReplacementPickers();
+    closeReplacementPickerOverlay();
   }
 });
 
@@ -881,11 +1037,7 @@ function applyExpirationFilter() {
 
   if (expirationFilterEnabled) {
     const filteredSuppliers = suppliersData.filter(supplier => {
-      const expired = parseInt(supplier.expired) || 0;
-      const warning1 = parseInt(supplier.warning_1year) || 0;
-      const warning2 = parseInt(supplier.warning_2years) || 0;
-      const critical = expired + warning1 + warning2;
-      return critical > 0;
+      return ExpirationMetrics.hasCriticalItems(supplier);
     });
     displaySuppliers(filteredSuppliers);
   } else {
@@ -1055,28 +1207,35 @@ function loadSupplierCommentsData() {
   }
 
   const notesTextarea = document.getElementById('supplierNotesText');
-  if (!notesTextarea) {
+  const contactTextarea = document.getElementById('supplierContactText');
+  const responsibleInput = document.getElementById('cumminsResponsibleText');
+  
+  if (!notesTextarea || !contactTextarea || !responsibleInput) {
     return;
   }
 
   const storageKey = `supplier_comments_${currentSupplier}`;
   const rawValue = localStorage.getItem(storageKey);
-  let savedNotes = '';
+  let savedData = { notes: '', contact: '', responsible: '' };
 
   if (rawValue) {
     try {
       const parsed = JSON.parse(rawValue);
       if (typeof parsed === 'string') {
-        savedNotes = parsed;
-      } else if (parsed && typeof parsed === 'object' && typeof parsed.notes === 'string') {
-        savedNotes = parsed.notes;
+        savedData.notes = parsed;
+      } else if (parsed && typeof parsed === 'object') {
+        savedData.notes = parsed.notes || '';
+        savedData.contact = parsed.contact || '';
+        savedData.responsible = parsed.responsible || '';
       }
     } catch (error) {
-      savedNotes = rawValue;
+      savedData.notes = rawValue;
     }
   }
 
-  notesTextarea.value = savedNotes;
+  notesTextarea.value = savedData.notes;
+  contactTextarea.value = savedData.contact;
+  responsibleInput.value = savedData.responsible;
 }
 
 function saveSupplierComments() {
@@ -1085,13 +1244,18 @@ function saveSupplierComments() {
   }
 
   const notesTextarea = document.getElementById('supplierNotesText');
-  if (!notesTextarea) {
+  const contactTextarea = document.getElementById('supplierContactText');
+  const responsibleInput = document.getElementById('cumminsResponsibleText');
+  
+  if (!notesTextarea || !contactTextarea || !responsibleInput) {
     return;
   }
 
   const storageKey = `supplier_comments_${currentSupplier}`;
   const data = {
-    notes: notesTextarea.value || ''
+    notes: notesTextarea.value || '',
+    contact: contactTextarea.value || '',
+    responsible: responsibleInput.value || ''
   };
 
   localStorage.setItem(storageKey, JSON.stringify(data));
@@ -1176,16 +1340,16 @@ function displaySuppliers(suppliers) {
     const supplierNameRaw = String(supplier.supplier || '');
     const supplierNameForHandler = supplierNameRaw.replace(/'/g, "&#39;");
     const supplierNameHtml = escapeHtml(supplierNameRaw);
+    const supplierKey = encodeURIComponent(supplierNameRaw.trim().toLowerCase());
     const isActive = selectedSupplier === supplierNameRaw;
     const total = parseInt(supplier.total) || 0;
-    const expired = parseInt(supplier.expired) || 0;
-    const warning1 = parseInt(supplier.warning_1year) || 0;
-    const warning2 = parseInt(supplier.warning_2years) || 0;
-    const critical = expired + warning1 + warning2;
+    const metrics = ExpirationMetrics.calculate(supplier);
     
     return `
         <div class="supplier-card ${isActive ? 'active' : ''}" 
           data-supplier="${supplierNameHtml}" 
+          data-supplier-raw="${supplierNameHtml}"
+          data-supplier-key="${supplierKey}"
           onclick="selectSupplier(event, '${supplierNameForHandler}')">
       <div class="supplier-card-header">
         <i class="ph ph-factory"></i>
@@ -1194,15 +1358,15 @@ function displaySuppliers(suppliers) {
       <div class="supplier-info">
         <div class="supplier-info-row">
           <span class="info-label">Total Tooling:</span>
-          <span class="info-value">${total}</span>
+          <span class="info-value" data-metric="total">${total}</span>
         </div>
         <div class="supplier-info-row">
           <span class="info-label">Expired:</span>
-          <span class="info-value ${expired > 0 ? 'expired' : ''}">${expired}</span>
+          <span class="info-value ${metrics.expired > 0 ? 'expired' : ''}" data-metric="expired">${metrics.expired}</span>
         </div>
         <div class="supplier-info-row">
           <span class="info-label">Expiring within 2 years:</span>
-          <span class="info-value ${critical > 0 ? 'critical' : ''}">${critical}</span>
+          <span class="info-value ${metrics.expiringWithin2Years > 0 ? 'critical' : ''}" data-metric="expiring">${metrics.expiringWithin2Years}</span>
         </div>
       </div>
     </div>
@@ -1881,6 +2045,7 @@ async function loadToolingBySupplier(supplier) {
     
     // Renderizar em chunks para não travar a UI
     await displayToolingInChunks(toolingData);
+    updateSupplierCardMetricsFromItems(supplier, toolingData);
   } catch (error) {
     showNotification('Erro ao carregar ferramentais', 'error');
     hideSkeletonLoading();
@@ -1955,7 +2120,10 @@ async function searchTooling(term) {
       });
     }
     
-    displayTooling(filteredResults);
+    await displayTooling(filteredResults);
+    if (selectedSupplier) {
+      updateSupplierCardMetricsFromItems(selectedSupplier, filteredResults);
+    }
     updateSearchIndicators();
   } catch (error) {
   }
@@ -1971,11 +2139,9 @@ function getExpirationStatus(expirationDate) {
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   
   if (diffDays < 0) {
-    return { class: 'expired', label: 'Vencido' };
-  } else if (diffDays <= 365) {
-    return { class: 'warning', label: 'Até 1 ano' };
+    return { class: 'expired', label: 'Expirado' };
   } else if (diffDays <= 730) {
-    return { class: 'warning', label: '1 a 2 anos' };
+    return { class: 'warning', label: 'Até 2 anos' };
   } else if (diffDays <= 1825) {
     return { class: 'ok', label: '2 a 5 anos' };
   } else {
@@ -2026,13 +2192,14 @@ function calculateLifecycle(cardIndex) {
   const remainingInput = card.querySelector(`[data-field="remaining_tooling_life_pcs"]`);
   const percentInput = card.querySelector(`[data-field="percent_tooling_life"]`);
   
-  const toolingLife = Number(item.tooling_life_qty) || 0;
-  const produced = Number(item.produced) || 0;
+  const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
+  const produced = parseLocalizedNumber(item.produced) || 0;
   const remaining = toolingLife - produced;
-  const percent = toolingLife > 0 ? ((produced / toolingLife) * 100).toFixed(1) : '0.0';
+  const percentValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
+  const percent = toolingLife > 0 ? percentValue.toFixed(1) : '0.0';
   
   if (remainingInput) {
-    remainingInput.value = remaining;
+    remainingInput.value = formatIntegerWithSeparators(remaining, { preserveEmpty: true });
     item.remaining_tooling_life_pcs = remaining;
   }
   
@@ -2087,8 +2254,8 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
   }
   
   // Calcula remaining first se não estiver disponível
-  const toolingLife = Number(item.tooling_life_qty) || 0;
-  const produced = Number(item.produced) || 0;
+  const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
+  const produced = parseLocalizedNumber(item.produced) || 0;
   const remaining = toolingLife - produced;
   
   const expirationInput = card.querySelector(`[data-field="expiration_date"]`);
@@ -2096,7 +2263,7 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
     return;
   }
   
-  const forecast = Number(item.annual_volume_forecast) || 0;
+  const forecast = parseLocalizedNumber(item.annual_volume_forecast) || 0;
   const productionDateValue = item.date_remaining_tooling_life || '';
   
   const formattedDate = calculateExpirationFromFormula({
@@ -2154,6 +2321,18 @@ function handleForecastChange(cardIndex) {
 function handleStatusSelectChange(cardIndex, itemId, selectEl) {
   if (selectEl) {
     const value = (selectEl.value || '').trim();
+    const card = document.getElementById(`card-${cardIndex}`);
+    const previousStatus = card ? (card.dataset.status || '').trim().toLowerCase() : '';
+    const newStatus = value.toLowerCase();
+    
+    // Se estava obsolete e mudou para outro status, limpar replacement_tooling_id
+    if (previousStatus === 'obsolete' && newStatus !== 'obsolete') {
+      const replacementInput = card.querySelector('[data-field="replacement_tooling_id"]');
+      if (replacementInput) {
+        replacementInput.value = '';
+      }
+    }
+    
     updateCardHeaderStatus(cardIndex, value);
     updateCardStatusAttribute(cardIndex, value);
   }
@@ -2214,6 +2393,14 @@ function updateCardStatusAttribute(cardIndex, statusValue) {
   card.classList.toggle('is-obsolete', normalized === 'obsolete');
   syncObsoleteLinkVisibility(card, normalized === 'obsolete');
   updateCardStatusIcon(card, normalized);
+  enforceChainIndicatorRules(card);
+
+  if (normalized !== 'obsolete') {
+    const currentReplacementId = sanitizeReplacementId(card.dataset.replacementId || '');
+    if (currentReplacementId) {
+      syncReplacementLinkControls(cardIndex, '');
+    }
+  }
 }
 
 function updateCardStatusIcon(card, normalizedStatus) {
@@ -2342,7 +2529,7 @@ function syncReplacementPickerLabel(card, replacementId) {
   trigger.classList.add('has-selection');
 }
 
-function updateChainIndicatorForCard(card, replacementId) {
+function enforceChainIndicatorRules(card) {
   if (!card) {
     return;
   }
@@ -2350,27 +2537,25 @@ function updateChainIndicatorForCard(card, replacementId) {
   if (!chainIndicator) {
     return;
   }
-  const hasLink = Boolean(sanitizeReplacementId(replacementId));
-  
-  // Também verifica se este card é alvo de algum replacement
-  const cardId = card.dataset.itemId;
-  let isTarget = false;
-  if (cardId) {
-    const allCards = document.querySelectorAll('.tooling-card');
-    allCards.forEach((otherCard) => {
-      const otherReplacementId = sanitizeReplacementId(otherCard.dataset.replacementId);
-      if (otherReplacementId === cardId) {
-        isTarget = true;
-      }
-    });
-  }
-  
-  // Mostra o ícone se tem link de saída ou é alvo de entrada
-  if (hasLink || isTarget) {
+  const normalizedStatus = (card.dataset.status || '').trim().toLowerCase();
+  const replacementIdValue = sanitizeReplacementId(card.dataset.replacementId || '');
+  const hasOutgoingChain = normalizedStatus === 'obsolete' && replacementIdValue !== '';
+  const hasIncomingChain = card.dataset.hasIncomingChain === 'true' || card.dataset.chainMember === 'true';
+  const shouldShow = hasOutgoingChain || hasIncomingChain;
+  if (shouldShow) {
     chainIndicator.removeAttribute('hidden');
   } else {
     chainIndicator.setAttribute('hidden', 'true');
   }
+}
+
+function updateChainIndicatorForCard(card, replacementId) {
+  if (!card) {
+    return;
+  }
+  const sanitizedValue = sanitizeReplacementId(replacementId);
+  card.dataset.replacementId = sanitizedValue;
+  enforceChainIndicatorRules(card);
 }
 
 async function toggleReplacementPicker(event, cardIndex) {
@@ -2378,26 +2563,7 @@ async function toggleReplacementPicker(event, cardIndex) {
     event.preventDefault();
     event.stopPropagation();
   }
-  const card = document.getElementById(`card-${cardIndex}`);
-  if (!card) {
-    return;
-  }
-  const panel = card.querySelector('[data-replacement-picker-panel]');
-  if (!panel) {
-    return;
-  }
-  const isHidden = panel.hasAttribute('hidden');
-  closeAllReplacementPickers(card);
-  if (isHidden) {
-    await rebuildReplacementPickerOptions(cardIndex);
-    panel.removeAttribute('hidden');
-    const searchInput = panel.querySelector('[data-replacement-picker-search]');
-    if (searchInput) {
-      searchInput.value = '';
-      handleReplacementPickerSearch(cardIndex, '');
-      setTimeout(() => searchInput.focus(), 20);
-    }
-  }
+  await openReplacementPickerOverlay(cardIndex);
 }
 
 function closeReplacementPicker(card) {
@@ -2417,6 +2583,109 @@ function closeAllReplacementPickers(exceptCard = null) {
       return;
     }
     panel.setAttribute('hidden', 'true');
+  });
+}
+
+function ensureReplacementPickerOverlayElements() {
+  if (replacementPickerOverlayState.overlay) {
+    return true;
+  }
+  const overlay = document.getElementById('replacementPickerOverlay');
+  if (!overlay) {
+    return false;
+  }
+
+  const list = overlay.querySelector('[data-replacement-overlay-list]');
+  const searchInput = overlay.querySelector('[data-replacement-overlay-search]');
+  const title = overlay.querySelector('[data-replacement-overlay-title]');
+  const subtitle = overlay.querySelector('[data-replacement-overlay-subtitle]');
+
+  replacementPickerOverlayState = {
+    overlay,
+    list,
+    searchInput,
+    title,
+    subtitle,
+    cardIndex: null,
+    itemId: null
+  };
+
+  if (searchInput) {
+    searchInput.addEventListener('input', (event) => {
+      handleReplacementPickerOverlaySearch(event.target.value);
+    });
+  }
+
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) {
+      closeReplacementPickerOverlay();
+    }
+  });
+
+  return true;
+}
+
+async function openReplacementPickerOverlay(cardIndex) {
+  if (!ensureReplacementPickerOverlayElements()) {
+    return;
+  }
+
+  const card = document.getElementById(`card-${cardIndex}`);
+  if (!card) {
+    return;
+  }
+
+  await ensureReplacementIdOptions();
+
+  const itemId = Number(card.dataset.itemId) || 0;
+  replacementPickerOverlayState.cardIndex = cardIndex;
+  replacementPickerOverlayState.itemId = itemId;
+
+  if (replacementPickerOverlayState.title) {
+    replacementPickerOverlayState.title.textContent = 'Select replacement tooling';
+  }
+  if (replacementPickerOverlayState.subtitle) {
+    const pn = card.querySelector('.tooling-info-value.highlight')?.textContent?.trim();
+    replacementPickerOverlayState.subtitle.textContent = pn ? `Card #${itemId} • ${pn}` : `Card #${itemId}`;
+  }
+
+  if (replacementPickerOverlayState.list) {
+    const stubItem = { id: itemId };
+    replacementPickerOverlayState.list.innerHTML = buildReplacementPickerOptionsMarkup(stubItem, cardIndex);
+  }
+
+  const overlay = replacementPickerOverlayState.overlay;
+  overlay.classList.add('active');
+
+  const searchInput = replacementPickerOverlayState.searchInput;
+  if (searchInput) {
+    searchInput.value = '';
+    setTimeout(() => searchInput.focus(), 40);
+  }
+}
+
+function closeReplacementPickerOverlay() {
+  if (!replacementPickerOverlayState.overlay) {
+    return;
+  }
+  replacementPickerOverlayState.overlay.classList.remove('active');
+  replacementPickerOverlayState.cardIndex = null;
+  replacementPickerOverlayState.itemId = null;
+}
+
+function handleReplacementPickerOverlaySearch(searchValue) {
+  if (!replacementPickerOverlayState.list) {
+    return;
+  }
+  const normalizedQuery = (searchValue || '').trim().toLowerCase();
+  replacementPickerOverlayState.list.querySelectorAll('.replacement-dropdown-option').forEach((option) => {
+    const searchText = option.textContent.toLowerCase();
+    const matches = !normalizedQuery || searchText.includes(normalizedQuery);
+    if (matches) {
+      option.removeAttribute('hidden');
+    } else {
+      option.setAttribute('hidden', 'true');
+    }
   });
 }
 
@@ -2461,6 +2730,14 @@ async function openReplacementTimelineOverlay(startId) {
   }
   showReplacementTimelineLoading();
 
+  // Resetar viewport transform ao abrir
+  applyViewportTransform();
+  
+  // Desenhar grid imediatamente ao abrir
+  setTimeout(() => {
+    drawReplacementGrid();
+  }, 50);
+
   try {
     const chain = await buildReplacementTimeline(normalizedId);
     renderReplacementTimeline(chain);
@@ -2471,12 +2748,52 @@ async function openReplacementTimelineOverlay(startId) {
 }
 
 function closeReplacementTimelineOverlay() {
-  const { overlay } = replacementTimelineElements;
+  const { overlay, gridCanvas, connectionsCanvas, list } = replacementTimelineElements;
   currentTimelineRootId = null;
+  
+  // Reset viewport state
+  graphViewportState = {
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+    isPanning: false,
+    panStartX: 0,
+    panStartY: 0,
+    draggedNode: null,
+    dragStartX: 0,
+    dragStartY: 0
+  };
+  
+  if (list) {
+    list.style.transform = '';
+  }
+  
   if (overlay) {
     overlay.classList.remove('active');
   }
+  
+  // Limpar canvas ao fechar
+  if (gridCanvas) {
+    const ctx = gridCanvas.getContext('2d');
+    ctx.clearRect(0, 0, gridCanvas.width, gridCanvas.height);
+  }
+  if (connectionsCanvas) {
+    const ctx = connectionsCanvas.getContext('2d');
+    ctx.clearRect(0, 0, connectionsCanvas.width, connectionsCanvas.height);
+  }
 }
+
+let graphViewportState = {
+  scale: 1,
+  offsetX: 0,
+  offsetY: 0,
+  isPanning: false,
+  panStartX: 0,
+  panStartY: 0,
+  draggedNode: null,
+  dragStartX: 0,
+  dragStartY: 0
+};
 
 function renderReplacementTimeline(chain = []) {
   const { list, empty, loading } = replacementTimelineElements;
@@ -2496,10 +2813,10 @@ function renderReplacementTimeline(chain = []) {
   }
 
   empty.style.display = 'none';
-  list.style.display = 'flex';
+  list.style.display = 'block';
 
+  // Posicionar cards em layout vertical inicial
   list.innerHTML = chain.map((record, index) => {
-    // Status based on position: last item is Active, others are Obsolete
     const isLastInChain = index === chain.length - 1;
     const badgeClass = isLastInChain ? 'timeline-status-active' : 'timeline-status-obsolete';
     const label = isLastInChain ? 'Active' : 'Obsolete';
@@ -2514,9 +2831,15 @@ function renderReplacementTimeline(chain = []) {
       itemClasses.push('timeline-item-current');
     }
 
+    // Posição inicial: centralizado verticalmente espaçado
+    const initialX = 250;
+    const initialY = 50 + (index * 200);
+
     return `
-      <div class="${itemClasses.join(' ')}" draggable="true" data-record-id="${toolingId}">
-        <span class="timeline-item-dot"></span>
+      <div class="${itemClasses.join(' ')}" 
+           data-record-id="${toolingId}" 
+           data-node-index="${index}"
+           style="left: ${initialX}px; top: ${initialY}px;">
         <div class="timeline-item-content">
           <div class="timeline-item-header">
             <span class="timeline-item-id">#${toolingId}</span>
@@ -2537,14 +2860,20 @@ function renderReplacementTimeline(chain = []) {
     `;
   }).join('');
 
-  // Attach drag event listeners
-  list.querySelectorAll('.timeline-item').forEach(item => {
-    item.addEventListener('dragstart', handleTimelineDragStart);
-    item.addEventListener('dragover', handleTimelineDragOver);
-    item.addEventListener('drop', handleTimelineDrop);
-    item.addEventListener('dragend', handleTimelineDragEnd);
-    item.addEventListener('dragleave', handleTimelineDragLeave);
+  // Attach node drag listeners
+  list.querySelectorAll('.timeline-item').forEach(node => {
+    node.addEventListener('mousedown', handleNodeDragStart);
   });
+
+  // Attach viewport pan/zoom listeners
+  initGraphViewportControls();
+
+  // Draw grid and connections after render with delay for DOM updates
+  setTimeout(() => {
+    console.log('Iniciando desenho de grid e conexões');
+    drawReplacementGrid();
+    drawReplacementConnections(chain);
+  }, 200);
 }
 
 function getTimelineStatusMeta(statusValue) {
@@ -2704,6 +3033,144 @@ function updateCardUIAfterReorder(itemId, newStatus, newReplacementId) {
   }
 }
 
+function handleNodeDragStart(event) {
+  if (event.target.closest('.timeline-item-action') || event.target.closest('button')) {
+    return; // Não iniciar drag se clicar em botões
+  }
+  
+  event.preventDefault();
+  const node = event.currentTarget;
+  
+  graphViewportState.draggedNode = node;
+  graphViewportState.dragStartX = event.clientX - parseFloat(node.style.left || 0);
+  graphViewportState.dragStartY = event.clientY - parseFloat(node.style.top || 0);
+  
+  node.classList.add('dragging-node');
+  
+  document.addEventListener('mousemove', handleNodeDragMove);
+  document.addEventListener('mouseup', handleNodeDragEnd);
+}
+
+function handleNodeDragMove(event) {
+  if (!graphViewportState.draggedNode) return;
+  
+  event.preventDefault();
+  const node = graphViewportState.draggedNode;
+  
+  const x = event.clientX - graphViewportState.dragStartX;
+  const y = event.clientY - graphViewportState.dragStartY;
+  
+  node.style.left = `${x}px`;
+  node.style.top = `${y}px`;
+  
+  // Redesenhar conexões
+  const { list } = replacementTimelineElements;
+  if (list) {
+    const chain = Array.from(list.querySelectorAll('.timeline-item')).map(n => ({ id: n.dataset.recordId }));
+    drawReplacementConnections(chain);
+  }
+}
+
+function handleNodeDragEnd(event) {
+  if (graphViewportState.draggedNode) {
+    graphViewportState.draggedNode.classList.remove('dragging-node');
+    graphViewportState.draggedNode = null;
+  }
+  
+  document.removeEventListener('mousemove', handleNodeDragMove);
+  document.removeEventListener('mouseup', handleNodeDragEnd);
+}
+
+function initGraphViewportControls() {
+  const viewport = document.getElementById('replacementGraphViewport');
+  if (!viewport) return;
+  
+  // Limpar listeners anteriores
+  viewport.removeEventListener('mousedown', handleViewportPanStart);
+  viewport.removeEventListener('wheel', handleViewportZoom);
+  
+  viewport.addEventListener('mousedown', handleViewportPanStart);
+  viewport.addEventListener('wheel', handleViewportZoom);
+}
+
+function handleViewportPanStart(event) {
+  // Apenas pan se clicar no fundo (não em nodes)
+  if (event.target.closest('.timeline-item')) return;
+  
+  event.preventDefault();
+  const viewport = event.currentTarget;
+  
+  graphViewportState.isPanning = true;
+  graphViewportState.panStartX = event.clientX - graphViewportState.offsetX;
+  graphViewportState.panStartY = event.clientY - graphViewportState.offsetY;
+  
+  viewport.classList.add('panning');
+  
+  document.addEventListener('mousemove', handleViewportPanMove);
+  document.addEventListener('mouseup', handleViewportPanEnd);
+}
+
+function handleViewportPanMove(event) {
+  if (!graphViewportState.isPanning) return;
+  
+  event.preventDefault();
+  graphViewportState.offsetX = event.clientX - graphViewportState.panStartX;
+  graphViewportState.offsetY = event.clientY - graphViewportState.panStartY;
+  
+  applyViewportTransform();
+  
+  // Redesenhar conexões durante pan
+  const { list } = replacementTimelineElements;
+  if (list) {
+    const chain = Array.from(list.querySelectorAll('.timeline-item')).map(n => ({ id: n.dataset.recordId }));
+    drawReplacementConnections(chain);
+  }
+}
+
+function handleViewportPanEnd(event) {
+  graphViewportState.isPanning = false;
+  const viewport = document.getElementById('replacementGraphViewport');
+  if (viewport) {
+    viewport.classList.remove('panning');
+  }
+  
+  document.removeEventListener('mousemove', handleViewportPanMove);
+  document.removeEventListener('mouseup', handleViewportPanEnd);
+}
+
+function handleViewportZoom(event) {
+  event.preventDefault();
+  
+  const delta = -event.deltaY;
+  const scaleChange = delta > 0 ? 1.1 : 0.9;
+  const newScale = Math.max(0.3, Math.min(3, graphViewportState.scale * scaleChange));
+  
+  graphViewportState.scale = newScale;
+  applyViewportTransform();
+  
+  // Redesenhar conexões com novo zoom
+  const { list } = replacementTimelineElements;
+  if (list) {
+    const chain = Array.from(list.querySelectorAll('.timeline-item')).map(n => ({ id: n.dataset.recordId }));
+    setTimeout(() => {
+      drawReplacementGrid();
+      drawReplacementConnections(chain);
+    }, 10);
+  }
+}
+
+function applyViewportTransform() {
+  const { list, connectionsCanvas } = replacementTimelineElements;
+  const transform = `translate(${graphViewportState.offsetX}px, ${graphViewportState.offsetY}px) scale(${graphViewportState.scale})`;
+  
+  if (list) {
+    list.style.transform = transform;
+  }
+  if (connectionsCanvas) {
+    connectionsCanvas.style.transform = transform;
+  }
+}
+
 let timelineDraggedElement = null;
 
 function handleTimelineDragStart(event) {
@@ -2783,6 +3250,110 @@ function handleTimelineDragEnd(event) {
     item.classList.remove('timeline-drop-before', 'timeline-drop-after');
   });
   timelineDraggedElement = null;
+}
+
+function drawReplacementGrid() {
+  const { gridCanvas } = replacementTimelineElements;
+  if (!gridCanvas) return;
+
+  const viewport = document.getElementById('replacementGraphViewport');
+  if (!viewport) return;
+
+  const rect = viewport.getBoundingClientRect();
+  const width = rect.width;
+  const height = rect.height;
+  
+  gridCanvas.width = width;
+  gridCanvas.height = height;
+
+  const ctx = gridCanvas.getContext('2d');
+  const gridSize = 30;
+  const gridColor = 'rgba(255, 255, 255, 0.05)';
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.strokeStyle = gridColor;
+  ctx.lineWidth = 1;
+
+  // Linhas verticais
+  for (let x = 0; x < width; x += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, height);
+    ctx.stroke();
+  }
+
+  // Linhas horizontais
+  for (let y = 0; y < height; y += gridSize) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(width, y);
+    ctx.stroke();
+  }
+}
+
+function drawReplacementConnections(chain = []) {
+  const { connectionsCanvas, list } = replacementTimelineElements;
+  if (!connectionsCanvas || !list) {
+    console.log('Canvas ou lista não encontrados');
+    return;
+  }
+
+  const nodes = Array.from(list.querySelectorAll('.timeline-item'));
+  console.log(`Desenhando conexões para ${nodes.length} nodes`);
+  
+  if (nodes.length < 2) {
+    console.log('Menos de 2 nodes, não há o que conectar');
+    return;
+  }
+
+  // Usar tamanho grande o suficiente para acomodar todos os nodes
+  const width = 4000;
+  const height = 4000;
+  
+  connectionsCanvas.width = width;
+  connectionsCanvas.height = height;
+
+  const ctx = connectionsCanvas.getContext('2d');
+  ctx.clearRect(0, 0, width, height);
+  
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const from = nodes[i];
+    const to = nodes[i + 1];
+    
+    const fromLeft = parseFloat(from.style.left || 0);
+    const fromTop = parseFloat(from.style.top || 0);
+    const toLeft = parseFloat(to.style.left || 0);
+    const toTop = parseFloat(to.style.top || 0);
+    
+    const fromWidth = from.offsetWidth;
+    const fromHeight = from.offsetHeight;
+    const toWidth = to.offsetWidth;
+    
+    const fromX = fromLeft + fromWidth / 2;
+    const fromY = fromTop + fromHeight;
+    const toX = toLeft + toWidth / 2;
+    const toY = toTop;
+
+    console.log(`Conectando node ${i} (${fromX}, ${fromY}) -> node ${i+1} (${toX}, ${toY})`);
+
+    // Desenhar linha com curva suave
+    ctx.strokeStyle = '#ff6b6b';
+    ctx.lineWidth = 4;
+
+    ctx.beginPath();
+    ctx.moveTo(fromX, fromY);
+    
+    const controlOffset = Math.abs(toY - fromY) / 2;
+    ctx.bezierCurveTo(
+      fromX, fromY + controlOffset,
+      toX, toY - controlOffset,
+      toX, toY
+    );
+    
+    ctx.stroke();
+  }
+  
+  console.log('Conexões desenhadas com sucesso');
 }
 
 async function updateReplacementChainAfterReorder() {
@@ -2878,6 +3449,7 @@ function handleReplacementPickerSelect(cardIndex, itemId, selectedId) {
   input.value = sanitizeReplacementId(selectedId);
   handleReplacementLinkChange(cardIndex, itemId, input);
   closeReplacementPicker(card);
+  closeReplacementPickerOverlay();
 }
 
 function handleReplacementLinkButtonClick(event, buttonEl) {
@@ -2961,6 +3533,7 @@ async function navigateToLinkedCard(targetId) {
       // Insere o body no card
       targetCard.insertAdjacentHTML('beforeend', bodyHTML);
       targetCard.setAttribute('data-body-loaded', 'true');
+      applyInitialThousandsMask(targetCard);
       
       // Initialize drag and drop for attachment dropzone
       const dropzone = targetCard.querySelector('.card-attachments-dropzone');
@@ -3042,6 +3615,22 @@ function triggerDateReminder(card, fieldName) {
   showDateHighlight(dateInput);
 }
 
+function restoreDateReminders(itemId) {
+  const dateFields = ['date_remaining_tooling_life', 'date_annual_volume'];
+  
+  dateFields.forEach(fieldName => {
+    const storageKey = `dateReminder_${itemId}_${fieldName}`;
+    const hasReminder = localStorage.getItem(storageKey);
+    
+    if (hasReminder === 'active') {
+      const input = document.querySelector(`[data-id="${itemId}"][data-field="${fieldName}"]`);
+      if (input) {
+        showDateHighlight(input);
+      }
+    }
+  });
+}
+
 function showDateHighlight(input) {
   input.classList.add('date-highlight');
 
@@ -3056,17 +3645,37 @@ function showDateHighlight(input) {
   }
   tooltip.classList.add('active');
 
-  if (dateReminderTimers.has(input)) {
-    clearTimeout(dateReminderTimers.get(input));
+  // Salva o estado no localStorage para persistir após fechar/abrir
+  const itemId = input.getAttribute('data-id');
+  const fieldName = input.getAttribute('data-field');
+  if (itemId && fieldName) {
+    const storageKey = `dateReminder_${itemId}_${fieldName}`;
+    localStorage.setItem(storageKey, 'active');
   }
 
-  const timeout = setTimeout(() => {
+  // Remove listener anterior se existir
+  if (input._dateChangeListener) {
+    input.removeEventListener('change', input._dateChangeListener);
+  }
+
+  // Adiciona listener para remover o highlight quando o usuário alterar a data
+  const changeListener = function() {
     input.classList.remove('date-highlight');
     tooltip.classList.remove('active');
-    dateReminderTimers.delete(input);
-  }, 8000);
+    
+    // Remove do localStorage
+    if (itemId && fieldName) {
+      const storageKey = `dateReminder_${itemId}_${fieldName}`;
+      localStorage.removeItem(storageKey);
+    }
+    
+    // Remove o listener após usar
+    input.removeEventListener('change', changeListener);
+    delete input._dateChangeListener;
+  };
 
-  dateReminderTimers.set(input, timeout);
+  input._dateChangeListener = changeListener;
+  input.addEventListener('change', changeListener);
 }
 
 // Debounce para salvar automaticamente
@@ -3136,7 +3745,7 @@ function normalizeCardPayload(values) {
   const payload = { ...values };
   NUMERIC_CARD_FIELDS.forEach((field) => {
     if (Object.prototype.hasOwnProperty.call(payload, field) && payload[field] !== '') {
-      const parsed = Number(payload[field]);
+      const parsed = parseLocalizedNumber(payload[field]);
       payload[field] = Number.isNaN(parsed) ? 0 : parsed;
     }
   });
@@ -3360,16 +3969,11 @@ async function computeChainMembershipAsync(data, targetMap, renderToken) {
       targetMap.set(itemId, inChain);
       
       // Atualizar ícone imediatamente se o card estiver renderizado
-      const card = document.querySelector(`.tooling-card[data-card-id="${itemId}"]`);
+      const card = document.querySelector(`.tooling-card[data-item-id="${itemId}"]`);
       if (card) {
-        const chainIcon = card.querySelector('.chain-indicator');
-        if (chainIcon) {
-          if (inChain) {
-            chainIcon.removeAttribute('hidden');
-          } else {
-            chainIcon.setAttribute('hidden', '');
-          }
-        }
+        card.dataset.hasIncomingChain = hasIncomingLink ? 'true' : 'false';
+        card.dataset.chainMember = inChain ? 'true' : 'false';
+        enforceChainIndicatorRules(card);
       }
     });
     
@@ -3431,15 +4035,13 @@ function updateChainIndicatorVisibility(toolingId, hasChain, renderToken) {
   if (!isActiveToolingRenderToken(renderToken)) {
     return;
   }
-  const indicator = document.querySelector(`.tooling-chain-indicator[data-item-id="${toolingId}"]`);
-  if (!indicator) {
+  const card = document.querySelector(`.tooling-card[data-item-id="${toolingId}"]`);
+  if (!card) {
     return;
   }
-  if (hasChain) {
-    indicator.removeAttribute('hidden');
-  } else {
-    indicator.setAttribute('hidden', 'true');
-  }
+  card.dataset.hasIncomingChain = hasChain ? 'true' : 'false';
+  card.dataset.chainMember = hasChain ? 'true' : (card.dataset.chainMember || 'false');
+  enforceChainIndicatorRules(card);
 }
 
 async function hydrateChainIndicators(items, renderToken, baseMap = new Map()) {
@@ -3521,6 +4123,115 @@ function parseLocalizedNumber(value) {
 
   const fallback = Number(s.replace(/[^\d-]/g, ''));
   return Number.isNaN(fallback) ? 0 : fallback;
+}
+
+const INTEGER_FORMATTER = new Intl.NumberFormat('pt-BR', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0
+});
+let thousandsMaskInitialized = false;
+
+function formatIntegerWithSeparators(value, options = {}) {
+  const { preserveEmpty = false } = options;
+  if (value === null || value === undefined) {
+    return preserveEmpty ? '' : '';
+  }
+
+  if (preserveEmpty && typeof value === 'string' && value.trim() === '') {
+    return '';
+  }
+
+  const numericValue = typeof value === 'number'
+    ? value
+    : parseLocalizedNumber(value);
+
+  if (!Number.isFinite(numericValue)) {
+    return preserveEmpty ? '' : '';
+  }
+
+  return INTEGER_FORMATTER.format(Math.trunc(numericValue));
+}
+
+function extractDigits(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return String(value).replace(/\D/g, '');
+}
+
+function applyThousandsMaskToInput(input, force = false) {
+  if (!input) {
+    return;
+  }
+  if (!force && document.activeElement === input) {
+    return;
+  }
+  const digits = extractDigits(input.value);
+  if (!digits) {
+    input.value = '';
+    return;
+  }
+  input.value = formatIntegerWithSeparators(digits);
+}
+
+function handleThousandsMaskFocus(event) {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || input.getAttribute('data-mask') !== 'thousands') {
+    return;
+  }
+  const digits = extractDigits(input.value);
+  input.value = digits;
+  requestAnimationFrame(() => {
+    const caret = input.value.length;
+    if (typeof input.setSelectionRange === 'function') {
+      input.setSelectionRange(caret, caret);
+    }
+  });
+}
+
+function handleThousandsMaskInput(event) {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || input.getAttribute('data-mask') !== 'thousands') {
+    return;
+  }
+  const digits = extractDigits(input.value);
+  if (digits !== input.value) {
+    input.value = digits;
+    requestAnimationFrame(() => {
+      const caret = input.value.length;
+      if (typeof input.setSelectionRange === 'function') {
+        input.setSelectionRange(caret, caret);
+      }
+    });
+  }
+}
+
+function handleThousandsMaskBlur(event) {
+  const input = event.target;
+  if (!(input instanceof HTMLInputElement) || input.getAttribute('data-mask') !== 'thousands') {
+    return;
+  }
+  applyThousandsMaskToInput(input, true);
+}
+
+function applyInitialThousandsMask(root = document) {
+  if (!root || typeof root.querySelectorAll !== 'function') {
+    return;
+  }
+  const inputs = root.querySelectorAll('[data-mask="thousands"]');
+  inputs.forEach((input) => applyThousandsMaskToInput(input, true));
+}
+
+function initThousandsMaskBehavior() {
+  if (thousandsMaskInitialized) {
+    applyInitialThousandsMask();
+    return;
+  }
+  thousandsMaskInitialized = true;
+  document.addEventListener('focusin', handleThousandsMaskFocus, true);
+  document.addEventListener('input', handleThousandsMaskInput, true);
+  document.addEventListener('focusout', handleThousandsMaskBlur, true);
+  applyInitialThousandsMask();
 }
 
 function calculateExpirationFromFormula({
@@ -3655,13 +4366,37 @@ function populateAddToolingSuppliers() {
   });
 }
 
+function populateAddToolingOwners() {
+  const list = addToolingElements.ownerList;
+  if (!list) {
+    return;
+  }
+
+  list.innerHTML = '';
+
+  // Get unique owners from toolingData
+  const uniqueOwners = [...new Set(
+    toolingData
+      .map(item => String(item?.cummins_responsible || '').trim())
+      .filter(name => name.length > 0)
+  )].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  uniqueOwners.forEach((name) => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    list.appendChild(option);
+  });
+}
+
 function openAddToolingModal() {
-  const { overlay, pnInput, supplierInput, lifeInput, producedInput } = addToolingElements;
+  const { overlay, pnInput, supplierInput, ownerInput, lifeInput, producedInput } = addToolingElements;
   if (!overlay) {
     return;
   }
 
   populateAddToolingSuppliers();
+  populateAddToolingOwners();
 
   if (pnInput) pnInput.value = '';
   if (supplierInput) {
@@ -3686,7 +4421,7 @@ function openAddToolingModal() {
 }
 
 function closeAddToolingModal() {
-  const { overlay, pnInput, supplierInput, lifeInput, producedInput } = addToolingElements;
+  const { overlay, pnInput, supplierInput, ownerInput, lifeInput, producedInput } = addToolingElements;
   const pnDescriptionInput = document.getElementById('addToolingPNDescription');
   const descriptionInput = document.getElementById('addToolingDescription');
   const forecastInput = document.getElementById('addToolingForecast');
@@ -3703,6 +4438,7 @@ function closeAddToolingModal() {
       supplierInput.placeholder = defaultPlaceholder;
     }
   }
+  if (ownerInput) ownerInput.value = '';
   if (descriptionInput) descriptionInput.value = '';
   if (lifeInput) lifeInput.value = '';
   if (producedInput) producedInput.value = '';
@@ -3712,7 +4448,7 @@ function closeAddToolingModal() {
 }
 
 async function submitAddToolingForm() {
-  const { form, pnInput, supplierInput, lifeInput, producedInput } = addToolingElements;
+  const { form, pnInput, supplierInput, ownerInput, lifeInput, producedInput } = addToolingElements;
   const pnDescriptionInput = document.getElementById('addToolingPNDescription');
   const descriptionInput = document.getElementById('addToolingDescription');
   const forecastInput = document.getElementById('addToolingForecast');
@@ -3730,6 +4466,7 @@ async function submitAddToolingForm() {
   const pn = pnInput.value.trim();
   const pnDescription = pnDescriptionInput ? pnDescriptionInput.value.trim() : '';
   const supplier = supplierInput.value.trim();
+  const owner = ownerInput ? ownerInput.value.trim() : '';
   const toolDescription = descriptionInput ? descriptionInput.value.trim() : '';
   const toolingLife = parseLocalizedNumber(lifeInput.value);
   const produced = parseLocalizedNumber(producedInput.value);
@@ -3764,6 +4501,7 @@ async function submitAddToolingForm() {
       pn,
       pn_description: pnDescription,
       supplier,
+      cummins_responsible: owner || null,
       tool_description: toolDescription,
       tooling_life_qty: toolingLife,
       produced,
@@ -3909,7 +4647,7 @@ async function displayTooling(data) {
   
   // NÃO computar chain membership aqui - vai travar com muitos cards!
   // Criar Map vazio, será preenchido em background
-  const chainMembership = new Map();
+  const chainMembership = computeLocalChainMembership(sortedData);
   
   // Limpa loading e começa render
   toolingList.innerHTML = '';
@@ -3958,24 +4696,10 @@ async function displayTooling(data) {
 
 // Gera apenas o HEADER do card (versão super leve para lista inicial)
 function buildToolingCardHeaderHTML(item, index, chainMembership) {
-  const toolingLife = Number(item.tooling_life_qty) || 0;
-  const produced = Number(item.produced) || 0;
-  
-  let expirationDateValue = normalizeExpirationDate(item.expiration_date, item.id);
-  if (!expirationDateValue) {
-    const remaining = toolingLife - produced;
-    const forecast = Number(item.annual_volume_forecast) || 0;
-    const productionDateValue = item.date_remaining_tooling_life || '';
-    const calculatedExpiration = calculateExpirationFromFormula({
-      remaining,
-      forecast,
-      productionDate: productionDateValue
-    });
-    if (calculatedExpiration) {
-      expirationDateValue = calculatedExpiration;
-    }
-  }
-
+  const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || Number(item.tooling_life_qty) || 0;
+  const produced = Number(parseLocalizedNumber(item.produced)) || Number(item.produced) || 0;
+  const classification = classifyToolingExpirationState(item);
+  const expirationDateValue = classification.expirationDate || '';
   const expirationDisplay = formatDate(expirationDateValue || '');
   const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
   const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
@@ -3984,29 +4708,29 @@ function buildToolingCardHeaderHTML(item, index, chainMembership) {
   const isObsolete = normalizedStatus === 'obsolete';
   const replacementIdValue = sanitizeReplacementId(item.replacement_tooling_id);
   const hasReplacementLink = replacementIdValue !== '';
-  const hasInitialChainLink = chainMembership.get(String(item.id)) || false;
+  const membershipKey = String(item.id || '').trim();
+  const hasChainMembership = chainMembership?.get(membershipKey) === true;
+  const shouldShowChainIndicator = hasChainMembership;
   
-  const expirationStatus = getExpirationStatus(expirationDateValue || '');
   let statusIconHtml = '';
   let statusIconClass = '';
-  const isExpiredByPercent = percentUsedValue >= 100;
   
-  if (isObsolete) {
+  if (classification.state === 'obsolete' || classification.state === 'obsolete-replaced') {
     statusIconHtml = '<i class="ph ph-fill ph-archive-box"></i>';
     statusIconClass = 'status-icon-obsolete';
-  } else if (isExpiredByPercent || expirationStatus.class === 'expired') {
+  } else if (classification.state === 'expired') {
     statusIconHtml = '<i class="ph ph-fill ph-warning-circle"></i>';
     statusIconClass = 'status-icon-expired';
-  } else if (expirationStatus.class === 'warning') {
+  } else if (classification.state === 'warning') {
     statusIconHtml = '<i class="ph ph-fill ph-warning"></i>';
     statusIconClass = 'status-icon-warning';
   }
   
   return `
-    <div class="tooling-card" id="card-${index}" data-item-id="${item.id}" data-status="${normalizedStatus}" data-replacement-id="${hasReplacementLink ? replacementIdValue : ''}" data-body-loaded="false" data-supplier="${escapeHtml(item.supplier || '')}">
+    <div class="tooling-card" id="card-${index}" data-item-id="${item.id}" data-status="${normalizedStatus}" data-replacement-id="${hasReplacementLink ? replacementIdValue : ''}" data-body-loaded="false" data-supplier="${escapeHtml(item.supplier || '')}" data-chain-member="${hasChainMembership ? 'true' : 'false'}" data-has-incoming-chain="${hasChainMembership && !hasReplacementLink ? 'true' : 'false'}">
       <div class="tooling-card-header" onclick="toggleCard(${index})">
         <div class="tooling-card-header-top">
-          ${statusIconHtml ? `<div class="card-status-icon ${statusIconClass}" title="${isObsolete ? 'Obsolete' : expirationStatus.label}">${statusIconHtml}</div>` : ''}
+          ${statusIconHtml ? `<div class="card-status-icon ${statusIconClass}" title="${classification.label}">${statusIconHtml}</div>` : ''}
           <div class="tooling-card-primary">
             <div class="tooling-info-item tooling-info-pn">
               <div class="tooling-info-stack">
@@ -4023,7 +4747,7 @@ function buildToolingCardHeaderHTML(item, index, chainMembership) {
               <span class="tooling-info-label">Last Update</span>
               <span class="tooling-info-value">${lastUpdateDisplay}</span>
             </div>
-            <button type="button" class="tooling-chain-indicator" data-item-id="${item.id}" ${hasInitialChainLink ? '' : 'hidden'} title="View replacement chain" onclick="event.stopPropagation(); openReplacementTimelineForCard(document.getElementById('card-${index}'))">
+            <button type="button" class="tooling-chain-indicator" data-item-id="${item.id}" ${shouldShowChainIndicator ? '' : 'hidden'} title="View replacement chain" onclick="event.stopPropagation(); openReplacementTimelineForCard(document.getElementById('card-${index}'))">
               <i class="ph ph-git-branch"></i>
             </button>
             <div class="tooling-attachment-count" data-attachment-count data-item-id="${item.id}" hidden>
@@ -4068,29 +4792,38 @@ function buildToolingCardHeaderHTML(item, index, chainMembership) {
 
 // Gera apenas o BODY do card (chamado on-demand ao expandir)
 function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext) {
-  const toolingLife = Number(item.tooling_life_qty) || 0;
-  const produced = Number(item.produced) || 0;
+  const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
+  const produced = parseLocalizedNumber(item.produced) || 0;
   const remaining = toolingLife - produced;
-  const forecast = Number(item.annual_volume_forecast) || 0;
+  const forecast = parseLocalizedNumber(item.annual_volume_forecast) || 0;
   const hasForecast = String(item.annual_volume_forecast ?? '').trim() !== '';
+  const toolingLifeDisplay = formatIntegerWithSeparators(toolingLife, { preserveEmpty: true });
+  const producedDisplay = formatIntegerWithSeparators(produced, { preserveEmpty: true });
+  const forecastDisplay = hasForecast ? formatIntegerWithSeparators(forecast, { preserveEmpty: true }) : '';
   
-  let expirationDateValue = normalizeExpirationDate(item.expiration_date, item.id);
-  if (!expirationDateValue) {
-    const productionDateValue = item.date_remaining_tooling_life || '';
-    const calculatedExpiration = calculateExpirationFromFormula({
-      remaining,
-      forecast,
-      productionDate: productionDateValue
-    });
-    if (calculatedExpiration) {
-      expirationDateValue = calculatedExpiration;
-    }
+  const classification = classifyToolingExpirationState(item);
+  let expirationDateValue = resolveToolingExpirationDate(item);
+  
+  // Define o ícone baseado no estado de expiração (só mostra se expired ou warning)
+  let expirationIconClass = '';
+  let expirationIconColor = '';
+  let hasExpirationIcon = false;
+  
+  if (classification.state === 'expired') {
+    expirationIconClass = 'ph-fill ph-warning-circle';
+    expirationIconColor = '#ef4444';
+    hasExpirationIcon = true;
+  } else if (classification.state === 'warning') {
+    expirationIconClass = 'ph-fill ph-warning';
+    expirationIconColor = '#f59e0b';
+    hasExpirationIcon = true;
   }
 
   const expirationInputValue = expirationDateValue || '';
   const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
   const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
   const remainingQty = remaining;
+  const remainingDisplay = formatIntegerWithSeparators(remainingQty, { preserveEmpty: true });
   const lifecycleProgressPercent = Math.min(Math.max(percentUsedValue, 0), 100);
   const amountBrlValue = (() => {
     const raw = item.amount_brl;
@@ -4128,10 +4861,6 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
           <i class="ph ph-folder"></i>
           <span>Documentation</span>
         </button>
-        <button class="card-tab" onclick="switchCardTab(${index}, 'comments')">
-          <i class="ph ph-chat-circle-text"></i>
-          <span>Comments</span>
-        </button>
         <button class="card-tab" onclick="switchCardTab(${index}, 'attachments')">
           <i class="ph ph-paperclip"></i>
           <span>Attachments</span>
@@ -4158,17 +4887,17 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
               </div>
               <div class="detail-item detail-item-full">
                 <span class="detail-label">Tooling Life (Qty)</span>
-                <input type="number" class="detail-input" value="${toolingLife}" data-field="tooling_life_qty" data-id="${item.id}" onchange="calculateLifecycle(${index})" oninput="calculateLifecycle(${index})" min="0" step="1">
+                <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${toolingLifeDisplay}" data-field="tooling_life_qty" data-id="${item.id}" onchange="calculateLifecycle(${index})" oninput="calculateLifecycle(${index})">
               </div>
               <div class="detail-item detail-pair">
                 <div class="detail-item">
                   <span class="detail-label">Produced</span>
-                  <input type="number" class="detail-input" value="${produced}" data-field="produced" data-id="${item.id}" onchange="handleProducedChange(${index})" oninput="handleProducedChange(${index})" min="0" step="1">
+                  <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${producedDisplay}" data-field="produced" data-id="${item.id}" onchange="handleProducedChange(${index})" oninput="handleProducedChange(${index})">
                 </div>
                 <div class="detail-item">
                   <span class="detail-label">
-                    Production Date
-                    <i class="ph ph-info tooltip-icon" title="Whenever Produced changes, update this date to keep the timeline accurate." role="button" tabindex="0" onclick="openProductionInfoModal(event)" onkeydown="handleProductionInfoIconKey(event)"></i>
+                    Prod. Date
+                    <i class="ph ph-info tooltip-icon" title="Production Date: Update whenever Produced changes to keep the timeline accurate." role="button" tabindex="0" onclick="openProductionInfoModal(event)" onkeydown="handleProductionInfoIconKey(event)"></i>
                   </span>
                   <input type="date" class="detail-input" value="${item.date_remaining_tooling_life || ''}" data-field="date_remaining_tooling_life" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
                 </div>
@@ -4178,7 +4907,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   Remaining
                   <i class="ph ph-info tooltip-icon" title="Formula: uses \\"Tooling Life (Qty)\\" minus \\"Produced\\"."></i>
                 </span>
-                <input type="text" class="detail-input calculated" value="${remainingQty.toLocaleString('pt-BR', {minimumFractionDigits: 0, maximumFractionDigits: 0})}" data-field="remaining_tooling_life_pcs" data-id="${item.id}" readonly>
+                <input type="text" class="detail-input calculated" value="${remainingDisplay}" data-field="remaining_tooling_life_pcs" data-id="${item.id}" readonly>
               </div>
               <div class="detail-item">
                 <span class="detail-label">
@@ -4190,7 +4919,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
               <div class="detail-item detail-pair">
                 <div class="detail-item">
                   <span class="detail-label">Annual Forecast</span>
-                  <input type="number" class="detail-input" value="${hasForecast ? forecast : ''}" data-field="annual_volume_forecast" data-id="${item.id}" onchange="handleForecastChange(${index})" min="0" step="1">
+                  <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${hasForecast ? forecastDisplay : ''}" data-field="annual_volume_forecast" data-id="${item.id}" onchange="handleForecastChange(${index})">
                 </div>
                 <div class="detail-item">
                   <span class="detail-label">Forecast Date</span>
@@ -4202,109 +4931,87 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   Expiration (Calculated)
                   <i class="ph ph-info tooltip-icon" title="Formula: today's date + (\\"Remaining\\" ÷ \\"Annual Forecast\\") years." role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
                 </span>
+                ${hasExpirationIcon ? `
+                <div class="input-with-icon">
+                  <i class="${expirationIconClass} input-icon" style="color: ${expirationIconColor}"></i>
+                  <input type="date" class="detail-input calculated with-icon" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
+                </div>
+                ` : `
                 <input type="date" class="detail-input calculated" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
+                `}
               </div>
             </div>
             
             <!-- Column 2: Identification -->
             <div class="detail-group detail-grid">
               <div class="detail-group-title">Identification</div>
-          <div class="detail-item detail-item-full">
-            <span class="detail-label">PN</span>
-            <input type="text" class="detail-input" value="${item.pn || ''}" data-field="pn" data-id="${item.id}" onchange="handlePNChange(${index}, ${item.id}, this)">
-          </div>
-          <div class="detail-item detail-item-full">
-            <span class="detail-label">PN Description</span>
-            <input type="text" class="detail-input" value="${item.pn_description || ''}" data-field="pn_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">BU</span>
-            <input type="text" class="detail-input" value="${item.bu || ''}" data-field="bu" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Category</span>
-            <input type="text" class="detail-input" value="${item.category || ''}" data-field="category" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-          </div>
-          <div class="detail-item detail-item-full">
-            <span class="detail-label">Responsável</span>
-            <input type="text" class="detail-input" value="${item.cummins_responsible || ''}" data-field="cummins_responsible" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Status</span>
-            <select class="detail-input" data-field="status" data-id="${item.id}" onchange="handleStatusSelectChange(${index}, ${item.id}, this)">
-              ${statusOptionsMarkup}
-            </select>
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Steps</span>
-            <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)">
-              <option value="" ${!item.steps ? 'selected' : ''}>Select...</option>
-              <option value="1" ${item.steps === '1' ? 'selected' : ''}>1</option>
-              <option value="2" ${item.steps === '2' ? 'selected' : ''}>2</option>
-              <option value="3" ${item.steps === '3' ? 'selected' : ''}>3</option>
-              <option value="4" ${item.steps === '4' ? 'selected' : ''}>4</option>
-              <option value="5" ${item.steps === '5' ? 'selected' : ''}>5</option>
-              <option value="6" ${item.steps === '6' ? 'selected' : ''}>6</option>
-              <option value="7" ${item.steps === '7' ? 'selected' : ''}>7</option>
-            </select>
-          </div>
-          <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
-            <span class="detail-label">Replacement Tooling</span>
-            <div class="replacement-link-field">
-              <div class="replacement-dropdown" data-replacement-picker>
-                <button type="button" class="replacement-dropdown-trigger ${hasReplacementLink ? 'has-selection' : ''}" data-replacement-picker-button onclick="toggleReplacementPicker(event, ${index})">
-                  <span data-replacement-picker-label>${replacementPickerLabel}</span>
-                  <i class="ph ph-caret-down"></i>
-                </button>
-                <div class="replacement-dropdown-panel" data-replacement-picker-panel hidden>
-                  <div class="replacement-dropdown-search">
-                    <input type="text" placeholder="Search ID or PN" data-replacement-picker-search oninput="handleReplacementPickerSearch(${index}, this.value)">
+              <div class="detail-item detail-item-full">
+                <span class="detail-label">PN</span>
+                <input type="text" class="detail-input" value="${item.pn || ''}" data-field="pn" data-id="${item.id}" onchange="handlePNChange(${index}, ${item.id}, this)">
+              </div>
+              <div class="detail-item detail-item-full">
+                <span class="detail-label">PN Description</span>
+                <input type="text" class="detail-input" value="${item.pn_description || ''}" data-field="pn_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+              </div>
+              <div class="detail-item detail-item-full">
+                <span class="detail-label">Tooling Description</span>
+                <input type="text" class="detail-input" value="${item.tool_description || ''}" data-field="tool_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">Status</span>
+                <select class="detail-input" data-field="status" data-id="${item.id}" onchange="handleStatusSelectChange(${index}, ${item.id}, this)">
+                  ${statusOptionsMarkup}
+                </select>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">Steps</span>
+                <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)">
+                  <option value="" ${!item.steps ? 'selected' : ''}>Select...</option>
+                  <option value="1" ${item.steps === '1' ? 'selected' : ''}>1</option>
+                  <option value="2" ${item.steps === '2' ? 'selected' : ''}>2</option>
+                  <option value="3" ${item.steps === '3' ? 'selected' : ''}>3</option>
+                  <option value="4" ${item.steps === '4' ? 'selected' : ''}>4</option>
+                  <option value="5" ${item.steps === '5' ? 'selected' : ''}>5</option>
+                  <option value="6" ${item.steps === '6' ? 'selected' : ''}>6</option>
+                  <option value="7" ${item.steps === '7' ? 'selected' : ''}>7</option>
+                </select>
+              </div>
+              <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
+                <span class="detail-label">Replacement Tooling</span>
+                <div class="replacement-link-field">
+                  <div class="replacement-dropdown" data-replacement-picker>
+                    <button type="button" class="replacement-dropdown-trigger ${hasReplacementLink ? 'has-selection' : ''}" data-replacement-picker-button onclick="toggleReplacementPicker(event, ${index})">
+                      <span data-replacement-picker-label>${replacementPickerLabel}</span>
+                      <i class="ph ph-caret-down"></i>
+                    </button>
+                    <div class="replacement-dropdown-panel" data-replacement-picker-panel hidden>
+                      <div class="replacement-dropdown-search">
+                        <input type="text" placeholder="Search ID or PN" data-replacement-picker-search oninput="handleReplacementPickerSearch(${index}, this.value)">
+                      </div>
+                      <div class="replacement-dropdown-list" data-replacement-picker-list>
+                        ${replacementPickerOptionsMarkup}
+                      </div>
+                    </div>
                   </div>
-                  <div class="replacement-dropdown-list" data-replacement-picker-list>
-                    ${replacementPickerOptionsMarkup}
-                  </div>
+                  <input type="text" class="replacement-hidden-input" value="${hasReplacementLink ? replacementIdValue : ''}" data-field="replacement_tooling_id" data-id="${item.id}" hidden aria-hidden="true">
+                  <button type="button" class="btn-link-card" data-replacement-open-btn ${hasReplacementLink ? '' : 'disabled'} data-target-id="${hasReplacementLink ? replacementIdValue : ''}" onclick="handleReplacementLinkButtonClick(event, this)">
+                    Go to card
+                  </button>
                 </div>
               </div>
-              <input type="text" class="replacement-hidden-input" value="${hasReplacementLink ? replacementIdValue : ''}" data-field="replacement_tooling_id" data-id="${item.id}" hidden aria-hidden="true">
-              <button type="button" class="btn-link-card" data-replacement-open-btn ${hasReplacementLink ? '' : 'disabled'} data-target-id="${hasReplacementLink ? replacementIdValue : ''}" onclick="handleReplacementLinkButtonClick(event, this)">
-                Go to card
-              </button>
             </div>
-            <p class="detail-help">Appears when status is Obsolete. Use the ID displayed on the replacement card.</p>
-          </div>
-        </div>
-        
-            
-            <!-- Column 3: Supplier & Tooling -->
-            <div class="detail-group detail-grid">
-              <div class="detail-group-title">Supplier & Tooling</div>
-          <div class="detail-item detail-item-full">
-            <span class="detail-label">Tooling Description</span>
-            <input type="text" class="detail-input" value="${item.tool_description || ''}" data-field="tool_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Supplier</span>
-            <input type="text" class="detail-input" value="${item.supplier || ''}" data-field="supplier" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Ownership</span>
-            <input type="text" class="detail-input" value="${item.tool_ownership || ''}" data-field="tool_ownership" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Customer</span>
-            <input type="text" class="detail-input" value="${item.customer || ''}" data-field="customer" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Tool Number</span>
-            <input type="text" class="detail-input" value="${item.tool_number_arb || ''}" data-field="tool_number_arb" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Quantity</span>
-            <input type="text" class="detail-input" value="${item.tool_quantity || ''}" data-field="tool_quantity" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-          </div>
-          <div class="detail-item">
-            <span class="detail-label">Value (BRL)</span>
-            <input type="number" class="detail-input" value="${amountBrlValue}" data-field="amount_brl" data-id="${item.id}" onchange="autoSaveTooling(${item.id})" inputmode="decimal" step="0.01" min="0">
+
+            <!-- Column 3: Comments -->
+            <div class="detail-group detail-grid comments-group">
+              <div class="detail-group-title">Comments</div>
+              <div class="card-comments-container">
+                <textarea 
+                  class="card-comments-textarea" 
+                  placeholder="Add comments or notes here..."
+                  data-field="comments" 
+                  data-id="${item.id}"
+                  onchange="autoSaveTooling(${item.id})"
+                >${item.comments || ''}</textarea>
               </div>
             </div>
           </div>
@@ -4317,32 +5024,70 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
 
       <!-- Aba Documentation -->
       <div class="card-tab-content" data-tab="documentation">
-        <div class="detail-group detail-grid">
-          <div class="detail-item">
-            <span class="detail-label">Bailment Agreement Signed</span>
-            <input type="text" class="detail-input" value="${item.bailment_agreement_signed || ''}" data-field="bailment_agreement_signed" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+        <div class="tooling-details-grid" style="grid-template-columns: repeat(2, 1fr); gap: 24px;">
+          <!-- Column 1: Documentation Fields -->
+          <div class="detail-group detail-grid">
+            <div class="detail-group-title">Documentation</div>
+            <div class="detail-item">
+              <span class="detail-label">Bailment Agreement Signed</span>
+              <input type="text" class="detail-input" value="${item.bailment_agreement_signed || ''}" data-field="bailment_agreement_signed" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">Tooling Book</span>
+              <input type="text" class="detail-input" value="${item.tooling_book || ''}" data-field="tooling_book" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">Disposition</span>
+              <input type="text" class="detail-input" value="${item.disposition || ''}" data-field="disposition" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+            </div>
           </div>
-          <div class="detail-item">
-            <span class="detail-label">Tooling Book</span>
-            <input type="text" class="detail-input" value="${item.tooling_book || ''}" data-field="tooling_book" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+          
+          <!-- Column 2: Supplier & Tooling -->
+          <div class="detail-group detail-grid">
+            <div class="detail-group-title">Supplier & Tooling</div>
+            <div class="detail-item detail-pair">
+              <div class="detail-item">
+                <span class="detail-label">Supplier</span>
+                <input type="text" class="detail-input" list="supplierList-${index}" value="${item.supplier || ''}" data-field="supplier" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                <datalist id="supplierList-${index}"></datalist>
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">Responsible</span>
+                <input type="text" class="detail-input" list="ownerList-${index}" value="${item.cummins_responsible || ''}" data-field="cummins_responsible" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                <datalist id="ownerList-${index}"></datalist>
+              </div>
+            </div>
+            <div class="detail-item detail-pair">
+              <div class="detail-item">
+                <span class="detail-label">Ownership</span>
+                <input type="text" class="detail-input" value="${item.tool_ownership || ''}" data-field="tool_ownership" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">BU</span>
+                <input type="text" class="detail-input" value="${item.bu || ''}" data-field="bu" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+              </div>
+            </div>
+            <div class="detail-item detail-pair">
+              <div class="detail-item">
+                <span class="detail-label">Customer</span>
+                <input type="text" class="detail-input" value="${item.customer || ''}" data-field="customer" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">Tool Number</span>
+                <input type="text" class="detail-input" value="${item.tool_number_arb || ''}" data-field="tool_number_arb" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+              </div>
+            </div>
+            <div class="detail-item detail-pair">
+              <div class="detail-item">
+                <span class="detail-label">Quantity</span>
+                <input type="text" class="detail-input" value="${item.tool_quantity || ''}" data-field="tool_quantity" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+              </div>
+              <div class="detail-item">
+                <span class="detail-label">Value (BRL)</span>
+                <input type="number" class="detail-input" value="${amountBrlValue}" data-field="amount_brl" data-id="${item.id}" onchange="autoSaveTooling(${item.id})" inputmode="decimal" step="0.01" min="0">
+              </div>
+            </div>
           </div>
-          <div class="detail-item">
-            <span class="detail-label">Disposition</span>
-            <input type="text" class="detail-input" value="${item.disposition || ''}" data-field="disposition" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-          </div>
-        </div>
-      </div>
-
-      <!-- Aba Comments -->
-      <div class="card-tab-content" data-tab="comments">
-        <div class="card-comments-container">
-          <textarea 
-            class="card-comments-textarea" 
-            placeholder="Add comments or notes here..."
-            data-field="comments" 
-            data-id="${item.id}"
-            onchange="autoSaveTooling(${item.id})"
-          >${item.comments || ''}</textarea>
         </div>
       </div>
 
@@ -4374,11 +5119,14 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
 
 function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
     // Calcula expiration_date se não existir
-    const toolingLife = Number(item.tooling_life_qty) || 0;
-    const produced = Number(item.produced) || 0;
+    const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
+    const produced = parseLocalizedNumber(item.produced) || 0;
     const remaining = toolingLife - produced;
-    const forecast = Number(item.annual_volume_forecast) || 0;
+    const forecast = parseLocalizedNumber(item.annual_volume_forecast) || 0;
     const hasForecast = String(item.annual_volume_forecast ?? '').trim() !== '';
+    const toolingLifeDisplay = formatIntegerWithSeparators(toolingLife, { preserveEmpty: true });
+    const producedDisplay = formatIntegerWithSeparators(produced, { preserveEmpty: true });
+    const forecastDisplay = hasForecast ? formatIntegerWithSeparators(forecast, { preserveEmpty: true }) : '';
     
     let expirationDateValue = normalizeExpirationDate(item.expiration_date, item.id);
 
@@ -4400,6 +5148,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
     const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
     const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
     const remainingQty = remaining;
+    const remainingDisplay = formatIntegerWithSeparators(remainingQty, { preserveEmpty: true });
     const lifecycleProgressPercent = Math.min(Math.max(percentUsedValue, 0), 100);
     const amountBrlValue = (() => {
       const raw = item.amount_brl;
@@ -4419,6 +5168,9 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
     const isObsolete = normalizedStatus === 'obsolete';
     const replacementIdValue = sanitizeReplacementId(item.replacement_tooling_id);
     const hasReplacementLink = replacementIdValue !== '';
+    const membershipKey = String(item.id || '').trim();
+    const hasChainMembership = chainMembership?.get(membershipKey) === true;
+    const shouldShowChainIndicator = hasChainMembership;
     const replacementPickerOptionsMarkup = buildReplacementPickerOptionsMarkup(item, index);
     const replacementPickerLabel = escapeHtml(
       hasReplacementLink
@@ -4428,9 +5180,6 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
     const replacementChipVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
     const replacementEditorVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
     
-    // Check if item is part of a replacement chain using pre-computed map
-    const hasInitialChainLink = chainMembership.get(String(item.id)) || false;
-    
     // Calcula status de vencimento para ícone
     const expirationStatus = getExpirationStatus(expirationInputValue);
     let statusIconHtml = '';
@@ -4438,8 +5187,10 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
     
     // Verifica se está expirado por percentual de vida
     const isExpiredByPercent = percentUsedValue >= 100;
+    const isObsoleteWithReplacement = isObsolete && hasReplacementLink;
     
     // Mostra ícone de status independente de estar em chain
+    // Não mostrar ícone de warning/expired se for OBSOLETE com replacement
     if (isObsolete) {
       statusIconHtml = '<i class="ph ph-fill ph-archive-box"></i>';
       statusIconClass = 'status-icon-obsolete';
@@ -4452,7 +5203,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
     }
     
     return `
-      <div class="tooling-card" id="card-${index}" data-item-id="${item.id}" data-status="${normalizedStatus}" data-replacement-id="${hasReplacementLink ? replacementIdValue : ''}" data-supplier="${escapeHtml(item.supplier || '')}">
+      <div class="tooling-card" id="card-${index}" data-item-id="${item.id}" data-status="${normalizedStatus}" data-replacement-id="${hasReplacementLink ? replacementIdValue : ''}" data-supplier="${escapeHtml(item.supplier || '')}" data-chain-member="${hasChainMembership ? 'true' : 'false'}" data-has-incoming-chain="${hasChainMembership && !hasReplacementLink ? 'true' : 'false'}">
         <div class="tooling-card-header" onclick="toggleCard(${index})">
           <div class="tooling-card-header-top">
             ${statusIconHtml ? `<div class="card-status-icon ${statusIconClass}" title="${isObsolete ? 'Obsolete' : expirationStatus.label}">${statusIconHtml}</div>` : ''}
@@ -4472,7 +5223,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                 <span class="tooling-info-label">Last Update</span>
                 <span class="tooling-info-value">${lastUpdateDisplay}</span>
               </div>
-              <button type="button" class="tooling-chain-indicator" data-item-id="${item.id}" ${hasInitialChainLink ? '' : 'hidden'} title="View replacement chain" onclick="event.stopPropagation(); openReplacementTimelineForCard(document.getElementById('card-${index}'))">
+              <button type="button" class="tooling-chain-indicator" data-item-id="${item.id}" ${shouldShowChainIndicator ? '' : 'hidden'} title="View replacement chain" onclick="event.stopPropagation(); openReplacementTimelineForCard(document.getElementById('card-${index}'))">
                 <i class="ph ph-git-branch"></i>
               </button>
               <div class="tooling-attachment-count" data-attachment-count data-item-id="${item.id}" hidden>
@@ -4521,10 +5272,6 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
               <i class="ph ph-folder"></i>
               <span>Documentation</span>
             </button>
-            <button class="card-tab" onclick="switchCardTab(${index}, 'comments')">
-              <i class="ph ph-chat-circle-text"></i>
-              <span>Comments</span>
-            </button>
             <button class="card-tab" onclick="switchCardTab(${index}, 'attachments')">
               <i class="ph ph-paperclip"></i>
               <span>Attachments</span>
@@ -4551,17 +5298,17 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                   </div>
                   <div class="detail-item detail-item-full">
                     <span class="detail-label">Tooling Life (Qty)</span>
-                    <input type="number" class="detail-input" value="${toolingLife}" data-field="tooling_life_qty" data-id="${item.id}" onchange="calculateLifecycle(${index})" oninput="calculateLifecycle(${index})" min="0" step="1">
+                    <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${toolingLifeDisplay}" data-field="tooling_life_qty" data-id="${item.id}" onchange="calculateLifecycle(${index})" oninput="calculateLifecycle(${index})">
                   </div>
                   <div class="detail-item detail-pair">
                     <div class="detail-item">
                       <span class="detail-label">Produced</span>
-                      <input type="number" class="detail-input" value="${produced}" data-field="produced" data-id="${item.id}" onchange="handleProducedChange(${index})" oninput="handleProducedChange(${index})" min="0" step="1">
+                      <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${producedDisplay}" data-field="produced" data-id="${item.id}" onchange="handleProducedChange(${index})" oninput="handleProducedChange(${index})">
                     </div>
                     <div class="detail-item">
                       <span class="detail-label">
-                        Production Date
-                        <i class="ph ph-info tooltip-icon" title="Whenever Produced changes, update this date to keep the timeline accurate." role="button" tabindex="0" onclick="openProductionInfoModal(event)" onkeydown="handleProductionInfoIconKey(event)"></i>
+                        Prod. Date
+                        <i class="ph ph-info tooltip-icon" title="Production Date: Update whenever Produced changes to keep the timeline accurate." role="button" tabindex="0" onclick="openProductionInfoModal(event)" onkeydown="handleProductionInfoIconKey(event)"></i>
                       </span>
                       <input type="date" class="detail-input" value="${item.date_remaining_tooling_life || ''}" data-field="date_remaining_tooling_life" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
                     </div>
@@ -4571,7 +5318,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                       Remaining
                       <i class="ph ph-info tooltip-icon" title="Formula: uses \"Tooling Life (Qty)\" minus \"Produced\"."></i>
                     </span>
-                    <input type="text" class="detail-input calculated" value="${remainingQty.toLocaleString('pt-BR', {minimumFractionDigits: 0, maximumFractionDigits: 0})}" data-field="remaining_tooling_life_pcs" data-id="${item.id}" readonly>
+                    <input type="text" class="detail-input calculated" value="${remainingDisplay}" data-field="remaining_tooling_life_pcs" data-id="${item.id}" readonly>
                   </div>
                   <div class="detail-item">
                     <span class="detail-label">
@@ -4583,7 +5330,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                   <div class="detail-item detail-pair">
                     <div class="detail-item">
                       <span class="detail-label">Annual Forecast</span>
-                      <input type="number" class="detail-input" value="${hasForecast ? forecast : ''}" data-field="annual_volume_forecast" data-id="${item.id}" onchange="handleForecastChange(${index})" min="0" step="1">
+                      <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${hasForecast ? forecastDisplay : ''}" data-field="annual_volume_forecast" data-id="${item.id}" onchange="handleForecastChange(${index})">
                     </div>
                     <div class="detail-item">
                       <span class="detail-label">Forecast Date</span>
@@ -4595,111 +5342,89 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                       Expiration (Calculated)
                       <i class="ph ph-info tooltip-icon" title="Formula: today's date + (\"Remaining\" ÷ \"Annual Forecast\") years." role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
                     </span>
+                    ${hasExpirationIcon ? `
+                    <div class="input-with-icon">
+                      <i class="${expirationIconClass} input-icon" style="color: ${expirationIconColor}"></i>
+                      <input type="date" class="detail-input calculated with-icon" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
+                    </div>
+                    ` : `
                     <input type="date" class="detail-input calculated" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
+                    `}
                   </div>
                 </div>
                 
                 <!-- Column 2: Identification -->
                 <div class="detail-group detail-grid">
                   <div class="detail-group-title">Identification</div>
-              <div class="detail-item detail-item-full">
-                <span class="detail-label">PN</span>
-                <input type="text" class="detail-input" value="${item.pn || ''}" data-field="pn" data-id="${item.id}" onchange="handlePNChange(${index}, ${item.id}, this)">
-              </div>
-              <div class="detail-item detail-item-full">
-                <span class="detail-label">PN Description</span>
-                <input type="text" class="detail-input" value="${item.pn_description || ''}" data-field="pn_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">BU</span>
-                <input type="text" class="detail-input" value="${item.bu || ''}" data-field="bu" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">Category</span>
-                <input type="text" class="detail-input" value="${item.category || ''}" data-field="category" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item detail-item-full">
-                <span class="detail-label">Responsável</span>
-                <input type="text" class="detail-input" value="${item.cummins_responsible || ''}" data-field="cummins_responsible" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">Status</span>
-                <select class="detail-input" data-field="status" data-id="${item.id}" onchange="handleStatusSelectChange(${index}, ${item.id}, this)">
-                  ${statusOptionsMarkup}
-                </select>
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">Steps</span>
-                <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)">
-                  <option value="" ${!item.steps ? 'selected' : ''}>Select...</option>
-                  <option value="1" ${item.steps === '1' ? 'selected' : ''}>1</option>
-                  <option value="2" ${item.steps === '2' ? 'selected' : ''}>2</option>
-                  <option value="3" ${item.steps === '3' ? 'selected' : ''}>3</option>
-                  <option value="4" ${item.steps === '4' ? 'selected' : ''}>4</option>
-                  <option value="5" ${item.steps === '5' ? 'selected' : ''}>5</option>
-                  <option value="6" ${item.steps === '6' ? 'selected' : ''}>6</option>
-                  <option value="7" ${item.steps === '7' ? 'selected' : ''}>7</option>
-                </select>
-              </div>
-              <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
-                <span class="detail-label">Replacement Tooling</span>
-                <div class="replacement-link-field">
-                  <div class="replacement-dropdown" data-replacement-picker>
-                    <button type="button" class="replacement-dropdown-trigger ${hasReplacementLink ? 'has-selection' : ''}" data-replacement-picker-button onclick="toggleReplacementPicker(event, ${index})">
-                      <span data-replacement-picker-label>${replacementPickerLabel}</span>
-                      <i class="ph ph-caret-down"></i>
-                    </button>
-                    <div class="replacement-dropdown-panel" data-replacement-picker-panel hidden>
-                      <div class="replacement-dropdown-search">
-                        <input type="text" placeholder="Search ID or PN" data-replacement-picker-search oninput="handleReplacementPickerSearch(${index}, this.value)">
+                  <div class="detail-item detail-item-full">
+                    <span class="detail-label">PN</span>
+                    <input type="text" class="detail-input" value="${item.pn || ''}" data-field="pn" data-id="${item.id}" onchange="handlePNChange(${index}, ${item.id}, this)">
+                  </div>
+                  <div class="detail-item detail-item-full">
+                    <span class="detail-label">PN Description</span>
+                    <input type="text" class="detail-input" value="${item.pn_description || ''}" data-field="pn_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                  </div>
+                  <div class="detail-item detail-item-full">
+                    <span class="detail-label">Tooling Description</span>
+                    <input type="text" class="detail-input" value="${item.tool_description || ''}" data-field="tool_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                  </div>
+                  <div class="detail-item">
+                    <span class="detail-label">Status</span>
+                    <select class="detail-input" data-field="status" data-id="${item.id}" onchange="handleStatusSelectChange(${index}, ${item.id}, this)">
+                      ${statusOptionsMarkup}
+                    </select>
+                  </div>
+                  <div class="detail-item">
+                    <span class="detail-label">Steps</span>
+                    <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)">
+                      <option value="" ${!item.steps ? 'selected' : ''}>Select...</option>
+                      <option value="1" ${item.steps === '1' ? 'selected' : ''}>1</option>
+                      <option value="2" ${item.steps === '2' ? 'selected' : ''}>2</option>
+                      <option value="3" ${item.steps === '3' ? 'selected' : ''}>3</option>
+                      <option value="4" ${item.steps === '4' ? 'selected' : ''}>4</option>
+                      <option value="5" ${item.steps === '5' ? 'selected' : ''}>5</option>
+                      <option value="6" ${item.steps === '6' ? 'selected' : ''}>6</option>
+                      <option value="7" ${item.steps === '7' ? 'selected' : ''}>7</option>
+                    </select>
+                  </div>
+                  <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
+                    <span class="detail-label">Replacement Tooling</span>
+                    <div class="replacement-link-field">
+                      <div class="replacement-dropdown" data-replacement-picker>
+                        <button type="button" class="replacement-dropdown-trigger ${hasReplacementLink ? 'has-selection' : ''}" data-replacement-picker-button onclick="toggleReplacementPicker(event, ${index})">
+                          <span data-replacement-picker-label>${replacementPickerLabel}</span>
+                          <i class="ph ph-caret-down"></i>
+                        </button>
+                        <div class="replacement-dropdown-panel" data-replacement-picker-panel hidden>
+                          <div class="replacement-dropdown-search">
+                            <input type="text" placeholder="Search ID or PN" data-replacement-picker-search oninput="handleReplacementPickerSearch(${index}, this.value)">
+                          </div>
+                          <div class="replacement-dropdown-list" data-replacement-picker-list>
+                            ${replacementPickerOptionsMarkup}
+                          </div>
+                        </div>
                       </div>
-                      <div class="replacement-dropdown-list" data-replacement-picker-list>
-                        ${replacementPickerOptionsMarkup}
-                      </div>
+                      <input type="text" class="replacement-hidden-input" value="${hasReplacementLink ? replacementIdValue : ''}" data-field="replacement_tooling_id" data-id="${item.id}" hidden aria-hidden="true">
+                      <button type="button" class="btn-link-card" data-replacement-open-btn ${hasReplacementLink ? '' : 'disabled'} data-target-id="${hasReplacementLink ? replacementIdValue : ''}" onclick="handleReplacementLinkButtonClick(event, this)">
+                        Go to card
+                      </button>
                     </div>
                   </div>
-                  <input type="text" class="replacement-hidden-input" value="${hasReplacementLink ? replacementIdValue : ''}" data-field="replacement_tooling_id" data-id="${item.id}" hidden aria-hidden="true">
-                  <button type="button" class="btn-link-card" data-replacement-open-btn ${hasReplacementLink ? '' : 'disabled'} data-target-id="${hasReplacementLink ? replacementIdValue : ''}" onclick="handleReplacementLinkButtonClick(event, this)">
-                    Go to card
-                  </button>
                 </div>
-                <p class="detail-help">Appears when status is Obsolete. Use the ID displayed on the replacement card.</p>
-              </div>
-            </div>
-            
-                
-                <!-- Column 3: Supplier & Tooling -->
-                <div class="detail-group detail-grid">
-                  <div class="detail-group-title">Supplier & Tooling</div>
-              <div class="detail-item detail-item-full">
-                <span class="detail-label">Tooling Description</span>
-                <input type="text" class="detail-input" value="${item.tool_description || ''}" data-field="tool_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">Supplier</span>
-                <input type="text" class="detail-input" value="${item.supplier || ''}" data-field="supplier" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">Ownership</span>
-                <input type="text" class="detail-input" value="${item.tool_ownership || ''}" data-field="tool_ownership" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">Customer</span>
-                <input type="text" class="detail-input" value="${item.customer || ''}" data-field="customer" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">Tool Number</span>
-                <input type="text" class="detail-input" value="${item.tool_number_arb || ''}" data-field="tool_number_arb" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">Quantity</span>
-                <input type="text" class="detail-input" value="${item.tool_quantity || ''}" data-field="tool_quantity" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">Value (BRL)</span>
-                <input type="number" class="detail-input" value="${amountBrlValue}" data-field="amount_brl" data-id="${item.id}" onchange="autoSaveTooling(${item.id})" inputmode="decimal" step="0.01" min="0">
+
+                <!-- Column 3: Comments -->
+                  <div class="detail-group detail-grid comments-group">
+                    <div class="detail-group-title">Comments</div>
+                    <div class="card-comments-container">
+                      <textarea 
+                      class="card-comments-textarea" 
+                      placeholder="Add comments or notes here..."
+                      data-field="comments" 
+                      data-id="${item.id}"
+                      onchange="autoSaveTooling(${item.id})"
+                      >${item.comments || ''}</textarea>
+                    </div>
                   </div>
-                </div>
               </div>
             </div>
             <button class="carousel-nav carousel-nav-next" onclick="navigateCarousel(${index}, 'next')" aria-label="Next">
@@ -4710,42 +5435,86 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
 
           <!-- Aba Documentation -->
           <div class="card-tab-content" data-tab="documentation">
-            <div class="detail-group detail-grid">
-              <div class="detail-item">
-                <span class="detail-label">Bailment Agreement Signed</span>
-                <input type="text" class="detail-input" value="${item.bailment_agreement_signed || ''}" data-field="bailment_agreement_signed" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+            <div class="tooling-details-grid" style="grid-template-columns: repeat(2, 1fr); gap: 24px;">
+              <!-- Column 1: Documentation Fields -->
+              <div class="detail-group detail-grid">
+                <div class="detail-group-title">Documentation</div>
+                <div class="detail-item">
+                  <span class="detail-label">Bailment Agreement Signed</span>
+                  <input type="text" class="detail-input" value="${item.bailment_agreement_signed || ''}" data-field="bailment_agreement_signed" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Tooling Book</span>
+                  <input type="text" class="detail-input" value="${item.tooling_book || ''}" data-field="tooling_book" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Disposition</span>
+                  <input type="text" class="detail-input" value="${item.disposition || ''}" data-field="disposition" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">VPCR</span>
+                  <input type="text" class="detail-input" value="${item.vpcr || ''}" data-field="vpcr" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Finish Due Date</span>
+                  <input type="date" class="detail-input" value="${item.finish_due_date || ''}" data-field="finish_due_date" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                </div>
+                <div class="detail-item">
+                  <span class="detail-label">Asset Number</span>
+                  <input type="text" class="detail-input" value="${item.asset_number || ''}" data-field="asset_number" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                </div>
+                <div class="detail-item full-width">
+                  <span class="detail-label">STIM</span>
+                  <input type="text" class="detail-input" value="${item.stim_tooling_management || ''}" data-field="stim_tooling_management" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                </div>
               </div>
-              <div class="detail-item">
-                <span class="detail-label">Tooling Book</span>
-                <input type="text" class="detail-input" value="${item.tooling_book || ''}" data-field="tooling_book" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+              
+              <!-- Column 2: Supplier & Tooling -->
+              <div class="detail-group detail-grid">
+                <div class="detail-group-title">Supplier & Tooling</div>
+                <div class="detail-item detail-pair">
+                  <div class="detail-item">
+                    <span class="detail-label">Supplier</span>
+                    <input type="text" class="detail-input" list="supplierList-${index}" value="${item.supplier || ''}" data-field="supplier" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                    <datalist id="supplierList-${index}"></datalist>
+                  </div>
+                  <div class="detail-item">
+                    <span class="detail-label">Responsible</span>
+                    <input type="text" class="detail-input" list="ownerList-${index}" value="${item.cummins_responsible || ''}" data-field="cummins_responsible" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                    <datalist id="ownerList-${index}"></datalist>
+                  </div>
+                </div>
+                <div class="detail-item detail-pair">
+                  <div class="detail-item">
+                    <span class="detail-label">Ownership</span>
+                    <input type="text" class="detail-input" value="${item.tool_ownership || ''}" data-field="tool_ownership" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                  </div>
+                  <div class="detail-item">
+                    <span class="detail-label">BU</span>
+                    <input type="text" class="detail-input" value="${item.bu || ''}" data-field="bu" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                  </div>
+                </div>
+                <div class="detail-item detail-pair">
+                  <div class="detail-item">
+                    <span class="detail-label">Customer</span>
+                    <input type="text" class="detail-input" value="${item.customer || ''}" data-field="customer" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                  </div>
+                  <div class="detail-item">
+                    <span class="detail-label">Tool Number</span>
+                    <input type="text" class="detail-input" value="${item.tool_number_arb || ''}" data-field="tool_number_arb" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                  </div>
+                </div>
+                <div class="detail-item detail-pair">
+                  <div class="detail-item">
+                    <span class="detail-label">Quantity</span>
+                    <input type="text" class="detail-input" value="${item.tool_quantity || ''}" data-field="tool_quantity" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                  </div>
+                  <div class="detail-item">
+                    <span class="detail-label">Value (BRL)</span>
+                    <input type="number" class="detail-input" value="${amountBrlValue}" data-field="amount_brl" data-id="${item.id}" onchange="autoSaveTooling(${item.id})" inputmode="decimal" step="0.01" min="0">
+                  </div>
+                </div>
               </div>
-              <div class="detail-item">
-                <span class="detail-label">Disposition</span>
-                <input type="text" class="detail-input" value="${item.disposition || ''}" data-field="disposition" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">VPCR</span>
-                <input type="text" class="detail-input" value="${item.vpcr || ''}" data-field="vpcr" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">Finish Due Date</span>
-                <input type="date" class="detail-input" value="${item.finish_due_date || ''}" data-field="finish_due_date" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item">
-                <span class="detail-label">Asset Number</span>
-                <input type="text" class="detail-input" value="${item.asset_number || ''}" data-field="asset_number" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-              <div class="detail-item full-width">
-                <span class="detail-label">STIM</span>
-                <input type="text" class="detail-input" value="${item.stim_tooling_management || ''}" data-field="stim_tooling_management" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
-              </div>
-            </div>
-          </div>
-
-          <!-- Aba Comments -->
-          <div class="card-tab-content" data-tab="comments">
-            <div class="comments-container">
-              <textarea class="comments-textarea" rows="10" data-field="comments" data-id="${item.id}" onchange="autoSaveTooling(${item.id})" placeholder="Add your comments here...">${item.comments || ''}</textarea>
             </div>
           </div>
 
@@ -4775,6 +5544,43 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
     `;
 }
 
+function populateCardDataLists(sortedData) {
+  // Get unique suppliers from suppliersData
+  const uniqueSuppliers = Array.isArray(suppliersData)
+    ? [...new Set(
+        suppliersData
+          .map(item => String(item?.supplier || '').trim())
+          .filter(name => name.length > 0)
+      )].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+    : [];
+
+  // Get unique owners from toolingData
+  const uniqueOwners = [...new Set(
+    sortedData
+      .map(item => String(item?.cummins_responsible || '').trim())
+      .filter(name => name.length > 0)
+  )].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  // Populate datalists for each card
+  sortedData.forEach((item, index) => {
+    // Populate supplier datalist
+    const supplierList = document.getElementById(`supplierList-${index}`);
+    if (supplierList) {
+      supplierList.innerHTML = uniqueSuppliers
+        .map(name => `<option value="${escapeHtml(name)}"></option>`)
+        .join('');
+    }
+
+    // Populate owner datalist
+    const ownerList = document.getElementById(`ownerList-${index}`);
+    if (ownerList) {
+      ownerList.innerHTML = uniqueOwners
+        .map(name => `<option value="${escapeHtml(name)}"></option>`)
+        .join('');
+    }
+  });
+}
+
 async function hydrateCardsAfterRender(sortedData, renderToken, supplierContext, chainMembership) {
   if (supplierContext) {
     hydrateAttachmentBadges(sortedData, renderToken, supplierContext).catch((error) => {
@@ -4789,7 +5595,11 @@ async function hydrateCardsAfterRender(sortedData, renderToken, supplierContext,
     updateCardStatusAttribute(index, item.status || '');
   });
 
+  // Populate supplier and owner datalists for all cards
+  populateCardDataLists(sortedData);
+
   primeCardSnapshots(sortedData);
+  refreshCardCarouselState();
 }
 
 // Alterna expansão do card
@@ -4895,48 +5705,55 @@ function navigateCarousel(cardIndex, direction) {
   if (nextBtn) nextBtn.disabled = currentIndex === columns.length - 1;
 }
 
+function refreshCardCarouselState() {
+  const isCarouselMode = window.innerWidth <= DATA_TAB_CAROUSEL_BREAKPOINT;
+  document.querySelectorAll('.tooling-card').forEach(card => {
+    const track = card.querySelector('[data-carousel-track]');
+    const carousel = card.querySelector('.tooling-details-carousel');
+    const prevBtn = card.querySelector('.carousel-nav-prev');
+    const nextBtn = card.querySelector('.carousel-nav-next');
+    if (!track || !carousel || !prevBtn || !nextBtn) {
+      return;
+    }
+
+    const columns = Array.from(track.children);
+    const maxIndex = Math.max(0, columns.length - 1);
+    const gap = 14;
+
+    if (isCarouselMode) {
+      let currentIndex = parseInt(track.dataset.carouselIndex || '0', 10);
+      if (Number.isNaN(currentIndex)) {
+        currentIndex = 0;
+      }
+      currentIndex = Math.min(currentIndex, maxIndex);
+      track.dataset.carouselIndex = String(currentIndex);
+
+      const columnWidth = carousel.offsetWidth;
+      const newX = -(currentIndex * (columnWidth + gap));
+      track.style.transform = `translateX(${newX}px)`;
+
+      prevBtn.disabled = currentIndex === 0;
+      nextBtn.disabled = maxIndex === 0 || currentIndex === maxIndex;
+    } else {
+      track.style.transform = 'translateX(0)';
+      delete track.dataset.carouselIndex;
+      prevBtn.disabled = false;
+      nextBtn.disabled = false;
+    }
+  });
+}
+
 // Reset carousel position on window resize
 let resizeTimeout;
 window.addEventListener('resize', () => {
   clearTimeout(resizeTimeout);
   resizeTimeout = setTimeout(() => {
-    const isCarouselMode = window.innerWidth <= 1400;
-    
-    // Reset all carousels and update button states
-    document.querySelectorAll('.tooling-card').forEach(card => {
-      const track = card.querySelector('[data-carousel-track]');
-      const carousel = card.querySelector('.tooling-details-carousel');
-      const prevBtn = card.querySelector('.carousel-nav-prev');
-      const nextBtn = card.querySelector('.carousel-nav-next');
-      
-      if (track && carousel && prevBtn && nextBtn) {
-        const columns = Array.from(track.children);
-        const maxIndex = Math.max(0, columns.length - 1);
-        const gap = 14;
-        
-        if (isCarouselMode) {
-          let currentIndex = parseInt(track.dataset.carouselIndex || '0', 10);
-          if (Number.isNaN(currentIndex)) currentIndex = 0;
-          currentIndex = Math.min(currentIndex, maxIndex);
-          track.dataset.carouselIndex = String(currentIndex);
-          
-          const newColumnWidth = carousel.offsetWidth;
-          const newX = -(currentIndex * (newColumnWidth + gap));
-          track.style.transform = `translateX(${newX}px)`;
-          
-          // Update button states
-          prevBtn.disabled = currentIndex === 0;
-          nextBtn.disabled = maxIndex === 0 || currentIndex === maxIndex;
-        } else {
-          // Reset to first position when exiting carousel mode
-          track.style.transform = 'translateX(0)';
-          delete track.dataset.carouselIndex;
-          prevBtn.disabled = false;
-          nextBtn.disabled = false;
-        }
-      }
-    });
+    refreshCardCarouselState();
   }, 150);
+});
+
+document.addEventListener('DOMContentLoaded', () => {
+  refreshCardCarouselState();
 });
 
 function toggleCard(index) {
@@ -4978,6 +5795,10 @@ function toggleCard(index) {
         // Insere o body no card
         card.insertAdjacentHTML('beforeend', bodyHTML);
         card.setAttribute('data-body-loaded', 'true');
+        applyInitialThousandsMask(card);
+        
+        // Restaura reminders de data persistentes
+        restoreDateReminders(itemId);
         
         // Initialize drag and drop for attachment dropzone
         const dropzone = card.querySelector('.card-attachments-dropzone');
@@ -5298,11 +6119,7 @@ async function updateInterfaceAfterSave() {
         // Aplica o filtro de expiração se estiver ativo
         if (expirationFilterEnabled) {
           filteredSuppliers = filteredSuppliers.filter(supplier => {
-            const expired = parseInt(supplier.expired) || 0;
-            const warning1 = parseInt(supplier.warning_1year) || 0;
-            const warning2 = parseInt(supplier.warning_2years) || 0;
-            const critical = expired + warning1 + warning2;
-            return critical > 0;
+            return ExpirationMetrics.hasCriticalItems(supplier);
           });
         }
         
@@ -5351,13 +6168,38 @@ async function loadAnalytics() {
   try {
     const analytics = await window.api.getAnalytics();
     
+    // Calcula métricas usando a mesma lógica da barra inferior
+    let expiredCount = 0;
+    let expiringCount = 0;
+    
+    if (Array.isArray(suppliersData) && suppliersData.length > 0) {
+      const summary = suppliersData.reduce((acc, supplier) => {
+        const metrics = ExpirationMetrics.calculate(supplier);
+        acc.expired += metrics.expired;
+        acc.expiring += metrics.expiringWithin2Years;
+        return acc;
+      }, { expired: 0, expiring: 0 });
+      
+      expiredCount = summary.expired;
+      expiringCount = summary.expiring;
+    } else {
+      expiredCount = analytics.expired_total || 0;
+      expiringCount = analytics.expiring_two_years || 0;
+    }
+    
     // Métricas principais
     document.getElementById('totalTooling').textContent = analytics.total || 0;
+    document.getElementById('totalExpired').textContent = expiredCount;
+    document.getElementById('totalExpiring').textContent = expiringCount;
     document.getElementById('totalSuppliers').textContent = analytics.suppliers || 0;
     document.getElementById('totalResponsibles').textContent = analytics.responsibles || 0;
+    document.getElementById('totalActive').textContent = analytics.active || 0;
     
     // Top suppliers
     displayTopSuppliers(suppliersData);
+    
+    // Steps summary
+    await displayStepsSummary();
     
     if (!Array.isArray(suppliersData) || suppliersData.length === 0) {
       updateStatusBar(analytics);
@@ -5378,14 +6220,53 @@ function displayTopSuppliers(suppliers) {
   
   tableBody.innerHTML = sortedSuppliers.map(supplier => {
     const total = parseInt(supplier.total) || 0;
+    const metrics = ExpirationMetrics.calculate(supplier);
     
     return `
       <tr>
         <td>${escapeHtml(supplier.supplier)}</td>
         <td><span class="table-number">${total}</span></td>
+        <td><span class="table-number table-number--expired">${metrics.expired}</span></td>
+        <td><span class="table-number table-number--warning">${metrics.expiringWithin2Years}</span></td>
       </tr>
     `;
   }).join('');
+}
+
+async function displayStepsSummary() {
+  const tableBody = document.querySelector('#stepsSummaryTable tbody');
+  if (!tableBody) return;
+  
+  try {
+    // Busca dados agregados dos steps
+    const stepsData = await window.api.getStepsSummary();
+    
+    if (!stepsData || stepsData.length === 0) {
+      tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #999;">No data available</td></tr>';
+      return;
+    }
+    
+    // Calcula o total para as porcentagens
+    const totalWithSteps = stepsData.reduce((sum, item) => sum + item.count, 0);
+    
+    // Formata os dados com porcentagens
+    const stepsArray = stepsData.map(item => ({
+      steps: item.steps,
+      count: item.count,
+      percentage: totalWithSteps > 0 ? ((item.count / totalWithSteps) * 100).toFixed(1) : 0
+    }));
+    
+    tableBody.innerHTML = stepsArray.map(item => `
+      <tr>
+        <td><strong>${escapeHtml(item.steps)}</strong></td>
+        <td><span class="table-number">${item.count}</span></td>
+        <td><span class="table-number">${item.percentage}%</span></td>
+      </tr>
+    `).join('');
+    
+  } catch (error) {
+    tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #f44;">Error loading steps data</td></tr>';
+  }
 }
 
 function syncStatusBarWithSuppliers() {
@@ -5395,13 +6276,11 @@ function syncStatusBarWithSuppliers() {
 
   const summary = suppliersData.reduce((acc, supplier) => {
     const total = parseInt(supplier.total, 10) || 0;
-    const expired = parseInt(supplier.expired, 10) || 0;
-    const warning1 = parseInt(supplier.warning_1year, 10) || 0;
-    const warning2 = parseInt(supplier.warning_2years, 10) || 0;
+    const metrics = ExpirationMetrics.calculate(supplier);
 
     acc.total += total;
-    acc.expired += expired;
-    acc.expiring += expired + warning1 + warning2;
+    acc.expired += metrics.expired;
+    acc.expiring += metrics.expiringWithin2Years;
     return acc;
   }, { total: 0, expired: 0, expiring: 0 });
 
@@ -5748,11 +6627,7 @@ async function filterSuppliersAndTooling(searchTerm) {
     
     if (expirationFilterEnabled) {
       filteredSuppliers = filteredSuppliers.filter(supplier => {
-        const expired = parseInt(supplier.expired) || 0;
-        const warning1 = parseInt(supplier.warning_1year) || 0;
-        const warning2 = parseInt(supplier.warning_2years) || 0;
-        const critical = expired + warning1 + warning2;
-        return critical > 0;
+        return ExpirationMetrics.hasCriticalItems(supplier);
       });
     }
     

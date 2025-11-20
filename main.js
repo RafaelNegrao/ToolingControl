@@ -33,6 +33,188 @@ const SUPPLIER_INFO_SHEET_NAME = 'Supplier Info';
 const SUPPLIER_INFO_TIMESTAMP_LABEL = 'Last Import Timestamp';
 const SUPPLIER_METADATA_TABLE = 'supplier_metadata';
 
+function sanitizeReplacementId(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  const digitsOnly = String(value).trim().replace(/\D+/g, '');
+  if (!digitsOnly) {
+    return '';
+  }
+  const numeric = parseInt(digitsOnly, 10);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return '';
+  }
+  return String(numeric);
+}
+
+function parseLocalizedNumber(value) {
+  if (value === null || value === undefined) {
+    return 0;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  let s = String(value).trim();
+  if (s === '') {
+    return 0;
+  }
+
+  s = s.replace(/\s+/g, '').replace(/\u00A0/g, '');
+  s = s.replace(/[^\d.,-]/g, '');
+  if (s === '' || s === '-' || s === '+') {
+    return 0;
+  }
+
+  const thousandsPattern = /^-?\d{1,3}(?:[.,]\d{3})+$/;
+  if (thousandsPattern.test(s)) {
+    const normalized = Number(s.replace(/[.,]/g, ''));
+    return Number.isNaN(normalized) ? 0 : normalized;
+  }
+
+  const lastComma = s.lastIndexOf(',');
+  const lastDot = s.lastIndexOf('.');
+  const separatorIndex = Math.max(lastComma, lastDot);
+
+  if (separatorIndex !== -1) {
+    const integerPartRaw = s.slice(0, separatorIndex);
+    const fractionalRaw = s.slice(separatorIndex + 1);
+    const sign = integerPartRaw.startsWith('-') ? '-' : '';
+    const integerPart = integerPartRaw.replace(/[^\d]/g, '') || '0';
+    const fractionalPart = fractionalRaw.replace(/[^\d]/g, '');
+    if (fractionalPart.length > 0) {
+      const normalized = Number(`${sign}${integerPart}.${fractionalPart}`);
+      if (!Number.isNaN(normalized)) {
+        return normalized;
+      }
+    }
+  }
+
+  const fallback = Number(s.replace(/[^\d-]/g, ''));
+  return Number.isNaN(fallback) ? 0 : fallback;
+}
+
+function normalizeExpirationDate(rawValue) {
+  if (rawValue === null || rawValue === undefined) {
+    return null;
+  }
+
+  const rawString = String(rawValue).trim();
+  if (rawString === '') {
+    return null;
+  }
+
+  const numericValue = Number(rawString);
+  const isNumeric = !Number.isNaN(numericValue) && /^-?\d+(\.\d+)?$/.test(rawString);
+
+  if (isNumeric) {
+    const excelEpoch = new Date(EXCEL_EPOCH_MS);
+    const days = Math.floor(numericValue);
+    const milliseconds = Math.round((numericValue - days) * MS_PER_DAY);
+    const date = new Date(excelEpoch.getTime() + days * MS_PER_DAY + milliseconds);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toISOString().split('T')[0];
+    }
+  } else {
+    const parsed = new Date(rawString);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toISOString().split('T')[0];
+    }
+  }
+  return null;
+}
+
+function calculateExpirationFromFormula({ remaining, forecast, productionDate }) {
+  const baseDate = productionDate ? new Date(productionDate) : new Date();
+  if (Number.isNaN(baseDate.getTime())) {
+    return null;
+  }
+
+  const totalDays = forecast <= 0
+    ? Math.round(remaining)
+    : Math.round((remaining / forecast) * 365);
+
+  if (Number.isNaN(totalDays)) {
+    return null;
+  }
+
+  const expirationDate = new Date(baseDate);
+  expirationDate.setDate(expirationDate.getDate() + totalDays);
+  if (Number.isNaN(expirationDate.getTime())) {
+    return null;
+  }
+  return expirationDate.toISOString().split('T')[0];
+}
+
+function resolveToolingExpirationDate(item) {
+  if (!item) {
+    return '';
+  }
+
+  let expirationDateValue = normalizeExpirationDate(item.expiration_date);
+  if (!expirationDateValue) {
+    const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || Number(item.tooling_life_qty) || 0;
+    const produced = Number(parseLocalizedNumber(item.produced)) || Number(item.produced) || 0;
+    const remaining = toolingLife - produced;
+    const forecast = Number(parseLocalizedNumber(item.annual_volume_forecast)) || Number(item.annual_volume_forecast) || 0;
+    const productionDateValue = item.date_remaining_tooling_life || '';
+    const calculatedExpiration = calculateExpirationFromFormula({
+      remaining,
+      forecast,
+      productionDate: productionDateValue
+    });
+    if (calculatedExpiration) {
+      expirationDateValue = calculatedExpiration;
+    }
+  }
+  return expirationDateValue || '';
+}
+
+function getExpirationDiffDays(expirationDate) {
+  if (!expirationDate) {
+    return null;
+  }
+  const expDate = new Date(expirationDate);
+  if (Number.isNaN(expDate.getTime())) {
+    return null;
+  }
+  const now = new Date();
+  return Math.ceil((expDate - now) / MS_PER_DAY);
+}
+
+function classifyToolingExpirationState(item) {
+  if (!item) {
+    return { state: 'ok', expirationDate: '', diffDays: null };
+  }
+
+  const normalizedStatus = String(item.status || '').trim().toLowerCase();
+  const hasReplacementLink = Boolean(sanitizeReplacementId(item.replacement_tooling_id));
+  if (normalizedStatus === 'obsolete') {
+    return {
+      state: hasReplacementLink ? 'obsolete-replaced' : 'obsolete',
+      expirationDate: '',
+      diffDays: null
+    };
+  }
+
+  const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || Number(item.tooling_life_qty) || 0;
+  const produced = Number(parseLocalizedNumber(item.produced)) || Number(item.produced) || 0;
+  const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
+  const expirationDateValue = resolveToolingExpirationDate(item) || '';
+  const diffDays = getExpirationDiffDays(expirationDateValue);
+
+  if (percentUsedValue >= 100 || (typeof diffDays === 'number' && diffDays < 0)) {
+    return { state: 'expired', expirationDate: expirationDateValue, diffDays };
+  }
+
+  if (typeof diffDays === 'number' && diffDays <= 730) {
+    return { state: 'warning', expirationDate: expirationDateValue, diffDays };
+  }
+
+  return { state: 'ok', expirationDate: expirationDateValue, diffDays };
+}
+
 function dbGet(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.get(sql, params, (err, row) => {
@@ -718,53 +900,59 @@ ipcMain.handle('load-tooling', async () => {
 
 ipcMain.handle('get-suppliers-with-stats', async () => {
   return new Promise((resolve, reject) => {
-    db.all(`
-      SELECT 
-        supplier,
-        COUNT(*) as total,
-        SUM(CASE 
-          WHEN (percent_tooling_life IS NOT NULL AND CAST(percent_tooling_life AS REAL) >= 100.0)
-            OR (tooling_life_qty > 0 AND produced >= tooling_life_qty)
-          THEN 1 
-          ELSE 0 
-        END) as expired,
-        SUM(CASE 
-          WHEN (percent_tooling_life IS NULL OR CAST(percent_tooling_life AS REAL) < 100.0)
-            AND (tooling_life_qty = 0 OR produced < tooling_life_qty)
-            AND expiration_date IS NOT NULL 
-            AND julianday(expiration_date) - julianday('now') > 0
-            AND julianday(expiration_date) - julianday('now') <= 365
-          THEN 1 
-          ELSE 0 
-        END) as warning_1year,
-        SUM(CASE 
-          WHEN (percent_tooling_life IS NULL OR CAST(percent_tooling_life AS REAL) < 100.0)
-            AND (tooling_life_qty = 0 OR produced < tooling_life_qty)
-            AND expiration_date IS NOT NULL 
-            AND julianday(expiration_date) - julianday('now') > 365
-            AND julianday(expiration_date) - julianday('now') <= 730
-          THEN 1 
-          ELSE 0 
-        END) as warning_2years,
-        SUM(CASE 
-          WHEN expiration_date IS NOT NULL AND julianday(expiration_date) - julianday('now') BETWEEN 730 AND 1825 THEN 1 
-          ELSE 0 
-        END) as ok_5years,
-        SUM(CASE 
-          WHEN expiration_date IS NOT NULL AND julianday(expiration_date) - julianday('now') > 1825 THEN 1 
-          ELSE 0 
-        END) as ok_plus
-      FROM ferramental
-      WHERE supplier IS NOT NULL AND supplier != ''
-      GROUP BY supplier
-      ORDER BY supplier
-    `, [], (err, rows) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(rows);
+    db.all(
+      `SELECT * FROM ferramental WHERE supplier IS NOT NULL AND supplier != ''`,
+      [],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+          return;
+        }
+
+        const supplierMap = new Map();
+
+        rows.forEach(item => {
+          const supplierName = String(item.supplier || '').trim();
+          if (!supplierName) {
+            return;
+          }
+
+          if (!supplierMap.has(supplierName)) {
+            supplierMap.set(supplierName, {
+              supplier: supplierName,
+              total: 0,
+              expired: 0,
+              warning_1year: 0,
+              warning_2years: 0,
+              ok_5years: 0,
+              ok_plus: 0
+            });
+          }
+
+          const metrics = supplierMap.get(supplierName);
+          metrics.total += 1;
+
+          const classification = classifyToolingExpirationState(item);
+
+          if (classification.state === 'expired') {
+            metrics.expired += 1;
+          } else if (classification.state === 'warning') {
+            metrics.warning_1year += 1;
+          } else if (classification.state === 'ok' && typeof classification.diffDays === 'number') {
+            if (classification.diffDays > 730 && classification.diffDays <= 1825) {
+              metrics.ok_5years += 1;
+            } else if (classification.diffDays > 1825) {
+              metrics.ok_plus += 1;
+            }
+          }
+        });
+
+        const result = Array.from(supplierMap.values()).sort((a, b) =>
+          a.supplier.localeCompare(b.supplier, 'pt-BR', { sensitivity: 'base' })
+        );
+        resolve(result);
       }
-    });
+    );
   });
 });
 
@@ -873,17 +1061,23 @@ ipcMain.handle('get-analytics', async () => {
         COUNT(DISTINCT supplier) as suppliers,
         COUNT(DISTINCT cummins_responsible) as responsibles,
         SUM(CASE 
-          WHEN (percent_tooling_life IS NOT NULL AND CAST(percent_tooling_life AS REAL) >= 100.0)
-            OR (tooling_life_qty > 0 AND produced >= tooling_life_qty)
+          WHEN UPPER(status) = 'ACTIVE' THEN 1
+          ELSE 0
+        END) as active,
+        SUM(CASE 
+          WHEN ((percent_tooling_life IS NOT NULL AND CAST(percent_tooling_life AS REAL) >= 100.0)
+            OR (tooling_life_qty > 0 AND produced >= tooling_life_qty))
+            AND NOT (UPPER(status) = 'OBSOLETE' AND replacement_tooling_id IS NOT NULL AND replacement_tooling_id != '')
           THEN 1
           ELSE 0
         END) as expired_total,
         SUM(CASE 
-          WHEN (percent_tooling_life IS NULL OR CAST(percent_tooling_life AS REAL) < 100.0)
-            AND (tooling_life_qty = 0 OR produced < tooling_life_qty)
+          WHEN NOT ((percent_tooling_life IS NOT NULL AND CAST(percent_tooling_life AS REAL) >= 100.0)
+                OR (tooling_life_qty > 0 AND produced >= tooling_life_qty))
             AND expiration_date IS NOT NULL 
             AND julianday(expiration_date) - julianday('now') > 0
             AND julianday(expiration_date) - julianday('now') <= 730
+            AND NOT (UPPER(status) = 'OBSOLETE' AND replacement_tooling_id IS NOT NULL AND replacement_tooling_id != '')
           THEN 1
           ELSE 0
         END) as expiring_two_years
@@ -893,6 +1087,28 @@ ipcMain.handle('get-analytics', async () => {
         reject(err);
       } else {
         resolve(rows[0]);
+      }
+    });
+  });
+});
+
+ipcMain.handle('get-steps-summary', async () => {
+  return new Promise((resolve, reject) => {
+    db.all(`
+      SELECT 
+        steps,
+        COUNT(*) as count
+      FROM ferramental
+      WHERE steps IS NOT NULL 
+        AND TRIM(steps) != '' 
+        AND TRIM(steps) != '0'
+      GROUP BY steps
+      ORDER BY CAST(steps AS INTEGER)
+    `, [], (err, rows) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve(rows || []);
       }
     });
   });
@@ -910,9 +1126,21 @@ ipcMain.handle('create-tooling', async (event, data) => {
   return new Promise((resolve, reject) => {
     try {
       const pn = (data?.pn || '').trim();
+      const pnDescription = (data?.pn_description || '').trim();
       const supplier = (data?.supplier || '').trim();
       const toolingLife = parseFloat(data?.tooling_life_qty) || 0;
       const produced = parseFloat(data?.produced) || 0;
+      const toolDescription = (data?.tool_description || '').trim();
+      const productionDateValue = (data?.date_remaining_tooling_life || '').trim();
+      const productionDate = productionDateValue.length > 0 ? productionDateValue : null;
+      const forecastRaw = data?.annual_volume_forecast;
+      const parsedForecast =
+        forecastRaw === null || forecastRaw === undefined
+          ? null
+          : (typeof forecastRaw === 'number' ? forecastRaw : parseFloat(forecastRaw));
+      const annualForecast = Number.isFinite(parsedForecast) && parsedForecast > 0 ? parsedForecast : null;
+      const forecastDateValue = (data?.date_annual_volume || '').trim();
+      const forecastDate = forecastDateValue.length > 0 ? forecastDateValue : null;
 
       if (!pn || !supplier) {
         resolve({ success: false, error: 'PN e fornecedor são obrigatórios.' });
@@ -922,30 +1150,35 @@ ipcMain.handle('create-tooling', async (event, data) => {
       const remaining = toolingLife - produced;
       const percent = toolingLife > 0 ? ((produced / toolingLife) * 100).toFixed(1) : 0;
 
-      const toolDescription = (data?.tool_description || '').trim();
-
       db.run(
         `INSERT INTO ferramental (
           pn,
+          pn_description,
           supplier,
           tool_description,
           tooling_life_qty,
           produced,
           remaining_tooling_life_pcs,
           percent_tooling_life,
+          annual_volume_forecast,
+          date_annual_volume,
           status,
           last_update,
           date_remaining_tooling_life
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)`,
         [
           pn,
+          pnDescription,
           supplier,
           toolDescription,
           toolingLife,
           produced,
           remaining >= 0 ? remaining : 0,
           percent,
-          'ACTIVE'
+          annualForecast,
+          forecastDate,
+          'ACTIVE',
+          productionDate
         ],
         function(err) {
           if (err) {
@@ -1700,6 +1933,9 @@ function createWindow () {
 
   mainWindow.removeMenu();
   mainWindow.loadFile('index.html');
+  mainWindow.once('ready-to-show', () => {
+    mainWindow.maximize();
+  });
 }
 
 app.whenReady().then(async () => {

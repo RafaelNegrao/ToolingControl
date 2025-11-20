@@ -131,20 +131,44 @@
 
           <!-- Replacement timeline overlay -->
           <div class="modal-overlay replacement-timeline-overlay" id="replacementTimelineOverlay">
-            <div class="timeline-modal-card">
-              <div class="timeline-modal-header">
+            <div class="replacement-graph-container" id="replacementGraphContainer">
+              <div class="replacement-graph-header">
                 <div>
-                  <p class="timeline-modal-eyebrow">Replacement chain</p>
+                  <p class="replacement-graph-eyebrow">Replacement chain</p>
                   <h3 id="replacementTimelineTitle">Linked tooling</h3>
                 </div>
-                <button class="timeline-close-btn" type="button" onclick="closeReplacementTimelineOverlay()" title="Close">
+                <button class="replacement-close-btn" type="button" onclick="closeReplacementTimelineOverlay()" title="Close">
                   <i class="ph ph-x"></i>
                 </button>
               </div>
-              <div class="timeline-modal-body">
+              <div class="replacement-graph-viewport" id="replacementGraphViewport">
                 <div class="timeline-loading" id="replacementTimelineLoading">Loading chain…</div>
                 <div class="timeline-empty" id="replacementTimelineEmpty">No linked tooling found.</div>
-                <div class="timeline-list" id="replacementTimelineList"></div>
+                <canvas class="replacement-grid-canvas" id="replacementGridCanvas"></canvas>
+                <canvas class="replacement-connections-canvas" id="replacementConnectionsCanvas"></canvas>
+                <div class="replacement-graph-nodes" id="replacementTimelineList"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Replacement picker overlay -->
+          <div class="modal-overlay replacement-picker-overlay" id="replacementPickerOverlay">
+            <div class="replacement-picker-card">
+              <div class="replacement-picker-header">
+                <div>
+                  <p class="replacement-picker-eyebrow" data-replacement-overlay-title>Select replacement tooling</p>
+                  <h3 class="replacement-picker-title" data-replacement-overlay-subtitle>Card</h3>
+                </div>
+                <button class="replacement-close-btn" type="button" onclick="closeReplacementPickerOverlay()" title="Close">
+                  <i class="ph ph-x"></i>
+                </button>
+              </div>
+              <div class="replacement-picker-search">
+                <i class="ph ph-magnifying-glass"></i>
+                <input type="text" placeholder="Search by ID, PN, supplier..." data-replacement-overlay-search />
+              </div>
+              <div class="replacement-picker-body scrollable" data-replacement-overlay-list>
+                <!-- Options injected dynamically -->
               </div>
             </div>
           </div>
@@ -163,8 +187,20 @@
                 </button>
               </div>
               <div class="modal-body simple-comments">
-                <label for="supplierNotesText">Notes & Observations</label>
-                <textarea class="comments-textarea" id="supplierNotesText" placeholder="Write your notes here..."></textarea>
+                <div class="comment-field-group">
+                  <label for="supplierNotesText">Notes & Observations</label>
+                  <textarea class="comments-textarea" id="supplierNotesText" placeholder="Write your notes here..."></textarea>
+                </div>
+                
+                <div class="comment-field-group">
+                  <label for="supplierContactText">Supplier Contact</label>
+                  <textarea class="comments-textarea" id="supplierContactText" placeholder="Name, email, phone..."></textarea>
+                </div>
+                
+                <div class="comment-field-group">
+                  <label for="cumminsResponsibleText">Cummins Owner</label>
+                  <input type="text" class="comments-input" id="cumminsResponsibleText" placeholder="Owner name...">
+                </div>
               </div>
               <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="closeSupplierCommentsModal()">Cancel</button>
@@ -244,10 +280,17 @@
                 <label for="addToolingPNDescription">PN Description</label>
                 <input type="text" id="addToolingPNDescription" class="modal-input-text" maxlength="255" placeholder="Optional" />
               </div>
-              <div class="modal-field">
-                <label for="addToolingSupplier">Supplier *</label>
-                <input list="addToolingSupplierList" id="addToolingSupplier" class="modal-input-text" placeholder="Select or type" required />
-                <datalist id="addToolingSupplierList"></datalist>
+              <div class="modal-field modal-field-row">
+                <div class="modal-field">
+                  <label for="addToolingSupplier">Supplier *</label>
+                  <input list="addToolingSupplierList" id="addToolingSupplier" class="modal-input-text" placeholder="Select or type" required />
+                  <datalist id="addToolingSupplierList"></datalist>
+                </div>
+                <div class="modal-field">
+                  <label for="addToolingOwner">Responsible</label>
+                  <input list="addToolingOwnerList" id="addToolingOwner" class="modal-input-text" placeholder="Select or type" />
+                  <datalist id="addToolingOwnerList"></datalist>
+                </div>
               </div>
               <div class="modal-field">
                 <label for="addToolingDescription">Tooling Description</label>
@@ -256,13 +299,13 @@
               <div class="modal-field modal-field-row">
                 <div class="modal-field">
                   <label for="addToolingLife">Tooling Life Qty *</label>
-                  <input type="number" id="addToolingLife" class="modal-input-text" min="0" step="1" placeholder="0" required />
+                  <input type="text" id="addToolingLife" class="modal-input-text" inputmode="numeric" data-mask="thousands" placeholder="0" required />
                 </div>
               </div>
               <div class="modal-field modal-field-row">
                 <div class="modal-field">
                   <label for="addToolingProduced">Produced *</label>
-                  <input type="number" id="addToolingProduced" class="modal-input-text" min="0" step="1" placeholder="0" required />
+                  <input type="text" id="addToolingProduced" class="modal-input-text" inputmode="numeric" data-mask="thousands" placeholder="0" required />
                 </div>
                 <div class="modal-field">
                   <label for="addToolingProductionDate">Production Date</label>
@@ -272,7 +315,7 @@
               <div class="modal-field modal-field-row">
                 <div class="modal-field">
                   <label for="addToolingForecast">Annual Volume Forecast</label>
-                  <input type="number" id="addToolingForecast" class="modal-input-text" min="0" step="1" placeholder="Optional" />
+                  <input type="text" id="addToolingForecast" class="modal-input-text" inputmode="numeric" data-mask="thousands" placeholder="Optional" />
                 </div>
                 <div class="modal-field">
                   <label for="addToolingForecastDate">Forecast Date</label>
@@ -395,6 +438,24 @@
                   <p class="metric-value" id="totalTooling">0</p>
                 </div>
               </div>
+              <div class="metric-card metric-card--expired">
+                <div class="metric-icon">
+                  <i class="ph ph-warning-circle"></i>
+                </div>
+                <div class="metric-content">
+                  <h3>Expired</h3>
+                  <p class="metric-value" id="totalExpired">0</p>
+                </div>
+              </div>
+              <div class="metric-card metric-card--warning">
+                <div class="metric-icon">
+                  <i class="ph ph-clock"></i>
+                </div>
+                <div class="metric-content">
+                  <h3>Expiring (2 years)</h3>
+                  <p class="metric-value" id="totalExpiring">0</p>
+                </div>
+              </div>
               <div class="metric-card">
                 <div class="metric-icon">
                   <i class="ph ph-factory"></i>
@@ -413,6 +474,15 @@
                   <p class="metric-value" id="totalResponsibles">0</p>
                 </div>
               </div>
+              <div class="metric-card metric-card--active">
+                <div class="metric-icon">
+                  <i class="ph ph-check-circle"></i>
+                </div>
+                <div class="metric-content">
+                  <h3>Active</h3>
+                  <p class="metric-value" id="totalActive">0</p>
+                </div>
+              </div>
             </div>
             
             <div class="analytics-section">
@@ -422,7 +492,27 @@
                   <thead>
                     <tr>
                       <th>Supplier</th>
-                      <th>Tooling Count</th>
+                      <th>Total</th>
+                      <th>Expired</th>
+                      <th>Expiring (2y)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <!-- Rows will be inserted here -->
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div class="analytics-section">
+              <h3 class="analytics-section-title">Tooling by Steps</h3>
+              <div class="analytics-table-container">
+                <table class="analytics-table" id="stepsSummaryTable">
+                  <thead>
+                    <tr>
+                      <th>Steps</th>
+                      <th>Quantity</th>
+                      <th>Percentage</th>
                     </tr>
                   </thead>
                   <tbody>
