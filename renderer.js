@@ -4447,6 +4447,242 @@ function closeAddToolingModal() {
   if (forecastDateInput) forecastDateInput.value = '';
 }
 
+function buildCommentsListHTML(commentsJson, itemId) {
+  let comments = [];
+  
+  if (commentsJson) {
+    try {
+      comments = JSON.parse(commentsJson);
+      if (!Array.isArray(comments)) {
+        comments = [];
+      }
+    } catch (e) {
+      comments = [];
+    }
+  }
+  
+  if (comments.length === 0) {
+    return '<div class="comments-empty">No comments yet</div>';
+  }
+  
+  return comments.map((comment, index) => {
+    const date = comment.date || 'N/A';
+    const text = escapeHtml(comment.text || '');
+    const isInitial = comment.initial === true;
+    
+    return `
+      <div class="comment-card ${isInitial ? 'comment-initial' : ''}" data-comment-index="${index}">
+        <div class="comment-header">
+          <span class="comment-date">${escapeHtml(date)}</span>
+          ${!isInitial ? `
+            <div class="comment-actions">
+              <button class="btn-comment-action" onclick="editComment(${itemId}, ${index})" title="Edit">
+                <i class="ph ph-pencil-simple"></i>
+              </button>
+              <button class="btn-comment-action" onclick="deleteComment(${itemId}, ${index})" title="Delete">
+                <i class="ph ph-trash"></i>
+              </button>
+            </div>
+          ` : '<span class="comment-initial-badge">Initial</span>'}
+        </div>
+        <div class="comment-divider"></div>
+        <div class="comment-text" id="commentText_${itemId}_${index}">${text}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function handleCommentKeydown(event, itemId) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    addComment(itemId);
+  }
+}
+
+function addComment(itemId) {
+  const input = document.getElementById(`commentInput_${itemId}`);
+  if (!input) return;
+  
+  const text = input.value.trim();
+  if (!text) return;
+  
+  const item = toolingData.find(item => Number(item.id) === Number(itemId));
+  if (!item) return;
+  
+  let comments = [];
+  if (item.comments) {
+    try {
+      comments = JSON.parse(item.comments);
+      if (!Array.isArray(comments)) {
+        comments = [];
+      }
+    } catch (e) {
+      comments = [];
+    }
+  }
+  
+  const now = new Date();
+  const dateStr = now.toLocaleString('pt-BR', { 
+    day: '2-digit', 
+    month: '2-digit', 
+    year: 'numeric', 
+    hour: '2-digit', 
+    minute: '2-digit' 
+  });
+  
+  comments.push({
+    date: dateStr,
+    text: text,
+    initial: false
+  });
+  
+  item.comments = JSON.stringify(comments);
+  input.value = '';
+  
+  updateCommentsDisplay(itemId);
+  autoSaveTooling(itemId, true);
+}
+
+function editComment(itemId, commentIndex) {
+  const item = toolingData.find(item => Number(item.id) === Number(itemId));
+  if (!item) return;
+  
+  let comments = [];
+  if (item.comments) {
+    try {
+      comments = JSON.parse(item.comments);
+      if (!Array.isArray(comments)) {
+        return;
+      }
+    } catch (e) {
+      return;
+    }
+  }
+  
+  if (commentIndex < 0 || commentIndex >= comments.length) return;
+  if (comments[commentIndex].initial) return;
+  
+  const textElement = document.getElementById(`commentText_${itemId}_${commentIndex}`);
+  if (!textElement) return;
+  
+  const currentText = comments[commentIndex].text || '';
+  const card = textElement.closest('.comment-card');
+  
+  textElement.innerHTML = `
+    <input 
+      type="text" 
+      class="comment-edit-input" 
+      id="commentEditInput_${itemId}_${commentIndex}"
+      value="${escapeHtml(currentText)}"
+      onkeydown="handleCommentEditKeydown(event, ${itemId}, ${commentIndex})"
+    />
+  `;
+  
+  const editInput = document.getElementById(`commentEditInput_${itemId}_${commentIndex}`);
+  if (editInput) {
+    editInput.focus();
+    editInput.select();
+  }
+  
+  const actions = card.querySelector('.comment-actions');
+  if (actions) {
+    actions.innerHTML = `
+      <button class="btn-comment-action" onclick="saveCommentEdit(${itemId}, ${commentIndex})" title="Save">
+        <i class="ph ph-check"></i>
+      </button>
+      <button class="btn-comment-action" onclick="cancelCommentEdit(${itemId})" title="Cancel">
+        <i class="ph ph-x"></i>
+      </button>
+    `;
+  }
+}
+
+function handleCommentEditKeydown(event, itemId, commentIndex) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    saveCommentEdit(itemId, commentIndex);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    cancelCommentEdit(itemId);
+  }
+}
+
+function saveCommentEdit(itemId, commentIndex) {
+  const editInput = document.getElementById(`commentEditInput_${itemId}_${commentIndex}`);
+  if (!editInput) return;
+  
+  const newText = editInput.value.trim();
+  if (!newText) {
+    showNotification('Comment cannot be empty', 'error');
+    return;
+  }
+  
+  const item = toolingData.find(item => Number(item.id) === Number(itemId));
+  if (!item) return;
+  
+  let comments = [];
+  if (item.comments) {
+    try {
+      comments = JSON.parse(item.comments);
+      if (!Array.isArray(comments)) {
+        return;
+      }
+    } catch (e) {
+      return;
+    }
+  }
+  
+  if (commentIndex < 0 || commentIndex >= comments.length) return;
+  
+  comments[commentIndex].text = newText;
+  item.comments = JSON.stringify(comments);
+  
+  updateCommentsDisplay(itemId);
+  autoSaveTooling(itemId, true);
+}
+
+function cancelCommentEdit(itemId) {
+  updateCommentsDisplay(itemId);
+}
+
+function deleteComment(itemId, commentIndex) {
+  const item = toolingData.find(item => Number(item.id) === Number(itemId));
+  if (!item) return;
+  
+  let comments = [];
+  if (item.comments) {
+    try {
+      comments = JSON.parse(item.comments);
+      if (!Array.isArray(comments)) {
+        return;
+      }
+    } catch (e) {
+      return;
+    }
+  }
+  
+  if (commentIndex < 0 || commentIndex >= comments.length) return;
+  if (comments[commentIndex].initial) return;
+  
+  if (!confirm('Delete this comment?')) return;
+  
+  comments.splice(commentIndex, 1);
+  item.comments = JSON.stringify(comments);
+  
+  updateCommentsDisplay(itemId);
+  autoSaveTooling(itemId, true);
+}
+
+function updateCommentsDisplay(itemId) {
+  const item = toolingData.find(item => Number(item.id) === Number(itemId));
+  if (!item) return;
+  
+  const commentsList = document.getElementById(`commentsList_${itemId}`);
+  if (!commentsList) return;
+  
+  commentsList.innerHTML = buildCommentsListHTML(item.comments || '', itemId);
+}
+
 async function submitAddToolingForm() {
   const { form, pnInput, supplierInput, ownerInput, lifeInput, producedInput } = addToolingElements;
   const pnDescriptionInput = document.getElementById('addToolingPNDescription');
@@ -4497,6 +4733,24 @@ async function submitAddToolingForm() {
   }
 
   try {
+    // Criar comentário inicial
+    const now = new Date();
+    const dateStr = now.toLocaleString('pt-BR', { 
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric', 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+    
+    const initialComment = {
+      date: dateStr,
+      text: `Created with Tooling Life: ${formatNumberWithThousands(toolingLife)} pcs`,
+      initial: true
+    };
+    
+    const commentsJson = JSON.stringify([initialComment]);
+    
     const payload = {
       pn,
       pn_description: pnDescription,
@@ -4508,7 +4762,8 @@ async function submitAddToolingForm() {
       date_remaining_tooling_life: productionDate,
       annual_volume_forecast: forecast > 0 ? forecast : null,
       date_annual_volume: forecastDate,
-      status: 'ACTIVE'
+      status: 'ACTIVE',
+      comments: commentsJson
     };
     const result = await window.api.createTooling(payload);
 
@@ -5005,13 +5260,25 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
             <div class="detail-group detail-grid comments-group">
               <div class="detail-group-title">Comments</div>
               <div class="card-comments-container">
-                <textarea 
-                  class="card-comments-textarea" 
-                  placeholder="Add comments or notes here..."
-                  data-field="comments" 
-                  data-id="${item.id}"
-                  onchange="autoSaveTooling(${item.id})"
-                >${item.comments || ''}</textarea>
+                <div class="comments-input-area">
+                  <input 
+                    type="text" 
+                    class="comment-input" 
+                    id="commentInput_${item.id}"
+                    placeholder="Add a comment..."
+                    onkeydown="handleCommentKeydown(event, ${item.id})"
+                  />
+                  <button 
+                    class="btn-add-comment" 
+                    onclick="addComment(${item.id})"
+                    title="Add comment"
+                  >
+                    <i class="ph ph-plus"></i>
+                  </button>
+                </div>
+                <div class="comments-list" id="commentsList_${item.id}">
+                  ${buildCommentsListHTML(item.comments || '', item.id)}
+                </div>
               </div>
             </div>
           </div>
