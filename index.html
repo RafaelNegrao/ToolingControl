@@ -245,20 +245,61 @@
 
         <!-- Delete confirmation modal -->
         <div class="modal-overlay" id="deleteConfirmOverlay">
-          <div class="modal-card">
-            <div class="modal-icon">
-              <i class="ph ph-warning"></i>
+          <div class="delete-modal">
+            <div class="delete-modal-icon">
+              <i class="ph ph-trash"></i>
             </div>
-            <h3>Confirm deletion</h3>
-            <p>To delete <span class="modal-highlight" id="deleteItemDescription"></span>, enter the code below.</p>
-            <div class="modal-code-container">
-              <span class="modal-code-label">Code:</span>
-              <span class="modal-code" id="deleteConfirmCode"></span>
+            <div class="delete-modal-content">
+              <h3 class="delete-modal-title">Delete Tooling</h3>
+              <p class="delete-modal-description">You are about to delete <strong id="deleteItemDescription"></strong>. This action cannot be undone.</p>
+              <div class="delete-modal-code-box">
+                <span class="delete-code-label">Enter confirmation code</span>
+                <span class="delete-code-value" id="deleteConfirmCode"></span>
+              </div>
+              <input type="text" id="deleteConfirmInput" class="delete-modal-input" maxlength="3" placeholder="000" autocomplete="off"/>
             </div>
-            <input type="text" id="deleteConfirmInput" class="modal-input" maxlength="3" placeholder="Type the code" autocomplete="off"/>
-            <div class="modal-actions">
-              <button class="btn-secondary" type="button" onclick="cancelDeleteTooling()">Cancel</button>
-              <button class="btn-danger" type="button" onclick="handleDeleteConfirmation()">Delete</button>
+            <div class="delete-modal-actions">
+              <button class="delete-btn-cancel" type="button" onclick="cancelDeleteTooling()">
+                <i class="ph ph-x"></i>
+                <span>Cancel</span>
+              </button>
+              <button class="delete-btn-confirm" type="button" onclick="handleDeleteConfirmation()">
+                <i class="ph ph-trash"></i>
+                <span>Delete</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Comment delete modal -->
+        <div class="modal-overlay" id="commentDeleteOverlay">
+          <div class="comment-delete-modal">
+            <div class="comment-delete-icon">
+              <i class="ph ph-chats-circle"></i>
+            </div>
+            <div class="comment-delete-content">
+              <div class="comment-delete-header">
+                <h3>Delete Comment</h3>
+                <p>This comment will be removed permanently from the tooling record below.</p>
+                <div class="comment-delete-context" id="commentDeleteContext">Tooling —</div>
+              </div>
+              <div class="comment-delete-preview">
+                <div class="comment-delete-preview-meta">
+                  <i class="ph ph-clock"></i>
+                  <span id="commentDeleteDate">--/--/----</span>
+                </div>
+                <p class="comment-delete-preview-text" id="commentDeleteText">Select a comment to preview its content.</p>
+              </div>
+            </div>
+            <div class="comment-delete-actions">
+              <button type="button" class="comment-delete-btn cancel" onclick="closeCommentDeleteModal()">
+                <i class="ph ph-arrow-counter-clockwise"></i>
+                <span>Keep comment</span>
+              </button>
+              <button type="button" class="comment-delete-btn confirm" id="commentDeleteConfirmBtn" onclick="confirmCommentDelete()">
+                <i class="ph ph-trash"></i>
+                <span>Delete comment</span>
+              </button>
             </div>
           </div>
         </div>

@@ -9,6 +9,14 @@ let currentSupplier = null;
 let currentSortCriteria = null;
 let currentSortOrder = 'asc';
 let deleteConfirmState = { id: null, code: '', descriptor: '' };
+let commentDeleteState = { itemId: null, commentIndex: null };
+let commentDeleteElements = {
+  overlay: null,
+  context: null,
+  date: null,
+  text: null,
+  confirmButton: null
+};
 let addToolingElements = {
   overlay: null,
   form: null,
@@ -631,6 +639,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   const expirationFilterSwitch = document.getElementById('expirationFilterSwitch');
   const supplierMenuBtn = document.getElementById('supplierMenuBtn');
   const supplierFilterOverlay = document.getElementById('supplierFilterOverlay');
+  const commentDeleteOverlay = document.getElementById('commentDeleteOverlay');
+  const commentDeleteContext = document.getElementById('commentDeleteContext');
+  const commentDeleteDate = document.getElementById('commentDeleteDate');
+  const commentDeleteText = document.getElementById('commentDeleteText');
+  const commentDeleteConfirmBtn = document.getElementById('commentDeleteConfirmBtn');
 
   addToolingElements = {
     overlay: addOverlay,
@@ -654,6 +667,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     modalList: attachmentsModalList,
     modalEmpty: attachmentsModalEmpty,
     modalSupplier: attachmentsModalSupplier
+  };
+
+  commentDeleteElements = {
+    overlay: commentDeleteOverlay,
+    context: commentDeleteContext,
+    date: commentDeleteDate,
+    text: commentDeleteText,
+    confirmButton: commentDeleteConfirmBtn
   };
 
   replacementTimelineElements = {
@@ -702,6 +723,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     attachmentsModalOverlay.addEventListener('click', (e) => {
       if (e.target === attachmentsModalOverlay) {
         closeAttachmentsModal();
+      }
+    });
+  }
+
+  if (commentDeleteOverlay) {
+    commentDeleteOverlay.addEventListener('click', (e) => {
+      if (e.target === commentDeleteOverlay) {
+        closeCommentDeleteModal();
       }
     });
   }
@@ -1000,6 +1029,10 @@ document.addEventListener('keydown', (e) => {
   if (attachmentsOverlay && attachmentsOverlay.classList.contains('active') && e.key === 'Escape') {
     closeAttachmentsModal();
   }
+  const commentOverlay = commentDeleteElements.overlay || document.getElementById('commentDeleteOverlay');
+  if (commentOverlay && commentOverlay.classList.contains('active') && e.key === 'Escape') {
+    closeCommentDeleteModal();
+  }
   const expirationOverlay = expirationInfoElements.overlay;
   if (expirationOverlay && expirationOverlay.classList.contains('active') && e.key === 'Escape') {
     closeExpirationInfoModal();
@@ -1024,8 +1057,23 @@ async function loadSuppliers() {
     suppliersData = await window.api.getSuppliersWithStats();
     applyExpirationFilter();
     populateAddToolingSuppliers();
+    await loadResponsibles();
   } catch (error) {
     showNotification('Error loading suppliers', 'error');
+  }
+}
+
+// Carrega lista de responsáveis únicos
+let responsiblesData = [];
+async function loadResponsibles() {
+  try {
+    responsiblesData = await window.api.getUniqueResponsibles();
+    populateAddToolingOwners();
+    if (Array.isArray(toolingData) && toolingData.length > 0) {
+      populateCardDataLists(toolingData);
+    }
+  } catch (error) {
+    console.error('Error loading responsibles:', error);
   }
 }
 
@@ -1306,16 +1354,9 @@ async function importSupplierData() {
     }
 
     const updated = result.updated ?? 0;
-    const created = result.created ?? 0;
-    const skipped = result.skipped ?? 0;
-    
-    let successMsg = 'Import finished: ';
-    const parts = [];
-    if (updated > 0) parts.push(`${updated} updated`);
-    if (created > 0) parts.push(`${created} created`);
-    if (skipped > 0) parts.push(`${skipped} skipped`);
-    successMsg += parts.join(', ');
-    
+    const successMsg = updated === 1
+      ? '1 registro atualizado'
+      : `${updated} registros atualizados`;
     showToast(successMsg, 'success');
 
     await loadToolingBySupplier(currentSupplier);
@@ -3757,6 +3798,13 @@ function buildCardPayloadFromDom(id) {
   if (!rawValues) {
     return null;
   }
+  
+  // Adicionar comentários do toolingData ao payload
+  const item = toolingData.find(item => Number(item.id) === Number(id));
+  if (item && item.comments) {
+    rawValues.comments = item.comments;
+  }
+  
   const serialized = serializeCardValues(rawValues);
   const snapshotKey = getSnapshotKey(id);
   const hasChanges = cardSnapshotStore.get(snapshotKey) !== serialized;
@@ -3823,8 +3871,24 @@ function autoSaveTooling(id, immediate = false) {
 function formatDate(dateString) {
   if (!dateString) return 'N/A';
   try {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('pt-BR');
+    const normalized = String(dateString).trim();
+    const isoMatch = normalized.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T].*)?$/);
+    if (isoMatch) {
+      const [, year, month, day] = isoMatch;
+      return `${day}/${month}/${year}`;
+    }
+
+    const slashMatch = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2})$/);
+    if (slashMatch) {
+      const [, day, month, year] = slashMatch;
+      return `${day.padStart(2, '0')}/${month.padStart(2, '0')}/20${year}`;
+    }
+
+    const date = new Date(normalized);
+    if (!Number.isNaN(date.getTime())) {
+      return date.toLocaleDateString('pt-BR');
+    }
+    return normalized;
   } catch {
     return dateString;
   }
@@ -3834,18 +3898,26 @@ function formatDate(dateString) {
 function formatDateTime(dateString) {
   if (!dateString) return 'N/A';
   try {
-    let normalized = dateString.trim();
+    const normalized = String(dateString).trim();
+    const isoMatch = normalized.match(/^(\d{4})-(\d{2})-(\d{2})(?:[ T].*)?$/);
+    if (isoMatch) {
+      const [, year, month, day] = isoMatch;
+      return `${day}/${month}/${year}`;
+    }
+
     if (!normalized.includes('T')) {
-      normalized = normalized.replace(' ', 'T');
+      const fallbackDate = new Date(normalized);
+      if (!Number.isNaN(fallbackDate.getTime())) {
+        return fallbackDate.toLocaleDateString('pt-BR');
+      }
     }
-    if (!/[zZ]$/.test(normalized)) {
-      normalized += 'Z';
+
+    let coerced = normalized;
+    if (!/[zZ]$/.test(coerced)) {
+      coerced += coerced.includes('T') ? 'Z' : 'T00:00:00Z';
     }
-    let date = new Date(normalized);
-    if (isNaN(date.getTime())) {
-      date = new Date(dateString);
-    }
-    return date.toLocaleDateString('pt-BR');
+    const parsed = new Date(coerced);
+    return Number.isNaN(parsed.getTime()) ? normalized : parsed.toLocaleDateString('pt-BR');
   } catch {
     return dateString;
   }
@@ -4374,12 +4446,10 @@ function populateAddToolingOwners() {
 
   list.innerHTML = '';
 
-  // Get unique owners from toolingData
-  const uniqueOwners = [...new Set(
-    toolingData
-      .map(item => String(item?.cummins_responsible || '').trim())
-      .filter(name => name.length > 0)
-  )].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  // Get unique owners from responsiblesData (loaded from DB)
+  const uniqueOwners = Array.isArray(responsiblesData) 
+    ? [...responsiblesData].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+    : [];
 
   uniqueOwners.forEach((name) => {
     const option = document.createElement('option');
@@ -4449,7 +4519,7 @@ function closeAddToolingModal() {
 
 function buildCommentsListHTML(commentsJson, itemId) {
   let comments = [];
-  
+
   if (commentsJson) {
     try {
       comments = JSON.parse(commentsJson);
@@ -4460,30 +4530,53 @@ function buildCommentsListHTML(commentsJson, itemId) {
       comments = [];
     }
   }
-  
+
   if (comments.length === 0) {
     return '<div class="comments-empty">No comments yet</div>';
   }
-  
+
   return comments.map((comment, index) => {
     const date = comment.date || 'N/A';
     const text = escapeHtml(comment.text || '');
     const isInitial = comment.initial === true;
-    
+    const isImported = comment.origin === 'import';
+    const cardClasses = ['comment-card'];
+    if (isInitial) {
+      cardClasses.push('comment-initial');
+    }
+    if (isImported) {
+      cardClasses.push('comment-imported');
+    }
+
+    let headerRight = '';
+    if (isInitial) {
+      headerRight = '<span class="comment-initial-badge">Initial</span>';
+    } else if (isImported) {
+      headerRight = `
+        <div class="comment-actions comment-actions--readonly" title="Imported from spreadsheet">
+          <i class="ph ph-cloud-arrow-down" aria-hidden="true"></i>
+        </div>
+      `;
+    } else {
+      headerRight = `
+        <div class="comment-actions">
+          <button class="btn-comment-action" onclick="editComment(${itemId}, ${index})" title="Edit">
+            <i class="ph ph-pencil-simple"></i>
+          </button>
+          <button class="btn-comment-action" onclick="openCommentDeleteModal(${itemId}, ${index})" title="Delete">
+            <i class="ph ph-trash"></i>
+          </button>
+        </div>
+      `;
+    }
+
     return `
-      <div class="comment-card ${isInitial ? 'comment-initial' : ''}" data-comment-index="${index}">
+      <div class="${cardClasses.join(' ')}" data-comment-index="${index}">
         <div class="comment-header">
-          <span class="comment-date">${escapeHtml(date)}</span>
-          ${!isInitial ? `
-            <div class="comment-actions">
-              <button class="btn-comment-action" onclick="editComment(${itemId}, ${index})" title="Edit">
-                <i class="ph ph-pencil-simple"></i>
-              </button>
-              <button class="btn-comment-action" onclick="deleteComment(${itemId}, ${index})" title="Delete">
-                <i class="ph ph-trash"></i>
-              </button>
-            </div>
-          ` : '<span class="comment-initial-badge">Initial</span>'}
+          <span class="comment-date${isImported ? ' comment-date--imported' : ''}">
+            <span class="comment-date-text">${escapeHtml(date)}</span>
+          </span>
+          ${headerRight}
         </div>
         <div class="comment-divider"></div>
         <div class="comment-text" id="commentText_${itemId}_${index}">${text}</div>
@@ -4493,10 +4586,11 @@ function buildCommentsListHTML(commentsJson, itemId) {
 }
 
 function handleCommentKeydown(event, itemId) {
-  if (event.key === 'Enter') {
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
     addComment(itemId);
   }
+  // Enter normal quebra a linha; Ctrl/Cmd+Enter envia
 }
 
 function addComment(itemId) {
@@ -4561,6 +4655,10 @@ function editComment(itemId, commentIndex) {
   
   if (commentIndex < 0 || commentIndex >= comments.length) return;
   if (comments[commentIndex].initial) return;
+  if (comments[commentIndex].origin === 'import') {
+    showNotification('Imported comments cannot be edited', 'info');
+    return;
+  }
   
   const textElement = document.getElementById(`commentText_${itemId}_${commentIndex}`);
   if (!textElement) return;
@@ -4568,15 +4666,8 @@ function editComment(itemId, commentIndex) {
   const currentText = comments[commentIndex].text || '';
   const card = textElement.closest('.comment-card');
   
-  textElement.innerHTML = `
-    <input 
-      type="text" 
-      class="comment-edit-input" 
-      id="commentEditInput_${itemId}_${commentIndex}"
-      value="${escapeHtml(currentText)}"
-      onkeydown="handleCommentEditKeydown(event, ${itemId}, ${commentIndex})"
-    />
-  `;
+  const editFieldHtml = `<textarea class="comment-edit-input" id="commentEditInput_${itemId}_${commentIndex}" rows="4" onkeydown="handleCommentEditKeydown(event, ${itemId}, ${commentIndex})">${escapeHtml(currentText)}</textarea>`;
+  textElement.innerHTML = editFieldHtml;
   
   const editInput = document.getElementById(`commentEditInput_${itemId}_${commentIndex}`);
   if (editInput) {
@@ -4598,7 +4689,7 @@ function editComment(itemId, commentIndex) {
 }
 
 function handleCommentEditKeydown(event, itemId, commentIndex) {
-  if (event.key === 'Enter') {
+  if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();
     saveCommentEdit(itemId, commentIndex);
   } else if (event.key === 'Escape') {
@@ -4645,32 +4736,151 @@ function cancelCommentEdit(itemId) {
   updateCommentsDisplay(itemId);
 }
 
-function deleteComment(itemId, commentIndex) {
-  const item = toolingData.find(item => Number(item.id) === Number(itemId));
-  if (!item) return;
-  
-  let comments = [];
-  if (item.comments) {
-    try {
-      comments = JSON.parse(item.comments);
-      if (!Array.isArray(comments)) {
-        return;
-      }
-    } catch (e) {
-      return;
-    }
+function getItemCommentsArray(item) {
+  if (!item || !item.comments) {
+    return [];
   }
-  
-  if (commentIndex < 0 || commentIndex >= comments.length) return;
-  if (comments[commentIndex].initial) return;
-  
-  if (!confirm('Delete this comment?')) return;
-  
+  try {
+    const parsed = JSON.parse(item.comments);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function ensureCommentDeleteElements() {
+  if (!commentDeleteElements.overlay) {
+    commentDeleteElements = {
+      overlay: document.getElementById('commentDeleteOverlay'),
+      context: document.getElementById('commentDeleteContext'),
+      date: document.getElementById('commentDeleteDate'),
+      text: document.getElementById('commentDeleteText'),
+      confirmButton: document.getElementById('commentDeleteConfirmBtn')
+    };
+  }
+  return commentDeleteElements;
+}
+
+function resetCommentDeleteState() {
+  commentDeleteState = { itemId: null, commentIndex: null };
+}
+
+function formatCommentDeleteContext(item) {
+  if (!item) {
+    return 'Tooling';
+  }
+  const parts = [];
+  if (item.id !== undefined) {
+    parts.push(`#${item.id}`);
+  }
+  if (item.pn) {
+    parts.push(item.pn);
+  }
+  if (item.supplier) {
+    parts.push(item.supplier);
+  }
+  return parts.join(' • ') || 'Tooling';
+}
+
+function openCommentDeleteModal(itemId, commentIndex) {
+  const item = toolingData.find(entry => Number(entry.id) === Number(itemId));
+  if (!item) {
+    return;
+  }
+
+  const comments = getItemCommentsArray(item);
+  if (commentIndex < 0 || commentIndex >= comments.length) {
+    return;
+  }
+
+  const targetComment = comments[commentIndex];
+  if (!targetComment) {
+    return;
+  }
+
+  if (targetComment.initial) {
+    showNotification('Initial comments cannot be deleted', 'info');
+    return;
+  }
+
+  if (targetComment.origin === 'import') {
+    showNotification('Imported comments cannot be deleted', 'info');
+    return;
+  }
+
+  commentDeleteState = { itemId, commentIndex };
+  const elements = ensureCommentDeleteElements();
+
+  if (elements.context) {
+    elements.context.textContent = formatCommentDeleteContext(item);
+  }
+  if (elements.date) {
+    elements.date.textContent = targetComment.date || 'No date available';
+  }
+  if (elements.text) {
+    const trimmedText = (targetComment.text || '').trim();
+    elements.text.textContent = trimmedText || 'No content in this comment.';
+  }
+
+  if (elements.overlay) {
+    elements.overlay.classList.add('active');
+  }
+
+  requestAnimationFrame(() => {
+    elements.confirmButton?.focus();
+  });
+}
+
+function closeCommentDeleteModal() {
+  const elements = ensureCommentDeleteElements();
+  elements.overlay?.classList.remove('active');
+  if (elements.text) {
+    elements.text.textContent = '';
+  }
+  if (elements.date) {
+    elements.date.textContent = '';
+  }
+  resetCommentDeleteState();
+}
+
+function confirmCommentDelete() {
+  if (commentDeleteState.itemId === null || commentDeleteState.commentIndex === null) {
+    return;
+  }
+  const deleted = deleteComment(commentDeleteState.itemId, commentDeleteState.commentIndex);
+  if (deleted) {
+    closeCommentDeleteModal();
+  }
+}
+
+function deleteComment(itemId, commentIndex) {
+  const item = toolingData.find(entry => Number(entry.id) === Number(itemId));
+  if (!item) {
+    return false;
+  }
+
+  const comments = getItemCommentsArray(item);
+  if (commentIndex < 0 || commentIndex >= comments.length) {
+    return false;
+  }
+
+  if (comments[commentIndex]?.initial) {
+    showNotification('Initial comments cannot be deleted', 'info');
+    return false;
+  }
+
+  if (comments[commentIndex]?.origin === 'import') {
+    showNotification('Imported comments cannot be deleted', 'info');
+    return false;
+  }
+
   comments.splice(commentIndex, 1);
   item.comments = JSON.stringify(comments);
-  
+
   updateCommentsDisplay(itemId);
   autoSaveTooling(itemId, true);
+  showNotification('Comment deleted', 'success');
+  return true;
 }
 
 function updateCommentsDisplay(itemId) {
@@ -4745,7 +4955,7 @@ async function submitAddToolingForm() {
     
     const initialComment = {
       date: dateStr,
-      text: `Created with Tooling Life: ${formatNumberWithThousands(toolingLife)} pcs`,
+      text: `Created with Tooling Life: ${formatIntegerWithSeparators(toolingLife)} pcs`,
       initial: true
     };
     
@@ -4850,25 +5060,8 @@ async function displayTooling(data) {
   let filteredData = data;
   if (expirationFilterEnabled) {
     filteredData = data.filter(item => {
-      const lifeQty = parseLocalizedNumber(item.tooling_life_qty) || 0;
-      const produced = parseLocalizedNumber(item.produced) || 0;
-      const percentLife = item.percent_tooling_life ? parseFloat(item.percent_tooling_life) : 0;
-      
-      // Verifica se está expirado
-      const isExpired = (percentLife >= 100.0) || (lifeQty > 0 && produced >= lifeQty);
-      if (isExpired) return true;
-      
-      // Verifica se expira em até 2 anos
-      if (item.expiration_date) {
-        const now = new Date();
-        const expDate = new Date(item.expiration_date);
-        const daysUntilExpiration = Math.floor((expDate - now) / (1000 * 60 * 60 * 24));
-        if (daysUntilExpiration > 0 && daysUntilExpiration <= 730) {
-          return true;
-        }
-      }
-      
-      return false;
+      const classification = classifyToolingExpirationState(item);
+      return classification.state === 'expired' || classification.state === 'warning';
     });
   }
 
@@ -5261,13 +5454,13 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
               <div class="detail-group-title">Comments</div>
               <div class="card-comments-container">
                 <div class="comments-input-area">
-                  <input 
-                    type="text" 
+                  <textarea 
                     class="comment-input" 
                     id="commentInput_${item.id}"
                     placeholder="Add a comment..."
+                    rows="3"
                     onkeydown="handleCommentKeydown(event, ${item.id})"
-                  />
+                  ></textarea>
                   <button 
                     class="btn-add-comment" 
                     onclick="addComment(${item.id})"
@@ -5811,40 +6004,63 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
     `;
 }
 
-function populateCardDataLists(sortedData) {
-  // Get unique suppliers from suppliersData
-  const uniqueSuppliers = Array.isArray(suppliersData)
+function getSupplierOptions() {
+  return Array.isArray(suppliersData)
     ? [...new Set(
         suppliersData
           .map(item => String(item?.supplier || '').trim())
           .filter(name => name.length > 0)
       )].sort((a, b) => a.localeCompare(b, 'pt-BR'))
     : [];
+}
 
-  // Get unique owners from toolingData
-  const uniqueOwners = [...new Set(
-    sortedData
+function getResponsibleOptions(sourceData = []) {
+  if (Array.isArray(responsiblesData) && responsiblesData.length > 0) {
+    return [...responsiblesData].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  }
+
+  const fallbackSource = Array.isArray(sourceData) && sourceData.length > 0
+    ? sourceData
+    : (Array.isArray(toolingData) ? toolingData : []);
+
+  return [...new Set(
+    fallbackSource
       .map(item => String(item?.cummins_responsible || '').trim())
       .filter(name => name.length > 0)
   )].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+}
 
-  // Populate datalists for each card
-  sortedData.forEach((item, index) => {
-    // Populate supplier datalist
-    const supplierList = document.getElementById(`supplierList-${index}`);
-    if (supplierList) {
-      supplierList.innerHTML = uniqueSuppliers
-        .map(name => `<option value="${escapeHtml(name)}"></option>`)
-        .join('');
-    }
+function populateCardDataListForIndex(index, supplierOptions, responsibleOptions) {
+  const suppliers = Array.isArray(supplierOptions) ? supplierOptions : getSupplierOptions();
+  const responsibles = Array.isArray(responsibleOptions)
+    ? responsibleOptions
+    : getResponsibleOptions();
 
-    // Populate owner datalist
-    const ownerList = document.getElementById(`ownerList-${index}`);
-    if (ownerList) {
-      ownerList.innerHTML = uniqueOwners
-        .map(name => `<option value="${escapeHtml(name)}"></option>`)
-        .join('');
-    }
+  const supplierList = document.getElementById(`supplierList-${index}`);
+  if (supplierList) {
+    supplierList.innerHTML = suppliers
+      .map(name => `<option value="${escapeHtml(name)}"></option>`)
+      .join('');
+  }
+
+  const ownerList = document.getElementById(`ownerList-${index}`);
+  if (ownerList) {
+    ownerList.innerHTML = responsibles
+      .map(name => `<option value="${escapeHtml(name)}"></option>`)
+      .join('');
+  }
+}
+
+function populateCardDataLists(sortedData) {
+  if (!Array.isArray(sortedData) || sortedData.length === 0) {
+    return;
+  }
+
+  const supplierOptions = getSupplierOptions();
+  const responsibleOptions = getResponsibleOptions(sortedData);
+
+  sortedData.forEach((_, index) => {
+    populateCardDataListForIndex(index, supplierOptions, responsibleOptions);
   });
 }
 
@@ -6061,6 +6277,7 @@ function toggleCard(index) {
         
         // Insere o body no card
         card.insertAdjacentHTML('beforeend', bodyHTML);
+        populateCardDataListForIndex(index);
         card.setAttribute('data-body-loaded', 'true');
         applyInitialThousandsMask(card);
         
@@ -6303,16 +6520,30 @@ async function saveTooling(id) {
       return;
     }
 
-    await window.api.updateTooling(id, prepared.payload);
+    const updateResult = await window.api.updateTooling(id, prepared.payload);
+    if (updateResult?.comments) {
+      prepared.payload.comments = updateResult.comments;
+    }
     showNotification('Dados salvos com sucesso!');
 
     const snapshotKey = getSnapshotKey(id);
-    cardSnapshotStore.set(snapshotKey, prepared.serialized);
+    const refreshedSnapshot = collectCardDomValues(id);
+    if (refreshedSnapshot) {
+      if (prepared.payload.comments !== undefined) {
+        refreshedSnapshot.comments = prepared.payload.comments;
+      }
+      cardSnapshotStore.set(snapshotKey, serializeCardValues(refreshedSnapshot));
+    } else {
+      cardSnapshotStore.set(snapshotKey, prepared.serialized);
+    }
 
     const index = toolingData.findIndex(item => Number(item.id) === Number(id));
     if (index !== -1) {
       toolingData[index] = { ...toolingData[index], ...prepared.payload };
       calculateExpirationDate(index);
+      if (updateResult?.comments) {
+        updateCommentsDisplay(id);
+      }
     }
 
     scheduleInterfaceRefresh('manual-save');
@@ -6329,14 +6560,28 @@ async function saveToolingQuietly(id) {
       return;
     }
 
-    await window.api.updateTooling(id, prepared.payload);
+    const updateResult = await window.api.updateTooling(id, prepared.payload);
+    if (updateResult?.comments) {
+      prepared.payload.comments = updateResult.comments;
+    }
 
     const snapshotKey = getSnapshotKey(id);
-    cardSnapshotStore.set(snapshotKey, prepared.serialized);
+    const refreshedSnapshot = collectCardDomValues(id);
+    if (refreshedSnapshot) {
+      if (prepared.payload.comments !== undefined) {
+        refreshedSnapshot.comments = prepared.payload.comments;
+      }
+      cardSnapshotStore.set(snapshotKey, serializeCardValues(refreshedSnapshot));
+    } else {
+      cardSnapshotStore.set(snapshotKey, prepared.serialized);
+    }
 
     const index = toolingData.findIndex(item => Number(item.id) === Number(id));
     if (index !== -1) {
       toolingData[index] = { ...toolingData[index], ...prepared.payload };
+      if (updateResult?.comments) {
+        updateCommentsDisplay(id);
+      }
     }
 
     scheduleInterfaceRefresh('autosave');

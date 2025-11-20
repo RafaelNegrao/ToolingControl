@@ -32,6 +32,23 @@ const VERIFICATION_KEY_VALUE = '123456';
 const SUPPLIER_INFO_SHEET_NAME = 'Supplier Info';
 const SUPPLIER_INFO_TIMESTAMP_LABEL = 'Last Import Timestamp';
 const SUPPLIER_METADATA_TABLE = 'supplier_metadata';
+const CHANGE_TRACKING_FIELDS = {
+  produced: { label: 'Produced (qty)', type: 'number' },
+  tooling_life_qty: { label: 'Tooling Life (qty)', type: 'number' },
+  annual_volume_forecast: { label: 'Forecast (qty)', type: 'number' },
+  date_remaining_tooling_life: { label: 'Production Date', type: 'date' },
+  date_annual_volume: { label: 'Forecast Date', type: 'date' }
+};
+const CHANGE_TRACKING_IGNORED_FIELDS = new Set([
+  'comments',
+  'remaining_tooling_life_pcs',
+  'percent_tooling_life',
+  'last_update'
+]);
+const CHANGE_NUMBER_FORMATTER = new Intl.NumberFormat('pt-BR', {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 2
+});
 
 function sanitizeReplacementId(value) {
   if (value === null || value === undefined) {
@@ -290,26 +307,77 @@ function parseExcelDate(value) {
   if (value === null || value === undefined || value === '') {
     return null;
   }
+  
+  // Se é um objeto de célula do Excel, extrair o valor real
+  if (typeof value === 'object' && value !== null) {
+    // Verificar se tem result (fórmula)
+    if (value.result !== undefined && value.result !== null) {
+      return parseExcelDate(value.result);
+    }
+    // Verificar se é um objeto Date
+    if (value instanceof Date && !Number.isNaN(value.getTime())) {
+      return value;
+    }
+    // Verificar se tem propriedade text ou richText
+    const textValue = cellValueToString(value);
+    if (textValue) {
+      return parseExcelDate(textValue);
+    }
+    return null;
+  }
+  
+  // Se é um Date válido
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return value;
   }
+  
+  // Se é um número serial do Excel
   if (typeof value === 'number' && !Number.isNaN(value)) {
-    return new Date(EXCEL_EPOCH_MS + value * MS_PER_DAY);
+    // Verificar se é um número serial válido (entre 1 e ~50000 para datas razoáveis)
+    if (value >= 1 && value <= 100000) {
+      return new Date(EXCEL_EPOCH_MS + value * MS_PER_DAY);
+    }
+    return null;
   }
-  const text = cellValueToString(value);
+  
+  // Se é uma string, tentar parsear diferentes formatos
+  const text = String(value).trim();
   if (!text) {
     return null;
   }
+
+  // Valores numéricos em texto (datas salvas como serial do Excel formatado como texto)
+  const numericText = text.replace(',', '.');
+  if (/^-?\d+(?:\.\d+)?$/.test(numericText)) {
+    const serialValue = parseFloat(numericText);
+    if (!Number.isNaN(serialValue) && serialValue >= 1 && serialValue <= 100000) {
+      return new Date(EXCEL_EPOCH_MS + serialValue * MS_PER_DAY);
+    }
+  }
+  
+  // Formato ISO: YYYY-MM-DD
   const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (isoMatch) {
     const [_, year, month, day] = isoMatch;
     return new Date(`${year}-${month}-${day}T00:00:00`);
   }
-  const brMatch = text.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-  if (brMatch) {
-    const [_, day, month, year] = brMatch;
-    return new Date(`${year}-${month}-${day}T00:00:00`);
+  
+  // Formato com barras (prioriza padrão brasileiro DD/MM/YYYY)
+  const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slashMatch) {
+    const [_, firstPart, secondPart, year] = slashMatch;
+    const first = parseInt(firstPart, 10);
+    const second = parseInt(secondPart, 10);
+    const bothValid = first >= 1 && first <= 31 && second >= 1 && second <= 31;
+
+    if (bothValid) {
+      const day = firstPart.padStart(2, '0');
+      const month = secondPart.padStart(2, '0');
+      return new Date(`${year}-${month}-${day}T00:00:00`);
+    }
   }
+  
+  // Tentar parsear com Date nativo como último recurso
   const parsed = new Date(text);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
@@ -318,9 +386,9 @@ function formatDateToISO(date) {
   if (!date || Number.isNaN(date.getTime())) {
     return null;
   }
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 }
 
@@ -334,19 +402,139 @@ function formatDateToBR(date) {
   return `${day}/${month}/${year}`;
 }
 
-function buildUpdatedComments(existing, supplierComment, currentDateStr) {
-  const trimmedExisting = existing ? existing.trimEnd() : '';
-  const entries = [`${currentDateStr} - Data imported`];
+function sanitizeDateLikeInput(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value.trim().replace(/^\+/, '');
+  }
+  return value;
+}
 
-  if (supplierComment) {
-    entries.push(`${currentDateStr} - ${supplierComment}`);
+function normalizeDateInputToISO(value) {
+  const sanitized = sanitizeDateLikeInput(value);
+  if (sanitized === '' || sanitized === null || sanitized === undefined) {
+    return '';
+  }
+  const parsed = parseExcelDate(sanitized);
+  if (parsed && !Number.isNaN(parsed.getTime())) {
+    return formatDateToISO(parsed);
+  }
+  const iso = toISODateString(sanitized);
+  return iso || '';
+}
+
+function normalizeDateInputToBR(value) {
+  const iso = normalizeDateInputToISO(value);
+  if (!iso) {
+    const sanitized = sanitizeDateLikeInput(value);
+    return typeof sanitized === 'string' ? sanitized : '';
+  }
+  const [year, month, day] = iso.split('-');
+  return `${day}/${month}/${year}`;
+}
+
+function humanizeFieldLabel(field) {
+  if (!field || typeof field !== 'string') {
+    return 'Field';
+  }
+  return field
+    .split('_')
+    .filter(Boolean)
+    .map(segment => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ')
+    || field;
+}
+
+function inferChangeTypeFromField(field) {
+  const normalized = (field || '').toLowerCase();
+  if (normalized.includes('date')) {
+    return 'date';
+  }
+  if (/(qty|quantity|amount|produced|forecast|life|percent|value)/.test(normalized)) {
+    return 'number';
+  }
+  return 'string';
+}
+
+function resolveChangeFieldMeta(field) {
+  if (field && Object.prototype.hasOwnProperty.call(CHANGE_TRACKING_FIELDS, field)) {
+    return CHANGE_TRACKING_FIELDS[field];
+  }
+  return {
+    label: humanizeFieldLabel(field),
+    type: inferChangeTypeFromField(field)
+  };
+}
+
+function shouldTrackChangeField(field) {
+  if (!field || typeof field !== 'string') {
+    return false;
+  }
+  const normalized = field.trim();
+  if (normalized === '' || normalized.startsWith('_') || normalized.startsWith('$')) {
+    return false;
+  }
+  return !CHANGE_TRACKING_IGNORED_FIELDS.has(normalized);
+}
+
+function formatChangeCommentText(changeEntries = []) {
+  if (!Array.isArray(changeEntries) || changeEntries.length === 0) {
+    return '';
+  }
+  return changeEntries
+    .map(entry => `${entry.label}, ${entry.oldFormatted} --> ${entry.newFormatted}`)
+    .join('\n');
+}
+
+function buildUpdatedComments(existing, supplierComment, currentDateStr, toolingLife = null, isNewRecord = false, changeEntries = []) {
+  let comments = [];
+  
+  // Tentar parsear comentários existentes
+  if (existing) {
+    try {
+      const parsed = JSON.parse(existing);
+      if (Array.isArray(parsed)) {
+        comments = parsed;
+      }
+    } catch (e) {
+      // Se falhar, é formato antigo de texto - converter para array vazio
+      comments = [];
+    }
+  }
+  
+  // Se for novo registro e tiver tooling life, adicionar comentário inicial
+  if (isNewRecord && toolingLife !== null && toolingLife !== undefined) {
+    const formattedLife = toolingLife.toLocaleString('pt-BR');
+    comments.push({
+      date: currentDateStr,
+      text: `Created with Tooling Life: ${formattedLife} pcs`,
+      initial: true
+    });
+  }
+  
+  // Se há comentário do supplier, adicionar
+  if (supplierComment && supplierComment.trim()) {
+    comments.push({
+      date: currentDateStr,
+      text: supplierComment.trim(),
+      initial: false
+    });
   }
 
-  const addition = entries.join('\n');
-  if (trimmedExisting) {
-    return `${trimmedExisting}\n${addition}`;
+  const changeCommentText = formatChangeCommentText(changeEntries);
+  if (changeCommentText) {
+    comments.push({
+      date: currentDateStr,
+      text: changeCommentText,
+      initial: false,
+      system: true,
+      origin: 'import'
+    });
   }
-  return addition;
+  
+  return JSON.stringify(comments);
 }
 
 function ensureSupplierMetadataTable() {
@@ -519,6 +707,155 @@ function getCurrentTimestampBR() {
   const date = formatDateToBR(now);
   const time = now.toLocaleTimeString('pt-BR', { hour12: false });
   return `${date} ${time}`;
+}
+
+function parseCommentsBlob(source) {
+  if (!source) {
+    return [];
+  }
+  if (Array.isArray(source)) {
+    return [...source];
+  }
+  if (typeof source !== 'string') {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(source);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+function parseNumericValueForChange(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  const text = String(value).trim();
+  if (text === '') {
+    return null;
+  }
+  const compact = text.replace(/\s+/g, '').replace(/\u00A0/g, '');
+  let normalized = compact;
+  const hasDot = compact.includes('.');
+  const hasComma = compact.includes(',');
+  if (hasDot && hasComma) {
+    normalized = compact.replace(/\./g, '').replace(',', '.');
+  } else if (hasComma && !hasDot) {
+    normalized = compact.replace(',', '.');
+  }
+  const parsed = Number(normalized);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+function toISODateString(value) {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().split('T')[0];
+  }
+  const text = String(value).trim();
+  if (text === '') {
+    return '';
+  }
+  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2]}-${isoMatch[3]}`;
+  }
+  const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (slashMatch) {
+    const day = slashMatch[1].padStart(2, '0');
+    const month = slashMatch[2].padStart(2, '0');
+    const year = slashMatch[3];
+    return `${year}-${month}-${day}`;
+  }
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString().split('T')[0];
+}
+
+function normalizeComparableValueForChange(value, type) {
+  if (type === 'number') {
+    const numeric = parseNumericValueForChange(value);
+    return numeric === null ? '' : numeric;
+  }
+  if (type === 'date') {
+    return toISODateString(value) || '';
+  }
+  if (value === null || value === undefined) {
+    return '';
+  }
+  return String(value).trim();
+}
+
+function formatChangeValueForDisplay(value, type) {
+  if (type === 'number') {
+    const numeric = parseNumericValueForChange(value);
+    return numeric === null ? 'N/A' : CHANGE_NUMBER_FORMATTER.format(numeric);
+  }
+  if (type === 'date') {
+    const iso = toISODateString(value);
+    if (!iso) {
+      return 'N/A';
+    }
+    const [year, month, day] = iso.split('-');
+    return `${day}/${month}/${year}`;
+  }
+  if (value === null || value === undefined) {
+    return 'N/A';
+  }
+  const trimmed = String(value).trim();
+  return trimmed === '' ? 'N/A' : trimmed;
+}
+
+function collectChangeEntries(existingRecord, newValues) {
+  if (!existingRecord || !newValues) {
+    return [];
+  }
+  const entries = [];
+  Object.keys(newValues).forEach((field) => {
+    if (!shouldTrackChangeField(field)) {
+      return;
+    }
+    const meta = resolveChangeFieldMeta(field);
+    const before = normalizeComparableValueForChange(existingRecord[field], meta.type);
+    const after = normalizeComparableValueForChange(newValues[field], meta.type);
+    if (before === after) {
+      return;
+    }
+    entries.push({
+      field,
+      label: meta.label,
+      oldFormatted: formatChangeValueForDisplay(existingRecord[field], meta.type),
+      newFormatted: formatChangeValueForDisplay(newValues[field], meta.type)
+    });
+  });
+  return entries;
+}
+
+function mergeChangeEntriesIntoComments(existingComments, incomingComments, changeEntries, timestampStr = getCurrentTimestampBR()) {
+  if (!Array.isArray(changeEntries) || changeEntries.length === 0) {
+    return incomingComments !== undefined ? incomingComments : existingComments;
+  }
+  const base = parseCommentsBlob(incomingComments !== undefined ? incomingComments : existingComments);
+  const changeText = formatChangeCommentText(changeEntries);
+  if (!changeText) {
+    return incomingComments !== undefined ? incomingComments : existingComments;
+  }
+  base.push({
+    date: timestampStr,
+    text: changeText,
+    initial: false,
+    system: true
+  });
+  try {
+    return JSON.stringify(base);
+  } catch (error) {
+    return incomingComments !== undefined ? incomingComments : existingComments;
+  }
 }
 
 // Obter diretório base do executável
@@ -813,17 +1150,16 @@ function ensureTodosTable() {
   });
 }
 
-function executeToolingUpdate(id, payload, attempt = 1) {
+function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
   return new Promise((resolve, reject) => {
     const data = { ...payload };
-    
-    // Validar se payload não está vazio
+    const skipWhenNoTrackedChanges = options?.skipWhenNoTrackedChanges === true;
+
     if (!data || Object.keys(data).length === 0) {
-      resolve({ success: true, changes: 0 });
+      resolve({ success: true, changes: 0, comments: null, skipped: true });
       return;
     }
-    
-    // Only recalculate lifecycle if tooling_life_qty or produced are in the payload
+
     if (data.hasOwnProperty('tooling_life_qty') || data.hasOwnProperty('produced')) {
       const toolingLife = parseFloat(data.tooling_life_qty) || 0;
       const produced = parseFloat(data.produced) || 0;
@@ -834,54 +1170,112 @@ function executeToolingUpdate(id, payload, attempt = 1) {
       data.percent_tooling_life = percentUsed;
     }
 
-    // Filtrar campos válidos (remover undefined, null, campos vazios ou com nomes inválidos)
-    const validFields = Object.keys(data).filter(key => {
-      // Verificar se key é válida
-      if (!key || typeof key !== 'string' || key.trim() === '') {
-        return false;
-      }
-      
-      // Verificar se é campo do banco (não começar com símbolos especiais)
-      const fieldName = key.trim();
-      if (fieldName.startsWith('_') || fieldName.startsWith('$')) {
-        return false;
-      }
-      
-      return data[key] !== undefined;
-    });
-    
-    if (validFields.length === 0) {
-      resolve({ success: true, changes: 0 });
-      return;
-    }
-    
-    const validValues = validFields.map(key => data[key]);
-    const setClause = validFields.map(field => `${field.trim()} = ?`).join(', ');
+    const trackableFields = Object.keys(data).filter(field => shouldTrackChangeField(field));
+    const requiresLookup = trackableFields.length > 0;
 
-    const query = `UPDATE ferramental SET ${setClause}, last_update = datetime('now') WHERE id = ?`;
-    db.run(
-      query,
-      [...validValues, id],
-      async function(err) {
-        if (err && isMissingReplacementColumnError(err) && attempt === 1) {
-          try {
-            await ensureReplacementColumnExists(true);
-            const retryResult = await executeToolingUpdate(id, payload, attempt + 1);
-            resolve(retryResult);
-            return;
-          } catch (retryError) {
-            reject(retryError);
-            return;
+    const finalizeUpdate = (existingRecord) => {
+      let changeEntries = [];
+      if (existingRecord) {
+        changeEntries = collectChangeEntries(existingRecord, data);
+        if (changeEntries.length > 0) {
+          console.debug('[Ferramental][ChangeDebug]', {
+            id,
+            updates: changeEntries.map((entry) => ({
+              field: entry.field,
+              before: entry.oldFormatted,
+              after: entry.newFormatted
+            }))
+          });
+          const customTimestamp = options?.commentTimestamp;
+          data.comments = mergeChangeEntriesIntoComments(
+            existingRecord.comments,
+            data.comments,
+            changeEntries,
+            customTimestamp || getCurrentTimestampBR()
+          );
+        }
+      }
+
+      const validFields = Object.keys(data).filter(key => {
+        if (!key || typeof key !== 'string' || key.trim() === '') {
+          return false;
+        }
+        const fieldName = key.trim();
+        if (fieldName.startsWith('_') || fieldName.startsWith('$')) {
+          return false;
+        }
+        return data[key] !== undefined;
+      });
+
+      if (validFields.length === 0) {
+        resolve({ success: true, changes: 0, comments: existingRecord?.comments ?? null, skipped: true });
+        return;
+      }
+
+      const hasNonTrackableUpdates = validFields.some(field => !shouldTrackChangeField(field));
+      if (
+        skipWhenNoTrackedChanges &&
+        existingRecord &&
+        changeEntries.length === 0 &&
+        !hasNonTrackableUpdates
+      ) {
+        resolve({
+          success: true,
+          changes: 0,
+          comments: existingRecord?.comments ?? null,
+          skipped: true
+        });
+        return;
+      }
+
+      const validValues = validFields.map(key => data[key]);
+      const setClause = validFields.map(field => `${field.trim()} = ?`).join(', ');
+      const query = `UPDATE ferramental SET ${setClause}, last_update = datetime('now') WHERE id = ?`;
+
+      db.run(
+        query,
+        [...validValues, id],
+        async function(err) {
+          if (err && isMissingReplacementColumnError(err) && attempt === 1) {
+            try {
+              await ensureReplacementColumnExists(true);
+              const retryResult = await executeToolingUpdate(id, payload, attempt + 1, options);
+              resolve(retryResult);
+              return;
+            } catch (retryError) {
+              reject(retryError);
+              return;
+            }
+          }
+
+          if (err) {
+            reject(err);
+          } else {
+            resolve({
+              success: true,
+              changes: this.changes,
+              comments: data.comments ?? existingRecord?.comments ?? null,
+              skipped: false
+            });
           }
         }
+      );
+    };
 
-        if (err) {
-          reject(err);
-        } else {
-          resolve({ success: true, changes: this.changes });
+    if (requiresLookup) {
+      const selectFields = new Set(['id', 'comments']);
+      trackableFields.forEach(field => selectFields.add(field));
+      const columnList = Array.from(selectFields).join(', ');
+      db.get(`SELECT ${columnList} FROM ferramental WHERE id = ?`, [id], (selectErr, row) => {
+        if (selectErr) {
+          reject(selectErr);
+          return;
         }
-      }
-    );
+        finalizeUpdate(row || null);
+      });
+    } else {
+      finalizeUpdate(null);
+    }
   });
 }
 
@@ -1041,6 +1435,29 @@ ipcMain.handle('get-all-tooling-ids', async () => {
           reject(err);
         } else {
           resolve(rows);
+        }
+      }
+    );
+  });
+});
+
+ipcMain.handle('get-unique-responsibles', async () => {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT DISTINCT cummins_responsible 
+       FROM ferramental 
+       WHERE cummins_responsible IS NOT NULL 
+         AND TRIM(cummins_responsible) != '' 
+       ORDER BY cummins_responsible ASC`,
+      [],
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          const responsibles = rows
+            .map(row => String(row.cummins_responsible || '').trim())
+            .filter(name => name.length > 0);
+          resolve(responsibles);
         }
       }
     );
@@ -1562,7 +1979,8 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
     const productionDateISO = formatDateToISO(parseExcelDate(row.getCell(6).value));
     const forecastQty = parseNumericCell(row.getCell(7).value);
     const forecastDateISO = formatDateToISO(parseExcelDate(row.getCell(8).value));
-    const supplierComment = cellValueToString(row.getCell(9).value);
+    const supplierCommentRaw = cellValueToString(row.getCell(9).value);
+    const supplierComment = supplierCommentRaw?.trim() || '';
 
     // Se não há ID mas há PN, é um novo ferramental
     if (!id) {
@@ -1573,7 +1991,7 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
       }
 
       // Criar novo registro
-      const mergedComments = buildUpdatedComments('', supplierComment, todayStr);
+      const mergedComments = buildUpdatedComments('', supplierComment, todayStr, toolingLifeQty, true);
       
       await dbRun(
         `INSERT INTO ferramental (
@@ -1601,7 +2019,16 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
 
     // Se há ID, atualizar registro existente
     const record = await dbGet(
-      'SELECT comments FROM ferramental WHERE id = ? AND supplier = ?',
+      `SELECT pn,
+              tool_description,
+              tooling_life_qty,
+              produced,
+              date_remaining_tooling_life,
+              annual_volume_forecast,
+              date_annual_volume,
+              comments
+         FROM ferramental
+        WHERE id = ? AND supplier = ?`,
       [id, supplierName]
     );
 
@@ -1610,7 +2037,29 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
       continue;
     }
 
-    const mergedComments = buildUpdatedComments(record.comments || '', supplierComment, todayStr);
+    const changeEntries = collectChangeEntries(record, {
+      pn: pn || '',
+      tool_description: description || '',
+      tooling_life_qty: toolingLifeQty,
+      produced: producedQty,
+      date_remaining_tooling_life: productionDateISO,
+      annual_volume_forecast: forecastQty,
+      date_annual_volume: forecastDateISO
+    });
+
+    if (changeEntries.length === 0 && !supplierComment) {
+      skipped += 1;
+      continue;
+    }
+
+    const mergedComments = buildUpdatedComments(
+      record.comments || '',
+      supplierComment,
+      todayStr,
+      null,
+      false,
+      changeEntries
+    );
 
     await dbRun(
       `UPDATE ferramental 
@@ -1933,6 +2382,7 @@ function createWindow () {
 
   mainWindow.removeMenu();
   mainWindow.loadFile('index.html');
+  
   mainWindow.once('ready-to-show', () => {
     mainWindow.maximize();
   });
@@ -2070,13 +2520,7 @@ ipcMain.handle('export-all-data', async () => {
 
         // Add data rows
         rows.forEach(row => {
-          // Converter data de YYYY-MM-DD para DD/MM/YYYY
-          let foreDate = row.forecast_date || '';
-          if (foreDate && /^\d{4}-\d{2}-\d{2}$/.test(foreDate)) {
-            const [year, month, day] = foreDate.split('-');
-            foreDate = `${day}/${month}/${year}`;
-          }
-          
+          const foreDate = normalizeDateInputToBR(row.forecast_date);
           worksheet.addRow({
             id: row.id || '',
             pn: row.pn || '',
@@ -2209,6 +2653,7 @@ ipcMain.handle('import-all-data', async () => {
 
     let updatedCount = 0;
     const errors = [];
+    const importDateStamp = formatDateToBR(new Date());
 
     // Skip header row (row 1)
     for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
@@ -2225,27 +2670,25 @@ ipcMain.handle('import-all-data', async () => {
         // Prepare update data
         const updateData = {};
         
-        if (forecast !== null && forecast !== undefined && forecast !== '') {
-          updateData.annual_volume_forecast = forecast;
+        const normalizedForecast = cellValueToString(forecast);
+        if (normalizedForecast !== '') {
+          updateData.annual_volume_forecast = normalizedForecast;
         }
-        
-        if (forecastDate !== null && forecastDate !== undefined && forecastDate !== '') {
-          // Handle Excel date format
-          let dateStr = forecastDate;
-          if (forecastDate instanceof Date) {
-            dateStr = forecastDate.toISOString().split('T')[0];
-          } else if (typeof forecastDate === 'number') {
-            // Excel serial date
-            const excelDate = new Date((forecastDate - 25569) * 86400 * 1000);
-            dateStr = excelDate.toISOString().split('T')[0];
-          }
-          updateData.date_annual_volume = dateStr;
+
+        const normalizedForecastDate = normalizeDateInputToISO(forecastDate);
+        if (normalizedForecastDate) {
+          updateData.date_annual_volume = normalizedForecastDate;
         }
 
         // Only update if there's data to update
         if (Object.keys(updateData).length > 0) {
-          await executeToolingUpdate(id, updateData);
-          updatedCount++;
+          const result = await executeToolingUpdate(id, updateData, 1, {
+            commentTimestamp: importDateStamp,
+            skipWhenNoTrackedChanges: true
+          });
+          if (result?.changes > 0) {
+            updatedCount++;
+          }
         }
 
       } catch (error) {

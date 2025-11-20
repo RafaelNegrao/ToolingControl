@@ -1604,7 +1604,7 @@ textarea {
 .comments-input-area {
   display: flex;
   gap: 8px;
-  align-items: center;
+  align-items: flex-start;
 }
 
 .comment-input {
@@ -1617,6 +1617,12 @@ textarea {
   font-weight: 400;
   background: #f5f5f5;
   transition: background-color 0.2s;
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .comment-input:hover {
@@ -1631,6 +1637,7 @@ textarea {
 .btn-add-comment {
   width: 36px;
   height: 36px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1660,6 +1667,33 @@ textarea {
   flex-direction: column;
   gap: 10px;
   padding: 2px;
+  max-height: 300px;
+}
+
+/* Apply standard scrollbar styles to comments list */
+.comments-list::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.comments-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.comments-list::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.10);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.2s ease;
+}
+
+.comments-list:hover::-webkit-scrollbar-thumb {
+  background-color: rgba(0, 0, 0, 0.30);
+}
+
+.comments-list:hover::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(0, 0, 0, 0.45);
 }
 
 .comments-empty {
@@ -1682,12 +1716,11 @@ textarea {
 }
 
 .comment-card.comment-initial {
-  background: linear-gradient(135deg, #fff7ed 0%, #fed7aa 100%);
-  border: 1px solid #fb923c;
+  background: #f5f5f5;
 }
 
 .comment-card.comment-initial:hover {
-  background: linear-gradient(135deg, #fed7aa 0%, #fdba74 100%);
+  background: #ebebeb;
 }
 
 .comment-header {
@@ -1701,6 +1734,13 @@ textarea {
   font-size: 11px;
   color: #666;
   font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.comment-date-text {
+  display: inline-block;
 }
 
 .comment-initial-badge {
@@ -1717,6 +1757,21 @@ textarea {
 .comment-actions {
   display: flex;
   gap: 4px;
+}
+
+.comment-actions--readonly {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(14, 165, 233, 0.12);
+  color: #0369a1;
+}
+
+.comment-actions--readonly i {
+  font-size: 16px;
 }
 
 .btn-comment-action {
@@ -1746,15 +1801,12 @@ textarea {
   margin-bottom: 8px;
 }
 
-.comment-card.comment-initial .comment-divider {
-  background: rgba(251, 146, 60, 0.3);
-}
-
 .comment-text {
   font-size: 12px;
   color: #1a1a1a;
   line-height: 1.5;
   word-wrap: break-word;
+  white-space: pre-wrap;
 }
 
 .comment-edit-input {
@@ -1765,6 +1817,9 @@ textarea {
   font-size: 12px;
   font-family: inherit;
   background: white;
+  line-height: 1.4;
+  resize: vertical;
+  min-height: 72px;
 }
 
 .comment-edit-input:focus {
@@ -3190,6 +3245,16 @@ select.detail-input::-ms-expand {
 
 .modal-overlay.active {
   display: flex;
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .modal-card {
@@ -3203,6 +3268,329 @@ select.detail-input::-ms-expand {
   flex-direction: column;
   gap: 16px;
   text-align: left;
+}
+
+/* Clean Delete Modal Styles */
+.delete-modal {
+  background: #ffffff;
+  border-radius: 16px;
+  max-width: 440px;
+  width: 100%;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  animation: modalSlideUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes modalSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.delete-modal-icon {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  padding: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.delete-modal-icon i {
+  font-size: 48px;
+  color: #ffffff;
+}
+
+.delete-modal-content {
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.delete-modal-title {
+  margin: 0;
+  font-size: 24px;
+  font-weight: 700;
+  color: #1f2937;
+  letter-spacing: -0.5px;
+}
+
+.delete-modal-description {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.6;
+  color: #6b7280;
+}
+
+.delete-modal-description strong {
+  color: #ef4444;
+  font-weight: 600;
+}
+
+.delete-modal-code-box {
+  background: #f9fafb;
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.delete-code-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #6b7280;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.delete-code-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #1f2937;
+  font-family: 'Courier New', monospace;
+  letter-spacing: 4px;
+}
+
+.delete-modal-input {
+  width: 100%;
+  padding: 14px 16px;
+  font-size: 18px;
+  font-weight: 600;
+  text-align: center;
+  letter-spacing: 6px;
+  border: 2px solid #e5e7eb;
+  border-radius: 10px;
+  background: #ffffff;
+  color: #1f2937;
+  outline: none;
+  transition: all 0.2s ease;
+  font-family: 'Courier New', monospace;
+}
+
+.delete-modal-input:focus {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+.delete-modal-input::placeholder {
+  color: #d1d5db;
+  letter-spacing: 6px;
+}
+
+.delete-modal-actions {
+  padding: 20px 32px 32px 32px;
+  display: flex;
+  gap: 12px;
+}
+
+.delete-btn-cancel,
+.delete-btn-confirm {
+  flex: 1;
+  padding: 14px 20px;
+  font-size: 15px;
+  font-weight: 600;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.delete-btn-cancel {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.delete-btn-cancel:hover {
+  background: #e5e7eb;
+  color: #374151;
+}
+
+.delete-btn-cancel i {
+  font-size: 18px;
+}
+
+.delete-btn-confirm {
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+  color: #ffffff;
+}
+
+.delete-btn-confirm:hover {
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+}
+
+.delete-btn-confirm i {
+  font-size: 18px;
+}
+
+/* Comment delete modal */
+.comment-delete-modal {
+  background: #2e2e2e;
+  border-radius: 18px;
+  width: 100%;
+  max-width: 420px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: modalSlideUp 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.comment-delete-icon {
+  background: linear-gradient(135deg, #3b3b3b 0%, #2a2a2a 100%);
+  padding: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.comment-delete-icon i {
+  font-size: 44px;
+  color: #f8fafc;
+}
+
+.comment-delete-content {
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.comment-delete-header h3 {
+  margin: 0;
+  font-size: 22px;
+  color: #f1f5f9;
+}
+
+.comment-delete-header p {
+  margin: 6px 0 0 0;
+  color: #d1d5db;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.comment-delete-context {
+  margin-top: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.1);
+  border: 1px solid rgba(249, 115, 22, 0.2);
+  border-radius: 999px;
+  padding: 6px 14px;
+}
+
+.comment-delete-preview {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: #252525;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.comment-delete-preview-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #d1d5db;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.comment-delete-preview-meta i {
+  font-size: 16px;
+}
+
+.comment-delete-preview-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
+  color: #f5f5f5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.comment-delete-actions {
+  padding: 0 28px 28px 28px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.comment-delete-btn {
+  flex: 1;
+  min-width: 160px;
+  padding: 12px 18px;
+  border-radius: 12px;
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+}
+
+.comment-delete-btn.cancel {
+  background: #3a3a3a;
+  color: #f3f4f6;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.comment-delete-btn.cancel:hover {
+  background: #464646;
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.comment-delete-btn.confirm {
+  background: linear-gradient(135deg, #c8102e 0%, #9b0f24 100%);
+  color: #ffffff;
+  box-shadow: 0 12px 25px rgba(200, 16, 46, 0.35);
+}
+
+.comment-delete-btn.confirm:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 15px 30px rgba(200, 16, 46, 0.45);
+}
+
+.comment-delete-btn i {
+  font-size: 16px;
+}
+
+@media (max-width: 520px) {
+  .comment-delete-actions {
+    flex-direction: column;
+  }
+
+  .comment-delete-btn {
+    width: 100%;
+  }
 }
 
 /* ComfyUI-style replacement graph overlay */
@@ -3658,22 +4046,28 @@ select.detail-input::-ms-expand {
 .modal-select {
   width: 100%;
   padding: 10px 12px;
-  border: 1px solid #d0d0d0;
+  border: none;
   border-radius: 6px;
   font-size: 14px;
   color: #1f1f1f;
   box-sizing: border-box;
+  background: #f5f5f5;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.modal-input-text:hover,
+.modal-select:hover {
+  background: #e8e8e8;
 }
 
 .modal-input-text:focus,
 .modal-select:focus {
   outline: none;
-  border-color: #c8102e;
-  box-shadow: 0 0 0 3px rgba(200, 16, 46, 0.15);
+  background: #e8e8e8;
+  box-shadow: 0 0 0 2px rgba(200, 16, 46, 0.2);
 }
 
 .modal-select {
-  background: #ffffff;
   appearance: none;
 }
 

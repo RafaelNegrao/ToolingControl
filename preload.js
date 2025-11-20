@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   getToolingByReplacementId: (replacementId) =>
     ipcRenderer.invoke('get-tooling-by-replacement-id', replacementId),
   getAllToolingIds: () => ipcRenderer.invoke('get-all-tooling-ids'),
+  getUniqueResponsibles: () => ipcRenderer.invoke('get-unique-responsibles'),
   getAnalytics: () => ipcRenderer.invoke('get-analytics'),
   getStepsSummary: () => ipcRenderer.invoke('get-steps-summary'),
   updateTooling: (id, data) => ipcRenderer.invoke('update-tooling', id, data),
