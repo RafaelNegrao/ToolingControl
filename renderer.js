@@ -6,6 +6,10 @@ let toolingData = [];
 let suppliersData = [];
 let selectedSupplier = null;
 let currentSupplier = null;
+
+// Estado de seleção múltipla para exportação
+let selectionModeActive = false;
+let selectedToolingIds = new Set();
 let currentSortCriteria = null;
 let currentSortOrder = 'asc';
 let deleteConfirmState = { id: null, code: '', descriptor: '' };
@@ -74,8 +78,13 @@ let productionInfoElements = {
   overlay: null,
   closeButtons: []
 };
+let stepsInfoElements = {
+  overlay: null,
+  closeButtons: []
+};
 
 let expirationFilterEnabled = false;
+let stepsFilteredSuppliers = null; // Lista de suppliers filtrados por step (null = sem filtro)
 
 let replacementIdOptions = [];
 let replacementIdOptionsLoaded = false;
@@ -92,15 +101,15 @@ const DATA_TAB_CAROUSEL_BREAKPOINT = 1200;
 const STATUS_STORAGE_KEY = 'toolingStatusOptions';
 const DEFAULT_STATUS_OPTIONS = [
   'ACTIVE',
-  'CONCLUDED',
-  'UNDER ANALYSIS',
   'UNDER CONSTRUCTION',
-  'EXPIRED',
   'OBSOLETE',
-  'RESOURCING'
+  'INACTIVE'
 ];
 
 const DEFAULT_REPLACEMENT_PICKER_LABEL = 'Select replacement';
+
+// View mode: 'cards' or 'spreadsheet'
+let currentViewMode = 'cards';
 
 let statusOptions = loadStatusOptionsFromStorage();
 let statusSettingsElements = {
@@ -413,6 +422,63 @@ function handleProductionInfoIconKey(event) {
   }
 }
 
+function initStepsInfoModal() {
+  const overlay = document.getElementById('stepsInfoOverlay');
+  const closeButtons = document.querySelectorAll('[data-steps-info-close]');
+
+  stepsInfoElements = {
+    overlay,
+    closeButtons
+  };
+
+  if (!overlay) {
+    return;
+  }
+
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) {
+      closeStepsInfoModal();
+    }
+  });
+
+  if (closeButtons && closeButtons.length > 0) {
+    closeButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        closeStepsInfoModal();
+      });
+    });
+  }
+}
+
+function openStepsInfoModal(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  const { overlay, closeButtons } = stepsInfoElements;
+  if (!overlay) {
+    return;
+  }
+  overlay.classList.add('active');
+  requestAnimationFrame(() => {
+    closeButtons?.[0]?.focus();
+  });
+}
+
+function closeStepsInfoModal() {
+  const { overlay } = stepsInfoElements;
+  if (!overlay) {
+    return;
+  }
+  overlay.classList.remove('active');
+}
+
+function handleStepsInfoIconKey(event) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    openStepsInfoModal(event);
+  }
+}
+
 function openExpirationInfoModal(event) {
   if (event) {
     event.preventDefault();
@@ -575,6 +641,7 @@ async function rebuildReplacementPickerOptions(cardIndex) {
 // Gerenciamento de abas
 document.addEventListener('DOMContentLoaded', async () => {
   initUppercaseInputListeners();
+  restoreSidebarState();
 
   // Popula versão do app
   const appVersionFooter = document.getElementById('appVersion');
@@ -704,6 +771,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initAttachmentsDragAndDrop();
   initExpirationInfoModal();
   initProductionInfoModal();
+  initStepsInfoModal();
   initSettingsCarouselScrollListener();
   initThousandsMaskBehavior();
 
@@ -865,6 +933,28 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (expirationFilterSwitch) {
     expirationFilterSwitch.addEventListener('change', (e) => {
       toggleExpirationFilter(e.target.checked);
+      // Atualizar visual do botão de filtro
+      const filterBtn = document.getElementById('expirationFilterBtn');
+      if (filterBtn) {
+        filterBtn.classList.toggle('active', e.target.checked);
+      }
+    });
+  }
+
+  // Listener para o botão de filtro de expiração - abre o modal
+  const expirationFilterBtn = document.getElementById('expirationFilterBtn');
+  const expirationFilterOverlay = document.getElementById('expirationFilterOverlay');
+  if (expirationFilterBtn && expirationFilterOverlay) {
+    expirationFilterBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openExpirationFilterOverlay();
+    });
+
+    // Fechar overlay ao clicar no fundo
+    expirationFilterOverlay.addEventListener('click', (e) => {
+      if (e.target === expirationFilterOverlay) {
+        closeExpirationFilterOverlay();
+      }
     });
   }
 
@@ -1041,6 +1131,10 @@ document.addEventListener('keydown', (e) => {
   if (productionOverlay && productionOverlay.classList.contains('active') && e.key === 'Escape') {
     closeProductionInfoModal();
   }
+  const stepsOverlay = stepsInfoElements.overlay;
+  if (stepsOverlay && stepsOverlay.classList.contains('active') && e.key === 'Escape') {
+    closeStepsInfoModal();
+  }
   const timelineOverlay = replacementTimelineElements.overlay;
   if (timelineOverlay && timelineOverlay.classList.contains('active') && e.key === 'Escape') {
     closeReplacementTimelineOverlay();
@@ -1108,10 +1202,28 @@ function toggleExpirationFilter(enabled) {
 
 function clearExpirationFilter() {
   const filterSwitch = document.getElementById('expirationFilterSwitch');
+  const filterBtn = document.getElementById('expirationFilterBtn');
   if (filterSwitch) {
     filterSwitch.checked = false;
   }
+  if (filterBtn) {
+    filterBtn.classList.remove('active');
+  }
   toggleExpirationFilter(false);
+}
+
+function openExpirationFilterOverlay() {
+  const overlay = document.getElementById('expirationFilterOverlay');
+  if (overlay) {
+    overlay.classList.add('active');
+  }
+}
+
+function closeExpirationFilterOverlay() {
+  const overlay = document.getElementById('expirationFilterOverlay');
+  if (overlay) {
+    overlay.classList.remove('active');
+  }
 }
 
 function openSupplierFilterOverlay() {
@@ -1128,14 +1240,14 @@ function closeSupplierFilterOverlay() {
   }
 }
 
-// Export all data (ID, PN, Supplier, Forecast, Forecast Date)
-async function exportAllData() {
+// Export Forecast for Supplier (ID, PN, Supplier, Forecast, Forecast Date, Expiration)
+async function exportForecastSupplier() {
   try {
-    const result = await window.api.exportAllData();
+    const result = await window.api.exportForecastSupplier();
     if (result.success) {
-      showNotification(`Data exported successfully to: ${result.filePath}`);
+      showNotification(`Supplier forecast exported successfully to: ${result.filePath}`);
       closeSupplierFilterOverlay();
-    } else {
+    } else if (!result.cancelled) {
       showNotification('Failed to export data', 'error');
     }
   } catch (error) {
@@ -1143,10 +1255,49 @@ async function exportAllData() {
   }
 }
 
-// Import data and update Forecast and Forecast Date by ID
-async function importAllData() {
+// Import Forecast for Supplier (updates Forecast and Forecast Date by ID)
+async function importForecastSupplier() {
   try {
-    const result = await window.api.importAllData();
+    const result = await window.api.importForecastSupplier();
+    if (result.success) {
+      showNotification(`Successfully updated ${result.updatedCount} records`);
+      closeSupplierFilterOverlay();
+      
+      // Reload data
+      await loadSuppliers();
+      await loadAnalytics();
+      if (selectedSupplier) {
+        await loadToolingBySupplier(selectedSupplier);
+      }
+    } else if (result.cancelled) {
+      // User cancelled
+    } else {
+      showNotification(result.error || 'Failed to import data', 'error');
+    }
+  } catch (error) {
+    showNotification('Error importing data', 'error');
+  }
+}
+
+// Export Full Database for Manager
+async function exportForecastManager() {
+  try {
+    const result = await window.api.exportForecastManager();
+    if (result.success) {
+      showNotification(`Manager database exported successfully to: ${result.filePath}`);
+      closeSupplierFilterOverlay();
+    } else if (!result.cancelled) {
+      showNotification('Failed to export data', 'error');
+    }
+  } catch (error) {
+    showNotification('Error exporting data', 'error');
+  }
+}
+
+// Import Full Database for Manager
+async function importForecastManager() {
+  try {
+    const result = await window.api.importForecastManager();
     if (result.success) {
       showNotification(`Successfully updated ${result.updatedCount} records`);
       closeSupplierFilterOverlay();
@@ -1214,10 +1365,17 @@ function updateSupplierDataButtons(enabled) {
   const exportBtn = document.getElementById('exportSupplierBtn');
   const importBtn = document.getElementById('importSupplierBtn');
   const commentBtn = document.getElementById('supplierCommentBtn');
+  const selectModeBtn = document.getElementById('toggleSelectModeBtn');
   
   if (exportBtn) exportBtn.disabled = !enabled;
   if (importBtn) importBtn.disabled = !enabled;
   if (commentBtn) commentBtn.disabled = !enabled;
+  if (selectModeBtn) selectModeBtn.disabled = !enabled;
+  
+  // Se desabilitado, desativar modo de seleção
+  if (!enabled && selectionModeActive) {
+    toggleSelectionMode();
+  }
 }
 
 // Abrir modal de comentários do supplier
@@ -1256,15 +1414,18 @@ function loadSupplierCommentsData() {
 
   const notesTextarea = document.getElementById('supplierNotesText');
   const contactTextarea = document.getElementById('supplierContactText');
-  const responsibleInput = document.getElementById('cumminsResponsibleText');
+  const supplyContinuityInput = document.getElementById('supplyContinuityText');
+  const sqieInput = document.getElementById('sqieText');
+  const plannerInput = document.getElementById('plannerText');
+  const sourcingInput = document.getElementById('sourcingText');
   
-  if (!notesTextarea || !contactTextarea || !responsibleInput) {
+  if (!notesTextarea || !contactTextarea || !supplyContinuityInput || !sqieInput || !plannerInput || !sourcingInput) {
     return;
   }
 
   const storageKey = `supplier_comments_${currentSupplier}`;
   const rawValue = localStorage.getItem(storageKey);
-  let savedData = { notes: '', contact: '', responsible: '' };
+  let savedData = { notes: '', contact: '', supplyContinuity: '', sqie: '', planner: '', sourcing: '' };
 
   if (rawValue) {
     try {
@@ -1274,7 +1435,11 @@ function loadSupplierCommentsData() {
       } else if (parsed && typeof parsed === 'object') {
         savedData.notes = parsed.notes || '';
         savedData.contact = parsed.contact || '';
-        savedData.responsible = parsed.responsible || '';
+        // Migrar campo antigo 'responsible' para 'supplyContinuity' se existir
+        savedData.supplyContinuity = parsed.supplyContinuity || parsed.responsible || '';
+        savedData.sqie = parsed.sqie || '';
+        savedData.planner = parsed.planner || '';
+        savedData.sourcing = parsed.sourcing || '';
       }
     } catch (error) {
       savedData.notes = rawValue;
@@ -1283,7 +1448,10 @@ function loadSupplierCommentsData() {
 
   notesTextarea.value = savedData.notes;
   contactTextarea.value = savedData.contact;
-  responsibleInput.value = savedData.responsible;
+  supplyContinuityInput.value = savedData.supplyContinuity;
+  sqieInput.value = savedData.sqie;
+  plannerInput.value = savedData.planner;
+  sourcingInput.value = savedData.sourcing;
 }
 
 function saveSupplierComments() {
@@ -1293,9 +1461,12 @@ function saveSupplierComments() {
 
   const notesTextarea = document.getElementById('supplierNotesText');
   const contactTextarea = document.getElementById('supplierContactText');
-  const responsibleInput = document.getElementById('cumminsResponsibleText');
+  const supplyContinuityInput = document.getElementById('supplyContinuityText');
+  const sqieInput = document.getElementById('sqieText');
+  const plannerInput = document.getElementById('plannerText');
+  const sourcingInput = document.getElementById('sourcingText');
   
-  if (!notesTextarea || !contactTextarea || !responsibleInput) {
+  if (!notesTextarea || !contactTextarea || !supplyContinuityInput || !sqieInput || !plannerInput || !sourcingInput) {
     return;
   }
 
@@ -1303,12 +1474,270 @@ function saveSupplierComments() {
   const data = {
     notes: notesTextarea.value || '',
     contact: contactTextarea.value || '',
-    responsible: responsibleInput.value || ''
+    supplyContinuity: supplyContinuityInput.value || '',
+    sqie: sqieInput.value || '',
+    planner: plannerInput.value || '',
+    sourcing: sourcingInput.value || ''
   };
 
   localStorage.setItem(storageKey, JSON.stringify(data));
   showNotification('Supplier comments saved successfully!', 'success');
   closeSupplierCommentsModal();
+}
+
+// ===== MODO DE SELEÇÃO MÚLTIPLA PARA EXPORTAÇÃO =====
+
+// Alternar modo de seleção
+function toggleSelectionMode() {
+  selectionModeActive = !selectionModeActive;
+  const selectBtn = document.getElementById('toggleSelectModeBtn');
+  const selectionActions = document.getElementById('selectionActions');
+  const toolingList = document.getElementById('toolingList');
+  const exportBtn = document.getElementById('exportSupplierBtn');
+  const spreadsheetCheckboxHeader = document.getElementById('spreadsheetCheckboxHeader');
+  
+  if (selectionModeActive) {
+    // Ativar modo de seleção
+    selectedToolingIds.clear();
+    if (selectBtn) {
+      selectBtn.classList.add('active');
+      selectBtn.title = 'Cancel selection';
+    }
+    if (selectionActions) selectionActions.style.display = 'flex';
+    if (toolingList) toolingList.classList.add('selection-mode');
+    if (exportBtn) exportBtn.style.display = 'none';
+    if (spreadsheetCheckboxHeader) spreadsheetCheckboxHeader.style.display = '';
+    updateSelectionCounter();
+    
+    // Re-renderizar spreadsheet se estiver no modo tabela
+    if (currentViewMode === 'spreadsheet') {
+      renderSpreadsheetView();
+    }
+  } else {
+    // Desativar modo de seleção
+    selectedToolingIds.clear();
+    if (selectBtn) {
+      selectBtn.classList.remove('active');
+      selectBtn.title = 'Select items for export';
+    }
+    if (selectionActions) selectionActions.style.display = 'none';
+    if (toolingList) toolingList.classList.remove('selection-mode');
+    if (exportBtn) exportBtn.style.display = '';
+    if (spreadsheetCheckboxHeader) spreadsheetCheckboxHeader.style.display = 'none';
+    
+    // Re-renderizar spreadsheet se estiver no modo tabela
+    if (currentViewMode === 'spreadsheet') {
+      renderSpreadsheetView();
+    }
+  }
+  
+  // Atualizar checkboxes nos cards
+  updateCardCheckboxes();
+}
+
+// Atualizar checkboxes visuais nos cards
+function updateCardCheckboxes() {
+  const cards = document.querySelectorAll('.tooling-card');
+  
+  cards.forEach(card => {
+    const itemId = parseInt(card.dataset.itemId);
+    let checkbox = card.querySelector('.card-selection-checkbox');
+    
+    if (selectionModeActive) {
+      if (!checkbox) {
+        // Criar checkbox
+        checkbox = document.createElement('div');
+        checkbox.className = 'card-selection-checkbox';
+        checkbox.innerHTML = '<i class="ph ph-check"></i>';
+        checkbox.onclick = (e) => {
+          e.stopPropagation();
+          toggleCardSelection(itemId);
+        };
+        // Inserir dentro do header-top, antes do primeiro elemento
+        const headerTop = card.querySelector('.tooling-card-header-top');
+        if (headerTop) {
+          headerTop.insertBefore(checkbox, headerTop.firstChild);
+        }
+      }
+      // Atualizar estado
+      checkbox.classList.toggle('selected', selectedToolingIds.has(itemId));
+    } else {
+      // Remover checkbox
+      if (checkbox) {
+        checkbox.remove();
+      }
+    }
+  });
+}
+
+// Alternar seleção de um card
+function toggleCardSelection(itemId) {
+  if (selectedToolingIds.has(itemId)) {
+    selectedToolingIds.delete(itemId);
+  } else {
+    selectedToolingIds.add(itemId);
+  }
+  
+  // Atualizar visual do checkbox
+  const card = document.querySelector(`.tooling-card[data-item-id="${itemId}"]`);
+  if (card) {
+    const checkbox = card.querySelector('.card-selection-checkbox');
+    if (checkbox) {
+      checkbox.classList.toggle('selected', selectedToolingIds.has(itemId));
+    }
+  }
+  
+  updateSelectionCounter();
+}
+
+// Selecionar todos os itens visíveis
+function selectAllTooling() {
+  toolingData.forEach(item => {
+    selectedToolingIds.add(item.id);
+  });
+  updateCardCheckboxes();
+  updateSpreadsheetCheckboxes();
+  updateSelectionCounter();
+}
+
+// Desselecionar todos
+function deselectAllTooling() {
+  selectedToolingIds.clear();
+  updateCardCheckboxes();
+  updateSpreadsheetCheckboxes();
+  updateSelectionCounter();
+}
+
+// ===== FUNÇÕES DE SELEÇÃO PARA SPREADSHEET =====
+
+// Alternar seleção de uma linha da tabela
+function toggleSpreadsheetRowSelection(event, itemId) {
+  event.stopPropagation();
+  
+  if (selectedToolingIds.has(itemId)) {
+    selectedToolingIds.delete(itemId);
+  } else {
+    selectedToolingIds.add(itemId);
+  }
+  
+  updateSpreadsheetRowVisual(itemId);
+  updateSpreadsheetSelectAllIcon();
+  updateSelectionCounter();
+}
+
+// Atualizar visual de uma linha específica
+function updateSpreadsheetRowVisual(itemId) {
+  const row = document.querySelector(`#spreadsheetBody tr[data-id="${itemId}"]`);
+  if (row) {
+    const isSelected = selectedToolingIds.has(itemId);
+    row.classList.toggle('row-selected', isSelected);
+    const checkbox = row.querySelector('.spreadsheet-row-checkbox');
+    if (checkbox) {
+      checkbox.classList.toggle('selected', isSelected);
+      const icon = checkbox.querySelector('i');
+      if (icon) {
+        icon.className = isSelected ? 'ph ph-check-square' : 'ph ph-square';
+      }
+    }
+  }
+}
+
+// Toggle selecionar todos na tabela
+function toggleSpreadsheetSelectAll() {
+  const allSelected = toolingData.every(item => selectedToolingIds.has(item.id));
+  
+  if (allSelected) {
+    // Desselecionar todos
+    selectedToolingIds.clear();
+  } else {
+    // Selecionar todos
+    toolingData.forEach(item => {
+      selectedToolingIds.add(item.id);
+    });
+  }
+  
+  updateSpreadsheetCheckboxes();
+  updateCardCheckboxes();
+  updateSelectionCounter();
+}
+
+// Atualizar ícone de selecionar todos
+function updateSpreadsheetSelectAllIcon() {
+  const icon = document.getElementById('spreadsheetSelectAllIcon');
+  if (icon) {
+    const allSelected = toolingData.length > 0 && toolingData.every(item => selectedToolingIds.has(item.id));
+    const someSelected = selectedToolingIds.size > 0;
+    
+    if (allSelected) {
+      icon.className = 'ph ph-check-square';
+    } else if (someSelected) {
+      icon.className = 'ph ph-minus-square';
+    } else {
+      icon.className = 'ph ph-square';
+    }
+  }
+}
+
+// Atualizar todos os checkboxes da tabela
+function updateSpreadsheetCheckboxes() {
+  const rows = document.querySelectorAll('#spreadsheetBody tr[data-id]');
+  rows.forEach(row => {
+    const itemId = parseInt(row.dataset.id);
+    if (!isNaN(itemId)) {
+      const isSelected = selectedToolingIds.has(itemId);
+      row.classList.toggle('row-selected', isSelected);
+      const checkbox = row.querySelector('.spreadsheet-row-checkbox');
+      if (checkbox) {
+        checkbox.classList.toggle('selected', isSelected);
+        const icon = checkbox.querySelector('i');
+        if (icon) {
+          icon.className = isSelected ? 'ph ph-check-square' : 'ph ph-square';
+        }
+      }
+    }
+  });
+  updateSpreadsheetSelectAllIcon();
+}
+
+// Atualizar contador de seleção
+function updateSelectionCounter() {
+  const counter = document.getElementById('selectionCounter');
+  if (counter) {
+    const count = selectedToolingIds.size;
+    counter.textContent = count === 1 ? '1 item selected' : `${count} items selected`;
+  }
+}
+
+// Exportar apenas os selecionados
+async function exportSelectedItems() {
+  if (selectedToolingIds.size === 0) {
+    showToast('Select at least one item to export', 'error');
+    return;
+  }
+  
+  if (!currentSupplier) {
+    showToast('Please select a supplier first', 'error');
+    return;
+  }
+
+  try {
+    showToast('Exporting selected items...', 'info');
+    
+    const idsToExport = Array.from(selectedToolingIds);
+    const result = await window.api.exportSupplierData(currentSupplier, idsToExport);
+    
+    if (result.success) {
+      showToast(`${idsToExport.length} items exported successfully!`, 'success');
+      // Desativar modo de seleção após exportar
+      toggleSelectionMode();
+    } else if (result.cancelled) {
+      showToast('Export cancelled', 'info');
+    } else {
+      showToast('Export cancelled', 'info');
+    }
+  } catch (error) {
+    showToast('Error exporting data. Please try again.', 'error');
+  }
 }
 
 // Exportar dados do supplier para Excel
@@ -1320,10 +1749,16 @@ async function exportSupplierData() {
 
   try {
     showToast('Exporting supplier data...', 'info');
-    const result = await window.api.exportSupplierData(currentSupplier);
+    
+    // Obter IDs dos cards atualmente visíveis/filtrados
+    const filteredIds = toolingData.map(item => item.id);
+    
+    const result = await window.api.exportSupplierData(currentSupplier, filteredIds);
     
     if (result.success) {
       showToast('Data exported successfully!', 'success');
+    } else if (result.cancelled) {
+      showToast('Export cancelled', 'info');
     } else {
       showToast('Export cancelled', 'info');
     }
@@ -1386,11 +1821,15 @@ function displaySuppliers(suppliers) {
     const total = parseInt(supplier.total) || 0;
     const metrics = ExpirationMetrics.calculate(supplier);
     
+    // Verificar se este supplier deve ser escondido pelo filtro de steps
+    const isHiddenByStepsFilter = stepsFilteredSuppliers !== null && !stepsFilteredSuppliers.includes(supplierNameRaw);
+    
     return `
         <div class="supplier-card ${isActive ? 'active' : ''}" 
           data-supplier="${supplierNameHtml}" 
           data-supplier-raw="${supplierNameHtml}"
           data-supplier-key="${supplierKey}"
+          style="${isHiddenByStepsFilter ? 'display: none;' : ''}"
           onclick="selectSupplier(event, '${supplierNameForHandler}')">
       <div class="supplier-card-header">
         <i class="ph ph-factory"></i>
@@ -1410,11 +1849,37 @@ function displaySuppliers(suppliers) {
           <span class="info-value ${metrics.expiringWithin2Years > 0 ? 'critical' : ''}" data-metric="expiring">${metrics.expiringWithin2Years}</span>
         </div>
       </div>
+      <div class="compact-tooltip">
+        <div class="tooltip-name">${supplierNameHtml}</div>
+        <div class="tooltip-stats">
+          <div class="tooltip-stat"><i class="ph ph-wrench"></i> Total: <span>${total}</span></div>
+          <div class="tooltip-stat"><i class="ph ph-warning-circle"></i> Expired: <span>${metrics.expired}</span></div>
+          <div class="tooltip-stat"><i class="ph ph-clock-countdown"></i> Expiring 2y: <span>${metrics.expiringWithin2Years}</span></div>
+        </div>
+      </div>
     </div>
     `;
   }).join('');
 
+  // Adiciona event listeners para posicionar tooltips no modo compacto
+  setupCompactTooltips();
+  
   syncStatusBarWithSuppliers();
+}
+
+// Configura tooltips para o modo compacto (responsivo)
+function setupCompactTooltips() {
+  const supplierCards = document.querySelectorAll('.supplier-card');
+  
+  supplierCards.forEach(card => {
+    const tooltip = card.querySelector('.compact-tooltip');
+    if (!tooltip) return;
+    
+    card.addEventListener('mouseenter', (e) => {
+      const rect = card.getBoundingClientRect();
+      tooltip.style.top = `${rect.top}px`;
+    });
+  });
 }
 
 function setActiveSupplierCard(supplierName, explicitElement = null) {
@@ -1479,6 +1944,10 @@ function handleSupplierSelection(supplierName, { sourceElement = null, forceRelo
       const hasGlobalSearch = globalSearchValue.length >= 2;
       const hasSupplierSearch = supplierSearchValue.length >= 1;
       
+      // Pegar o filtro de steps se estiver ativo
+      const stepsFilter = document.getElementById('stepsFilter');
+      const selectedStep = stepsFilter ? stepsFilter.value : '';
+      
       if (hasGlobalSearch) {
         // Usa busca global que já filtra por supplier selecionado
         activeSearchTerm = globalSearchValue;
@@ -1486,10 +1955,19 @@ function handleSupplierSelection(supplierName, { sourceElement = null, forceRelo
       } else if (hasSupplierSearch) {
         // Filtra por termo da barra lateral E supplier selecionado
         window.api.searchTooling(supplierSearchValue).then(allResults => {
-          const filteredResults = allResults.filter(item => {
+          let filteredResults = allResults.filter(item => {
             const itemSupplier = String(item.supplier || '').trim();
             return itemSupplier === normalizedName;
           });
+          
+          // Aplicar filtro de steps se estiver ativo
+          if (selectedStep) {
+            filteredResults = filteredResults.filter(item => {
+              const itemStep = String(item.steps || '').trim();
+              return itemStep === selectedStep;
+            });
+          }
+          
           toolingData = filteredResults;
           displayTooling(filteredResults);
         }).catch(err => {});
@@ -1992,6 +2470,12 @@ async function uploadAttachment() {
   
   try {
     const result = await window.api.uploadAttachment(currentSupplier);
+    
+    // Se foi cancelado, apenas retorna silenciosamente
+    if (!result || result.cancelled) {
+      return;
+    }
+    
     if (result.success) {
       await loadAttachments(currentSupplier);
       // Suporta resposta de múltiplos arquivos
@@ -2005,7 +2489,7 @@ async function uploadAttachment() {
           const errorMsg = failures.map(f => `${f.fileName}: ${f.error}`).join('\n');
         }
       }
-    } else {
+    } else if (result.error) {
       showNotification('Error attaching file(s)', 'error');
     }
   } catch (error) {
@@ -2081,8 +2565,20 @@ async function loadToolingBySupplier(supplier) {
     showSkeletonLoading();
     
     // Carregar dados
-    toolingData = await window.api.getToolingBySupplier(supplier);
+    let data = await window.api.getToolingBySupplier(supplier);
     await ensureReplacementIdOptions();
+    
+    // Aplicar filtro de steps se estiver ativo
+    const stepsFilter = document.getElementById('stepsFilter');
+    const selectedStep = stepsFilter ? stepsFilter.value : '';
+    if (selectedStep) {
+      data = data.filter(item => {
+        const itemStep = String(item.steps || '').trim();
+        return itemStep === selectedStep;
+      });
+    }
+    
+    toolingData = data;
     
     // Renderizar em chunks para não travar a UI
     await displayToolingInChunks(toolingData);
@@ -2158,6 +2654,16 @@ async function searchTooling(term) {
         const itemSupplier = String(item.supplier || '').trim();
         const selected = String(selectedSupplier || '').trim();
         return itemSupplier === selected;
+      });
+    }
+    
+    // Aplicar filtro de steps se estiver ativo
+    const stepsFilter = document.getElementById('stepsFilter');
+    const selectedStep = stepsFilter ? stepsFilter.value : '';
+    if (selectedStep) {
+      filteredResults = filteredResults.filter(item => {
+        const itemStep = String(item.steps || '').trim();
+        return itemStep === selectedStep;
       });
     }
     
@@ -2402,10 +2908,31 @@ function updateCardHeaderSteps(cardIndex, stepsValue) {
   }
 }
 
+function getStepDescription(stepValue) {
+  const descriptions = {
+    '1': 'Control Data Update',
+    '2': 'Critical Tooling Identification',
+    '3': 'Supplier Validation Request',
+    '4': 'Critical Tooling Reassessment',
+    '5': 'On-Site Technical Analysis',
+    '6': 'Technical Confirmation',
+    '7': 'Supply Continuity Strategy'
+  };
+  return descriptions[stepValue] || '';
+}
+
 function handleStepsSelectChange(cardIndex, itemId, selectEl) {
   if (selectEl) {
     const value = (selectEl.value || '').trim();
     updateCardHeaderSteps(cardIndex, value);
+    
+    // Update step description label
+    const descriptionLabel = document.getElementById(`stepDescription_${itemId}`);
+    if (descriptionLabel) {
+      const description = getStepDescription(value);
+      descriptionLabel.textContent = description;
+      descriptionLabel.style.display = description ? 'block' : 'none';
+    }
   }
   autoSaveTooling(itemId);
 }
@@ -3587,14 +4114,6 @@ async function navigateToLinkedCard(targetId) {
   // Always expand the target card
   targetCard.classList.add('expanded');
   
-  // Add blur effect to other cards
-  const allCards = document.querySelectorAll('.tooling-card');
-  allCards.forEach(c => {
-    if (c !== targetCard) {
-      c.classList.add('has-expanded-sibling');
-    }
-  });
-  
   // Calculate expiration and load attachments in background
   setTimeout(() => {
     calculateExpirationDate(cardIndex, null, true); // skipSave = true
@@ -3758,6 +4277,11 @@ function collectCardDomValues(id) {
     // Validar nome do campo
     const fieldName = field.trim();
     if (fieldName === '' || fieldName.length === 0) {
+      return;
+    }
+    
+    // Ignorar campos calculados (como expiration_date)
+    if (element.classList.contains('calculated')) {
       return;
     }
     
@@ -5037,21 +5561,128 @@ async function deleteToolingItem(id) {
   }
 }
 
+// Filtra tooling por Step (global - suppliers e tooling cards)
+async function filterToolingByStep() {
+  const stepsFilter = document.getElementById('stepsFilter');
+  const selectedStep = stepsFilter ? stepsFilter.value : '';
+  
+  console.log('Filtering by step:', selectedStep);
+  
+  // Remover mensagem de "no steps" se existir
+  const existingMsg = document.getElementById('noStepsMessage');
+  if (existingMsg) existingMsg.remove();
+  
+  if (!selectedStep) {
+    // Sem filtro - limpar lista de suppliers filtrados
+    stepsFilteredSuppliers = null;
+    
+    // Mostrar todos os supplier cards e restaurar métricas originais
+    const supplierCards = document.querySelectorAll('.supplier-card');
+    supplierCards.forEach(card => {
+      card.style.display = '';
+    });
+    
+    // Recarregar suppliers para restaurar os contadores originais
+    await loadSuppliers();
+    
+    // Recarregar tooling cards do supplier selecionado (sem filtro)
+    if (selectedSupplier) {
+      await loadToolingBySupplier(selectedSupplier);
+    }
+    
+    return;
+  }
+  
+  // COM filtro - filtrar suppliers e atualizar contadores
+  try {
+    // Buscar todos os suppliers com stats
+    const allSuppliers = await window.api.getSuppliersWithStats();
+    console.log('All suppliers:', allSuppliers.length);
+    
+    // Para cada supplier, verificar se tem tooling com o step selecionado e calcular métricas
+    const suppliersWithStep = [];
+    const supplierMetrics = new Map();
+    
+    for (const supplierObj of allSuppliers) {
+      const supplierName = supplierObj.supplier || '';
+      const supplierTooling = await window.api.getToolingBySupplier(supplierName);
+      
+      // Filtrar tooling pelo step selecionado
+      const filteredTooling = supplierTooling.filter(item => {
+        const itemStep = String(item.steps || '').trim();
+        return itemStep === selectedStep;
+      });
+      
+      if (filteredTooling.length > 0) {
+        suppliersWithStep.push(supplierName);
+        // Calcular métricas apenas dos itens filtrados
+        const metrics = computeSupplierMetricsFromItems(filteredTooling);
+        supplierMetrics.set(supplierName, metrics);
+      }
+    }
+    
+    console.log('Suppliers with step:', suppliersWithStep);
+    
+    // Salvar lista de suppliers filtrados globalmente
+    stepsFilteredSuppliers = suppliersWithStep;
+    
+    // Atualizar suppliers na sidebar (mostrar apenas os que têm o step e atualizar contadores)
+    const supplierCards = document.querySelectorAll('.supplier-card');
+    let visibleSuppliers = 0;
+    supplierCards.forEach(card => {
+      const supplierName = card.dataset.supplier || '';
+      if (suppliersWithStep.includes(supplierName)) {
+        card.style.display = '';
+        visibleSuppliers++;
+        
+        // Atualizar contadores com valores filtrados
+        const metrics = supplierMetrics.get(supplierName);
+        if (metrics) {
+          const totalEl = card.querySelector('[data-metric="total"]');
+          const expiredEl = card.querySelector('[data-metric="expired"]');
+          const expiringEl = card.querySelector('[data-metric="expiring"]');
+          
+          if (totalEl) totalEl.textContent = metrics.total;
+          if (expiredEl) {
+            expiredEl.textContent = metrics.expired;
+            expiredEl.classList.toggle('expired', metrics.expired > 0);
+          }
+          if (expiringEl) {
+            expiringEl.textContent = metrics.expiring;
+            expiringEl.classList.toggle('critical', metrics.expiring > 0);
+          }
+        }
+      } else {
+        card.style.display = 'none';
+      }
+    });
+    console.log('Visible suppliers:', visibleSuppliers);
+    
+    // Se tiver supplier selecionado, recarregar os tooling cards (já filtrados)
+    if (selectedSupplier) {
+      await loadToolingBySupplier(selectedSupplier);
+    }
+    
+  } catch (error) {
+    console.error('Error filtering by step:', error);
+  }
+}
+
 // Exibe ferramentais na interface (cards expansíveis)
 async function displayTooling(data) {
   const toolingList = document.getElementById('toolingList');
+  const spreadsheetContainer = document.getElementById('spreadsheetContainer');
   const emptyState = document.getElementById('emptyState');
 
   if (!data || data.length === 0) {
     toolingList.style.display = 'none';
+    if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
     emptyState.style.display = 'flex';
     return;
   }
 
   // Mostra UI imediatamente, processa em background
   emptyState.style.display = 'none';
-  toolingList.style.display = 'flex';
-  toolingList.innerHTML = '<div class="loading-cards">Loading cards...</div>';
 
   // Defer processing para não travar
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -5067,6 +5698,7 @@ async function displayTooling(data) {
 
   if (filteredData.length === 0) {
     toolingList.style.display = 'none';
+    if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
     emptyState.style.display = 'flex';
     return;
   }
@@ -5089,6 +5721,20 @@ async function displayTooling(data) {
 
   cardSnapshotStore.clear();
   toolingData = sortedData;
+  
+  // Se estiver no modo planilha, renderiza planilha ao invés de cards
+  if (currentViewMode === 'spreadsheet') {
+    toolingList.style.display = 'none';
+    if (spreadsheetContainer) spreadsheetContainer.style.display = 'block';
+    renderSpreadsheetView();
+    return;
+  }
+  
+  // Modo cards - continua renderização normal
+  toolingList.style.display = 'flex';
+  if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
+  toolingList.innerHTML = '<div class="loading-cards">Loading cards...</div>';
+  
   currentToolingRenderToken += 1;
   const renderToken = currentToolingRenderToken;
   const supplierContext = selectedSupplier || currentSupplier || '';
@@ -5140,6 +5786,490 @@ async function displayTooling(data) {
   };
   
   renderNextChunk();
+}
+
+// Toggle do sidebar (abrir/fechar)
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const toggleIcon = document.getElementById('sidebarToggleIcon');
+  
+  if (!sidebar) return;
+  
+  const willCollapse = !sidebar.classList.contains('collapsed');
+  
+  // Muda a classe do ícone ANTES da transição (ícone já aponta para a direção correta)
+  if (toggleIcon) {
+    toggleIcon.className = willCollapse ? 'ph ph-caret-right' : 'ph ph-caret-left';
+  }
+  
+  // Aplica a classe
+  sidebar.classList.toggle('collapsed');
+  
+  // Salva estado no localStorage
+  localStorage.setItem('sidebarCollapsed', willCollapse ? 'true' : 'false');
+}
+
+// Restaura estado do sidebar ao carregar
+function restoreSidebarState() {
+  const sidebar = document.getElementById('sidebar');
+  const toggleIcon = document.getElementById('sidebarToggleIcon');
+  const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+  
+  if (sidebar && isCollapsed) {
+    sidebar.classList.add('collapsed');
+    if (toggleIcon) {
+      toggleIcon.className = 'ph ph-caret-right';
+    }
+  }
+}
+
+// Alterna entre modo cards e planilha
+function setViewMode(mode) {
+  currentViewMode = mode;
+  
+  // Atualiza botões
+  const cardsBtn = document.getElementById('viewModeCards');
+  const spreadsheetBtn = document.getElementById('viewModeSpreadsheet');
+  const floatingAddBtn = document.getElementById('floatingAddBtn');
+  
+  if (cardsBtn && spreadsheetBtn) {
+    cardsBtn.classList.toggle('active', mode === 'cards');
+    spreadsheetBtn.classList.toggle('active', mode === 'spreadsheet');
+  }
+  
+  // Esconde/mostra botão + baseado no modo
+  if (floatingAddBtn) {
+    floatingAddBtn.style.display = mode === 'cards' ? 'flex' : 'none';
+  }
+  
+  // Atualiza containers
+  const toolingList = document.getElementById('toolingList');
+  const spreadsheetContainer = document.getElementById('spreadsheetContainer');
+  const emptyState = document.getElementById('emptyState');
+  
+  if (!toolingData || toolingData.length === 0) {
+    if (toolingList) toolingList.style.display = 'none';
+    if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
+    if (emptyState) emptyState.style.display = 'flex';
+    return;
+  }
+  
+  if (emptyState) emptyState.style.display = 'none';
+  
+  if (mode === 'cards') {
+    if (toolingList) toolingList.style.display = 'flex';
+    if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
+    // Re-renderiza os cards para garantir que apareçam
+    displayTooling(toolingData);
+  } else {
+    if (toolingList) toolingList.style.display = 'none';
+    if (spreadsheetContainer) spreadsheetContainer.style.display = 'block';
+    renderSpreadsheetView();
+  }
+}
+
+// Renderiza a visualização de planilha
+function renderSpreadsheetView() {
+  const spreadsheetBody = document.getElementById('spreadsheetBody');
+  if (!spreadsheetBody || !toolingData) return;
+  
+  // Aplica filtro de expiração se estiver ativo
+  let filteredData = toolingData;
+  if (expirationFilterEnabled) {
+    filteredData = toolingData.filter(item => {
+      const classification = classifyToolingExpirationState(item);
+      return classification.state === 'expired' || classification.state === 'warning';
+    });
+  }
+  
+  // Gera as linhas da planilha
+  const rows = filteredData.map(item => {
+    const statusClass = getStatusClass(item.status);
+    const statusOptionsHtml = buildSpreadsheetStatusOptions(item.status);
+    const stepsOptionsHtml = buildSpreadsheetStepsOptions(item.steps);
+    
+    // Formata valores numéricos para exibição com separador de milhares
+    const toolingLifeDisplay = formatNumericForSpreadsheet(item.tooling_life_qty);
+    const producedDisplay = formatNumericForSpreadsheet(item.produced);
+    const forecastDisplay = formatNumericForSpreadsheet(item.annual_volume_forecast);
+    
+    // Calcula expiration date
+    const classification = classifyToolingExpirationState(item);
+    const expirationDateDisplay = formatDate(classification.expirationDate || '');
+    const expirationIconHtml = getSpreadsheetExpirationIcon(classification.state);
+    
+    const isSelected = selectedToolingIds.has(item.id);
+    const checkboxHtml = selectionModeActive ? `
+      <td class="col-checkbox">
+        <div class="spreadsheet-row-checkbox ${isSelected ? 'selected' : ''}" onclick="toggleSpreadsheetRowSelection(event, ${item.id})">
+          <i class="ph ${isSelected ? 'ph-check-square' : 'ph-square'}"></i>
+        </div>
+      </td>` : '';
+    
+    return `
+      <tr data-id="${item.id}" class="${isSelected ? 'row-selected' : ''}">
+        ${checkboxHtml}
+        <td class="col-id">${item.id || ''}</td>
+        <td>
+          <input type="text" class="spreadsheet-input" value="${escapeHtml(item.pn || '')}" 
+            data-field="pn" data-id="${item.id}" onchange="spreadsheetSave(this)">
+        </td>
+        <td>
+          <input type="text" class="spreadsheet-input" value="${escapeHtml(item.pn_description || '')}" 
+            data-field="pn_description" data-id="${item.id}" onchange="spreadsheetSave(this)">
+        </td>
+        <td>
+          <input type="text" class="spreadsheet-input" value="${escapeHtml(item.tool_description || '')}" 
+            data-field="tool_description" data-id="${item.id}" onchange="spreadsheetSave(this)">
+        </td>
+        <td>
+          <input type="text" class="spreadsheet-input input-right" inputmode="numeric" data-mask="thousands" 
+            value="${toolingLifeDisplay}" data-field="tooling_life_qty" data-id="${item.id}" 
+            onchange="spreadsheetSave(this)">
+        </td>
+        <td>
+          <input type="text" class="spreadsheet-input input-right" inputmode="numeric" data-mask="thousands" 
+            value="${producedDisplay}" data-field="produced" data-id="${item.id}" 
+            onchange="spreadsheetSave(this)">
+        </td>
+        <td>
+          <input type="date" class="spreadsheet-input input-center spreadsheet-date" 
+            value="${formatDateForDateInput(item.date_remaining_tooling_life)}" 
+            data-field="date_remaining_tooling_life" data-id="${item.id}" onchange="spreadsheetSave(this)">
+        </td>
+        <td>
+          <input type="text" class="spreadsheet-input input-right" inputmode="numeric" data-mask="thousands" 
+            value="${forecastDisplay}" data-field="annual_volume_forecast" data-id="${item.id}" 
+            onchange="spreadsheetSave(this)">
+        </td>
+        <td>
+          <input type="date" class="spreadsheet-input input-center spreadsheet-date" 
+            value="${formatDateForDateInput(item.date_annual_volume)}" 
+            data-field="date_annual_volume" data-id="${item.id}" onchange="spreadsheetSave(this)">
+        </td>
+        <td class="spreadsheet-expiration">
+          ${expirationIconHtml}
+          <span class="expiration-text">${expirationDateDisplay || 'N/A'}</span>
+        </td>
+        <td>
+          <select class="spreadsheet-select input-center" data-field="steps" data-id="${item.id}" onchange="spreadsheetSave(this)">
+            ${stepsOptionsHtml}
+          </select>
+        </td>
+        <td>
+          <select class="spreadsheet-select ${statusClass}" data-field="status" data-id="${item.id}" onchange="spreadsheetSave(this)">
+            ${statusOptionsHtml}
+          </select>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  
+  spreadsheetBody.innerHTML = rows;
+  
+  // Adiciona linha para novo ferramental no final
+  const newRow = document.createElement('tr');
+  newRow.className = 'spreadsheet-new-row';
+  newRow.id = 'spreadsheetNewRow';
+  const emptyCheckboxCell = selectionModeActive ? '<td class="col-checkbox"></td>' : '';
+  newRow.innerHTML = `
+    ${emptyCheckboxCell}
+    <td class="col-id new-row-icon"><i class="ph ph-plus-circle"></i></td>
+    <td>
+      <input type="text" class="spreadsheet-input spreadsheet-new-input" id="newToolingPN" placeholder="PN *">
+    </td>
+    <td>
+      <input type="text" class="spreadsheet-input spreadsheet-new-input" id="newToolingPNDesc" placeholder="PN Description">
+    </td>
+    <td>
+      <input type="text" class="spreadsheet-input spreadsheet-new-input" id="newToolingDesc" placeholder="Tooling Description">
+    </td>
+    <td>
+      <input type="text" class="spreadsheet-input spreadsheet-new-input input-right" inputmode="numeric" data-mask="thousands" 
+        id="newToolingLife" placeholder="Life *">
+    </td>
+    <td>
+      <input type="text" class="spreadsheet-input spreadsheet-new-input input-right" inputmode="numeric" data-mask="thousands" 
+        id="newToolingProduced" placeholder="Produced *">
+    </td>
+    <td>
+      <input type="date" class="spreadsheet-input spreadsheet-new-input input-center spreadsheet-date" id="newToolingProdDate">
+    </td>
+    <td>
+      <input type="text" class="spreadsheet-input spreadsheet-new-input input-right" inputmode="numeric" data-mask="thousands" 
+        id="newToolingVolume" placeholder="Volume">
+    </td>
+    <td>
+      <input type="date" class="spreadsheet-input spreadsheet-new-input input-center spreadsheet-date" id="newToolingVolDate">
+    </td>
+    <td></td>
+    <td class="new-row-action" colspan="2">
+      <button class="btn-spreadsheet-add" onclick="spreadsheetCreateTooling()" title="Create Tooling">
+        <i class="ph ph-check"></i> Create
+      </button>
+    </td>
+  `;
+  spreadsheetBody.appendChild(newRow);
+  
+  // Aplica máscara de milhares nos inputs numéricos
+  const spreadsheetContainer = document.getElementById('spreadsheetContainer');
+  if (spreadsheetContainer) {
+    applyInitialThousandsMask(spreadsheetContainer);
+  }
+}
+
+// Cria novo ferramental a partir da planilha
+async function spreadsheetCreateTooling() {
+  const pnInput = document.getElementById('newToolingPN');
+  const pnDescInput = document.getElementById('newToolingPNDesc');
+  const descInput = document.getElementById('newToolingDesc');
+  const lifeInput = document.getElementById('newToolingLife');
+  const producedInput = document.getElementById('newToolingProduced');
+  const prodDateInput = document.getElementById('newToolingProdDate');
+  const volumeInput = document.getElementById('newToolingVolume');
+  const volDateInput = document.getElementById('newToolingVolDate');
+  
+  // Validar campos obrigatórios
+  const pn = pnInput ? pnInput.value.trim() : '';
+  const pnDesc = pnDescInput ? pnDescInput.value.trim() : '';
+  const desc = descInput ? descInput.value.trim() : '';
+  const toolingLife = lifeInput ? parseLocalizedNumber(lifeInput.value) : 0;
+  const produced = producedInput ? parseLocalizedNumber(producedInput.value) : 0;
+  const prodDate = prodDateInput ? prodDateInput.value : null;
+  const volume = volumeInput ? parseLocalizedNumber(volumeInput.value) : 0;
+  const volDate = volDateInput ? volDateInput.value : null;
+  
+  // Verificar campos obrigatórios
+  if (!pn) {
+    showNotification('Informe o PN do ferramental.', 'error');
+    if (pnInput) pnInput.focus();
+    return;
+  }
+  
+  if (!currentSupplier) {
+    showNotification('Selecione um fornecedor primeiro.', 'error');
+    return;
+  }
+  
+  if (toolingLife <= 0) {
+    showNotification('Informe a vida útil do ferramental.', 'error');
+    if (lifeInput) lifeInput.focus();
+    return;
+  }
+  
+  if (produced < 0) {
+    showNotification('Valor de produção inválido.', 'error');
+    if (producedInput) producedInput.focus();
+    return;
+  }
+  
+  try {
+    // Criar comentário inicial
+    const now = new Date();
+    const dateStr = now.toLocaleString('pt-BR', { 
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric', 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+    
+    const initialComment = {
+      date: dateStr,
+      text: `Created with Tooling Life: ${formatIntegerWithSeparators(toolingLife)} pcs`,
+      initial: true
+    };
+    
+    const commentsJson = JSON.stringify([initialComment]);
+    
+    const payload = {
+      pn,
+      pn_description: pnDesc,
+      supplier: currentSupplier,
+      cummins_responsible: null,
+      tool_description: desc,
+      tooling_life_qty: toolingLife,
+      produced,
+      date_remaining_tooling_life: prodDate,
+      annual_volume_forecast: volume > 0 ? volume : null,
+      date_annual_volume: volDate,
+      status: 'ACTIVE',
+      comments: commentsJson
+    };
+    
+    const result = await window.api.createTooling(payload);
+    
+    if (!result || result.success !== true) {
+      showNotification(result?.error || 'Não foi possível criar o ferramental.', 'error');
+      return;
+    }
+    
+    // Limpar campos
+    if (pnInput) pnInput.value = '';
+    if (pnDescInput) pnDescInput.value = '';
+    if (descInput) descInput.value = '';
+    if (lifeInput) lifeInput.value = '';
+    if (producedInput) producedInput.value = '';
+    if (prodDateInput) prodDateInput.value = '';
+    if (volumeInput) volumeInput.value = '';
+    if (volDateInput) volDateInput.value = '';
+    
+    // Recarregar dados
+    await loadSuppliers();
+    await loadAnalytics();
+    await refreshReplacementIdOptions(true);
+    await loadToolingBySupplier(currentSupplier);
+    
+    showNotification('Ferramental criado com sucesso!');
+    
+  } catch (error) {
+    console.error('Error creating tooling from spreadsheet:', error);
+    showNotification('Erro ao criar ferramental', 'error');
+  }
+}
+
+// Retorna o ícone HTML para o estado de expiração na planilha
+function getSpreadsheetExpirationIcon(state) {
+  switch (state) {
+    case 'expired':
+      return '<i class="ph ph-fill ph-warning-circle expiration-icon expired" title="Expired"></i>';
+    case 'warning':
+      return '<i class="ph ph-fill ph-warning expiration-icon warning" title="Expiring Soon"></i>';
+    case 'obsolete':
+    case 'obsolete-replaced':
+      return '<i class="ph ph-fill ph-archive-box expiration-icon obsolete" title="Obsolete"></i>';
+    default:
+      return '<i class="ph ph-check-circle expiration-icon ok" title="OK"></i>';
+  }
+}
+
+// Constrói opções de status para o select da planilha
+function buildSpreadsheetStatusOptions(currentStatus) {
+  const normalizedCurrent = (currentStatus || '').toString().trim().toUpperCase();
+  let options = '<option value="">Select...</option>';
+  
+  statusOptions.forEach(status => {
+    const selected = status.toUpperCase() === normalizedCurrent ? 'selected' : '';
+    options += `<option value="${escapeHtml(status)}" ${selected}>${escapeHtml(status)}</option>`;
+  });
+  
+  return options;
+}
+
+// Constrói opções de steps para o select da planilha
+function buildSpreadsheetStepsOptions(currentStep) {
+  const normalizedCurrent = (currentStep || '').toString().trim();
+  const steps = ['', '1', '2', '3', '4', '5', '6', '7'];
+  
+  return steps.map(step => {
+    const selected = step === normalizedCurrent ? 'selected' : '';
+    const label = step === '' ? 'Select...' : step;
+    return `<option value="${step}" ${selected}>${label}</option>`;
+  }).join('');
+}
+
+// Retorna a classe CSS para o status
+function getStatusClass(status) {
+  const normalized = (status || '').toString().trim().toLowerCase();
+  if (normalized === 'active') return 'status-active';
+  if (normalized === 'obsolete') return 'status-obsolete';
+  if (normalized === 'inactive') return 'status-inactive';
+  if (normalized === 'under construction') return 'status-construction';
+  return '';
+}
+
+// Formata data para exibição no input (formato BR)
+function formatDateForInput(dateValue) {
+  if (!dateValue) return '';
+  // Se já estiver em formato BR (dd/mm/yyyy), retorna como está
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateValue)) return dateValue;
+  // Se estiver em formato ISO (yyyy-mm-dd), converte
+  if (/^\d{4}-\d{2}-\d{2}/.test(dateValue)) {
+    const parts = dateValue.split('-');
+    return `${parts[2]}/${parts[1]}/${parts[0]}`;
+  }
+  return dateValue;
+}
+
+// Formata data para input type="date" (formato ISO yyyy-mm-dd)
+function formatDateForDateInput(dateValue) {
+  if (!dateValue) return '';
+  // Se estiver em formato ISO (yyyy-mm-dd), retorna como está
+  if (/^\d{4}-\d{2}-\d{2}/.test(dateValue)) {
+    return dateValue.substring(0, 10); // Pega apenas yyyy-mm-dd
+  }
+  // Se estiver em formato BR (dd/mm/yyyy), converte para ISO
+  if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateValue)) {
+    const parts = dateValue.split('/');
+    return `${parts[2]}-${parts[1]}-${parts[0]}`;
+  }
+  return '';
+}
+
+// Formata valor numérico para exibição na planilha com separador de milhares
+function formatNumericForSpreadsheet(value) {
+  if (value === null || value === undefined || value === '') return '';
+  const num = parseLocalizedNumber(value);
+  if (num === 0 && String(value).trim() !== '0' && String(value).trim() !== '') {
+    // Se o valor original não era zero mas parseou como zero, retorna vazio
+    return '';
+  }
+  if (num === 0) return '';
+  return formatIntegerWithSeparators(num);
+}
+
+// Campos que são numéricos
+const numericSpreadsheetFields = ['tooling_life_qty', 'produced', 'annual_volume_forecast'];
+
+// Campos que são datas
+const dateSpreadsheetFields = ['date_remaining_tooling_life', 'date_annual_volume'];
+
+// Salva alteração da planilha
+async function spreadsheetSave(inputElement) {
+  const id = inputElement.dataset.id;
+  const field = inputElement.dataset.field;
+  let value = inputElement.value;
+  
+  if (!id || !field) return;
+  
+  // Processa campos numéricos - remove formatação e converte para número
+  if (numericSpreadsheetFields.includes(field)) {
+    // Remove a máscara de milhares e converte para número
+    const numValue = parseLocalizedNumber(value);
+    value = numValue.toString();
+  }
+  
+  // Campos de data já vêm em formato ISO do input type="date"
+  // Não precisa de conversão adicional
+  
+  try {
+    const updateData = { [field]: value };
+    await window.api.updateTooling(id, updateData);
+    
+    // Atualiza o item no array local
+    const item = toolingData.find(t => String(t.id) === String(id));
+    if (item) {
+      item[field] = value;
+    }
+    
+    // Feedback visual sutil
+    inputElement.style.backgroundColor = '#e8f5e9';
+    setTimeout(() => {
+      inputElement.style.backgroundColor = '';
+    }, 500);
+    
+    // Atualiza classe do select de status se necessário
+    if (field === 'status' && inputElement.tagName === 'SELECT') {
+      inputElement.className = 'spreadsheet-select ' + getStatusClass(value);
+    }
+    
+  } catch (error) {
+    console.error('Error saving spreadsheet data:', error);
+    inputElement.style.backgroundColor = '#ffebee';
+    setTimeout(() => {
+      inputElement.style.backgroundColor = '';
+    }, 1000);
+  }
 }
 
 // Gera apenas o HEADER do card (versão super leve para lista inicial)
@@ -5210,8 +6340,12 @@ function buildToolingCardHeaderHTML(item, index, chainMembership) {
         <div class="tooling-card-header-divider"></div>
         <div class="tooling-card-main-info">
           <div class="tooling-info-item tooling-info-description">
-            <span class="tooling-info-label">Description</span>
+            <span class="tooling-info-label">Tooling Description</span>
             <span class="tooling-info-value">${item.tool_description || 'N/A'}</span>
+          </div>
+          <div class="tooling-info-item tooling-info-description">
+            <span class="tooling-info-label">PN Description</span>
+            <span class="tooling-info-value">${item.pn_description || 'N/A'}</span>
           </div>
           <div class="tooling-info-item card-collapsible">
             <span class="tooling-info-label">Expiration</span>
@@ -5366,18 +6500,18 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
               </div>
               <div class="detail-item detail-pair">
                 <div class="detail-item">
-                  <span class="detail-label">Annual Forecast</span>
+                  <span class="detail-label">Annual Volume</span>
                   <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${hasForecast ? forecastDisplay : ''}" data-field="annual_volume_forecast" data-id="${item.id}" onchange="handleForecastChange(${index})">
                 </div>
                 <div class="detail-item">
-                  <span class="detail-label">Forecast Date</span>
+                  <span class="detail-label">Volume Date</span>
                   <input type="date" class="detail-input" value="${item.date_annual_volume || ''}" data-field="date_annual_volume" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
                 </div>
               </div>
               <div class="detail-item detail-item-full">
                 <span class="detail-label">
                   Expiration (Calculated)
-                  <i class="ph ph-info tooltip-icon" title="Formula: today's date + (\\"Remaining\\" ÷ \\"Annual Forecast\\") years." role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
+                  <i class="ph ph-info tooltip-icon" title="Formula: today's date + (\\"Remaining\\" ÷ \\"Annual Volume\\") years." role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
                 </span>
                 ${hasExpirationIcon ? `
                 <div class="input-with-icon">
@@ -5412,7 +6546,10 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                 </select>
               </div>
               <div class="detail-item">
-                <span class="detail-label">Steps</span>
+                <span class="detail-label">
+                  Steps
+                  <i class="ph ph-info tooltip-icon" title="View all management steps" role="button" tabindex="0" onclick="openStepsInfoModal(event)" onkeydown="handleStepsInfoIconKey(event)"></i>
+                </span>
                 <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)">
                   <option value="" ${!item.steps ? 'selected' : ''}>Select...</option>
                   <option value="1" ${item.steps === '1' ? 'selected' : ''}>1</option>
@@ -5423,6 +6560,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   <option value="6" ${item.steps === '6' ? 'selected' : ''}>6</option>
                   <option value="7" ${item.steps === '7' ? 'selected' : ''}>7</option>
                 </select>
+                <span class="detail-sublabel" id="stepDescription_${item.id}" data-step-description></span>
               </div>
               <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
                 <span class="detail-label">Replacement Tooling</span>
@@ -5500,6 +6638,22 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
               <span class="detail-label">Disposition</span>
               <input type="text" class="detail-input" value="${item.disposition || ''}" data-field="disposition" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
             </div>
+            <div class="detail-item">
+              <span class="detail-label">VPCR</span>
+              <input type="text" class="detail-input" value="${item.vpcr || ''}" data-field="vpcr" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">Finish Due Date</span>
+              <input type="date" class="detail-input" value="${item.finish_due_date || ''}" data-field="finish_due_date" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">Asset Number</span>
+              <input type="text" class="detail-input" value="${item.asset_number || ''}" data-field="asset_number" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+            </div>
+            <div class="detail-item full-width">
+              <span class="detail-label">STIM</span>
+              <input type="text" class="detail-input" value="${item.stim_tooling_management || ''}" data-field="stim_tooling_management" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+            </div>
           </div>
           
           <!-- Column 2: Supplier & Tooling -->
@@ -5554,11 +6708,11 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
       <!-- Aba Attachments -->
       <div class="card-tab-content" data-tab="attachments">
         <div class="card-attachments" data-card-id="${item.id}">
-          <div class="card-attachments-list" id="cardAttachments-${item.id}"></div>
           <div class="card-attachments-dropzone" onclick="uploadCardAttachment(${item.id})">
             <i class="ph ph-upload-simple"></i>
-            <p>Drop files here or click to upload</p>
+            <span>Click or drop files here</span>
           </div>
+          <div class="card-attachments-list" id="cardAttachments-${item.id}"></div>
         </div>
       </div>
 
@@ -5789,18 +6943,18 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                   </div>
                   <div class="detail-item detail-pair">
                     <div class="detail-item">
-                      <span class="detail-label">Annual Forecast</span>
+                      <span class="detail-label">Annual Volume</span>
                       <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${hasForecast ? forecastDisplay : ''}" data-field="annual_volume_forecast" data-id="${item.id}" onchange="handleForecastChange(${index})">
                     </div>
                     <div class="detail-item">
-                      <span class="detail-label">Forecast Date</span>
+                      <span class="detail-label">Volume Date</span>
                       <input type="date" class="detail-input" value="${item.date_annual_volume || ''}" data-field="date_annual_volume" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
                     </div>
                   </div>
                   <div class="detail-item detail-item-full">
                     <span class="detail-label">
                       Expiration (Calculated)
-                      <i class="ph ph-info tooltip-icon" title="Formula: today's date + (\"Remaining\" ÷ \"Annual Forecast\") years." role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
+                      <i class="ph ph-info tooltip-icon" title="Formula: today's date + (\"Remaining\" ÷ \"Annual Volume\") years." role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
                     </span>
                     ${hasExpirationIcon ? `
                     <div class="input-with-icon">
@@ -6083,6 +7237,11 @@ async function hydrateCardsAfterRender(sortedData, renderToken, supplierContext,
 
   primeCardSnapshots(sortedData);
   refreshCardCarouselState();
+  
+  // Atualizar checkboxes se modo de seleção estiver ativo
+  if (selectionModeActive) {
+    updateCardCheckboxes();
+  }
 }
 
 // Alterna expansão do card
@@ -6120,9 +7279,6 @@ async function toggleAllCards() {
       card.classList.remove('expanded');
     }
   }
-
-  // Remove classe de desfoque quando todos estão expandidos/colapsados
-  cards.forEach(c => c.classList.remove('has-expanded-sibling'));
 
   // Atualiza o ícone do botão
   const icon = expandBtn.querySelector('i');
@@ -6253,16 +7409,6 @@ function toggleCard(index) {
   } else {
     // Está abrindo o card
     
-    // Salva cards anteriores em background
-    const expandedCards = document.querySelectorAll('.tooling-card.expanded');
-    expandedCards.forEach(expandedCard => {
-      const itemId = expandedCard.getAttribute('data-item-id');
-      if (itemId) {
-        Promise.resolve().then(() => saveToolingQuietly(itemId));
-      }
-      expandedCard.classList.remove('expanded');
-    });
-    
     // LAZY LOAD: Carrega body apenas se ainda não foi carregado
     const bodyLoaded = card.getAttribute('data-body-loaded') === 'true';
     if (!bodyLoaded) {
@@ -6288,6 +7434,18 @@ function toggleCard(index) {
         const dropzone = card.querySelector('.card-attachments-dropzone');
         if (dropzone) {
           initCardAttachmentDragAndDrop(dropzone, itemId);
+        }
+        
+        // Initialize step description
+        const stepSelect = card.querySelector(`select[data-field="steps"][data-id="${itemId}"]`);
+        if (stepSelect) {
+          const stepValue = stepSelect.value;
+          const descriptionLabel = document.getElementById(`stepDescription_${itemId}`);
+          if (descriptionLabel) {
+            const description = getStepDescription(stepValue);
+            descriptionLabel.textContent = description;
+            descriptionLabel.style.display = description ? 'block' : 'none';
+          }
         }
       }
     }
@@ -6318,18 +7476,6 @@ function toggleCard(index) {
     
     ensureCardVisible(card);
   }
-  
-  // Adiciona/remove classe de desfoque nos outros cards
-  const allCards = document.querySelectorAll('.tooling-card');
-  const hasExpandedCard = document.querySelector('.tooling-card.expanded');
-  
-  allCards.forEach(c => {
-    if (hasExpandedCard) {
-      c.classList.add('has-expanded-sibling');
-    } else {
-      c.classList.remove('has-expanded-sibling');
-    }
-  });
 }
 
 // Troca de aba dentro do card
@@ -6704,8 +7850,6 @@ async function loadAnalytics() {
     document.getElementById('totalExpired').textContent = expiredCount;
     document.getElementById('totalExpiring').textContent = expiringCount;
     document.getElementById('totalSuppliers').textContent = analytics.suppliers || 0;
-    document.getElementById('totalResponsibles').textContent = analytics.responsibles || 0;
-    document.getElementById('totalActive').textContent = analytics.active || 0;
     
     // Top suppliers
     displayTopSuppliers(suppliersData);
@@ -6749,35 +7893,152 @@ async function displayStepsSummary() {
   const tableBody = document.querySelector('#stepsSummaryTable tbody');
   if (!tableBody) return;
   
+  // Todos os 7 steps fixos
+  const allSteps = ['1', '2', '3', '4', '5', '6', '7'];
+  
+  // Mapeamento de Action (descrição de cada step)
+  const stepActions = {
+    '1': 'Control Data Update',
+    '2': 'Critical Tooling Identification',
+    '3': 'Supplier Validation Request',
+    '4': 'Critical Tooling Reassessment',
+    '5': 'On-Site Technical Analysis',
+    '6': 'Technical Confirmation',
+    '7': 'Supply Continuity Strategy'
+  };
+  
+  // Mapeamento de Deadline (prazo de cada step)
+  const stepDeadlines = {
+    '1': 'September',
+    '2': 'September',
+    '3': 'October - January',
+    '4': 'October - January',
+    '5': 'December - March',
+    '6': 'December - March',
+    '7': 'April - June'
+  };
+  
+  // Mapeamento de Responsible (responsável de cada step)
+  const stepResponsibles = {
+    '1': 'Supply Continuity',
+    '2': 'Supply Continuity',
+    '3': 'Supply Continuity',
+    '4': 'Supply Continuity',
+    '5': 'SQIE',
+    '6': 'SQIE',
+    '7': 'Sourcing Manager'
+  };
+  
+  // Função para verificar se estamos no prazo
+  // Retorna: 'completed' (step deve estar zerado), 'current' (prazo atual), 'upcoming' (futuro)
+  function getStepStatus(step, count) {
+    const currentMonth = new Date().getMonth(); // 0 = Janeiro, 11 = Dezembro
+    
+    // Ciclo anual do tooling management:
+    // Step 1-2: Julho-Setembro (período de atualização)
+    // Step 3-4: Outubro-Janeiro (validação com fornecedor)
+    // Step 5-6: Dezembro-Março (análise técnica)  
+    // Step 7: Abril-Junho (estratégia de continuidade)
+    
+    // Para cada step, definir: período ativo e período "atrasado"
+    // Mês atual: Novembro (10)
+    
+    // Usar ordem sequencial no ciclo (Julho = 0 do ciclo, Junho = 11 do ciclo)
+    // Converter mês do calendário para mês do ciclo (Julho = mês 6 vira posição 0)
+    function toCycleMonth(calendarMonth) {
+      // Julho(6) -> 0, Agosto(7) -> 1, ..., Junho(5) -> 11
+      return (calendarMonth - 6 + 12) % 12;
+    }
+    
+    const cycleMonth = toCycleMonth(currentMonth);
+    
+    // Períodos em meses do ciclo (baseado em Julho = 0)
+    // Step 1-2: Jul-Set = ciclo 0-2
+    // Step 3-4: Out-Jan = ciclo 3-6
+    // Step 5-6: Dez-Mar = ciclo 5-8
+    // Step 7: Abr-Jun = ciclo 9-11
+    const stepCyclePeriods = {
+      '1': { start: 0, end: 2 },   // Jul-Set
+      '2': { start: 0, end: 2 },   // Jul-Set
+      '3': { start: 3, end: 6 },   // Out-Jan
+      '4': { start: 3, end: 6 },   // Out-Jan
+      '5': { start: 5, end: 8 },   // Dez-Mar
+      '6': { start: 5, end: 8 },   // Dez-Mar
+      '7': { start: 9, end: 11 }   // Abr-Jun
+    };
+    
+    const period = stepCyclePeriods[step];
+    
+    const isInPeriod = cycleMonth >= period.start && cycleMonth <= period.end;
+    const isPastDeadline = cycleMonth > period.end;
+    const isBeforePeriod = cycleMonth < period.start;
+    
+    // Lógica de status:
+    if (isPastDeadline) {
+      return count > 0 ? 'behind' : 'completed';
+    } else if (isInPeriod) {
+      return 'current';
+    } else {
+      return 'upcoming';
+    }
+  }
+  
+  // Função para renderizar o indicador de status
+  function renderStatusIndicator(status, count) {
+    const statusConfig = {
+      'completed': { text: 'DONE', class: 'status-completed' },
+      'current': { text: 'NOW', class: 'status-current' },
+      'behind': { text: 'LATE', class: 'status-behind' },
+      'upcoming': { text: 'WAIT', class: 'status-upcoming' }
+    };
+    
+    const config = statusConfig[status] || statusConfig['upcoming'];
+    return `<span class="step-status-badge ${config.class}">${config.text}</span>`;
+  }
+  
   try {
     // Busca dados agregados dos steps
     const stepsData = await window.api.getStepsSummary();
     
-    if (!stepsData || stepsData.length === 0) {
-      tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #999;">No data available</td></tr>';
-      return;
+    // Cria um mapa para fácil acesso
+    const stepsMap = {};
+    if (stepsData && stepsData.length > 0) {
+      stepsData.forEach(item => {
+        stepsMap[item.steps] = item.count;
+      });
     }
     
     // Calcula o total para as porcentagens
-    const totalWithSteps = stepsData.reduce((sum, item) => sum + item.count, 0);
+    const totalWithSteps = allSteps.reduce((sum, step) => sum + (stepsMap[step] || 0), 0);
     
-    // Formata os dados com porcentagens
-    const stepsArray = stepsData.map(item => ({
-      steps: item.steps,
-      count: item.count,
-      percentage: totalWithSteps > 0 ? ((item.count / totalWithSteps) * 100).toFixed(1) : 0
-    }));
+    // Gera array com todos os 7 steps
+    const stepsArray = allSteps.map(step => {
+      const count = stepsMap[step] || 0;
+      return {
+        steps: step,
+        action: stepActions[step],
+        responsible: stepResponsibles[step],
+        deadline: stepDeadlines[step],
+        count: count,
+        percentage: totalWithSteps > 0 ? ((count / totalWithSteps) * 100).toFixed(1) : '0.0',
+        status: getStepStatus(step, count)
+      };
+    });
     
     tableBody.innerHTML = stepsArray.map(item => `
       <tr>
         <td><strong>${escapeHtml(item.steps)}</strong></td>
+        <td>${escapeHtml(item.action)}</td>
+        <td>${escapeHtml(item.responsible)}</td>
+        <td>${escapeHtml(item.deadline)}</td>
         <td><span class="table-number">${item.count}</span></td>
         <td><span class="table-number">${item.percentage}%</span></td>
+        <td>${renderStatusIndicator(item.status, item.count)}</td>
       </tr>
     `).join('');
     
   } catch (error) {
-    tableBody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: #f44;">Error loading steps data</td></tr>';
+    tableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #f44;">Error loading steps data</td></tr>';
   }
 }
 
@@ -7159,6 +8420,22 @@ async function filterSuppliersAndTooling(searchTerm) {
       displayTooling(filteredResults);
     }
   } catch (error) {
+  }
+}
+
+// Função para expandir/colapsar filtro de steps
+function toggleStepsFilter() {
+  const dropdown = document.getElementById('stepsFilterDropdown');
+  const toggle = document.getElementById('stepsFilterToggle');
+  
+  if (!dropdown || !toggle) return;
+  
+  if (dropdown.style.display === 'none') {
+    dropdown.style.display = 'block';
+    toggle.classList.add('expanded');
+  } else {
+    dropdown.style.display = 'none';
+    toggle.classList.remove('expanded');
   }
 }
 

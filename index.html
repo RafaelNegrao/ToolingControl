@@ -49,7 +49,7 @@
     <!-- Layout Principal -->
     <div class="app-container">
       <!-- Sidebar - Tooling tab only -->
-      <aside class="sidebar scrollable" id="sidebar">
+      <aside class="sidebar" id="sidebar">
         <div class="sidebar-content">
           <div class="filter-section">
             <div class="filter-header">
@@ -58,8 +58,14 @@
               <button class="filter-active-badge" id="filterActiveBadge" style="display: none;" type="button" title="Clear filter" onclick="clearExpirationFilter()">
                 <i class="ph ph-x"></i>
               </button>
-              <button class="supplier-menu-btn" id="supplierMenuBtn" type="button" title="Filter options">
+              <button class="supplier-filter-btn" id="expirationFilterBtn" type="button" title="Filter expired/expiring tooling">
+                <i class="ph ph-funnel"></i>
+              </button>
+              <button class="supplier-menu-btn" id="supplierMenuBtn" type="button" title="Export/Import options">
                 <i class="ph ph-dots-three-vertical"></i>
+              </button>
+              <button class="sidebar-toggle-btn" id="sidebarToggleBtn" onclick="toggleSidebar()" title="Toggle sidebar">
+                <i class="ph ph-caret-left" id="sidebarToggleIcon"></i>
               </button>
             </div>
             <div class="supplier-search-bar">
@@ -68,6 +74,18 @@
               <button class="btn-clear-supplier-search" id="clearSupplierSearch" onclick="clearSupplierSearch()" style="display: none;">
                 <i class="ph ph-x"></i>
               </button>
+            </div>
+            <div class="steps-filter-container">
+              <select id="stepsFilter" class="steps-filter-select" onchange="filterToolingByStep()">
+                <option value="">All Steps</option>
+                <option value="1">1 - Control Data Update</option>
+                <option value="2">2 - Critical Tooling Identification</option>
+                <option value="3">3 - Supplier Validation Request</option>
+                <option value="4">4 - Critical Tooling Reassessment</option>
+                <option value="5">5 - On-Site Technical Analysis</option>
+                <option value="6">6 - Technical Confirmation</option>
+                <option value="7">7 - Supply Continuity Strategy</option>
+              </select>
             </div>
             <div class="supplier-list scrollable" id="supplierList">
               <!-- Cards de fornecedores serão inseridos aqui -->
@@ -94,6 +112,30 @@
                   </div>
                 </div>
                 <div class="attachments-header-actions">
+                  <div class="view-mode-switch" id="viewModeSwitch">
+                    <button class="view-mode-btn active" id="viewModeCards" title="Cards view" onclick="setViewMode('cards')">
+                      <i class="ph ph-squares-four"></i>
+                    </button>
+                    <button class="view-mode-btn" id="viewModeSpreadsheet" title="Spreadsheet view" onclick="setViewMode('spreadsheet')">
+                      <i class="ph ph-table"></i>
+                    </button>
+                  </div>
+                  <button class="supplier-data-btn" id="toggleSelectModeBtn" type="button" title="Select items for export" onclick="toggleSelectionMode()" disabled>
+                    <i class="ph ph-check-square"></i>
+                  </button>
+                  <div class="selection-actions" id="selectionActions" style="display: none;">
+                    <button class="selection-action-btn" type="button" title="Select all" onclick="selectAllTooling()">
+                      <i class="ph ph-check-square"></i>
+                    </button>
+                    <button class="selection-action-btn" type="button" title="Deselect all" onclick="deselectAllTooling()">
+                      <i class="ph ph-square"></i>
+                    </button>
+                    <span class="selection-counter" id="selectionCounter">0 items selected</span>
+                    <button class="selection-export-btn" type="button" title="Export selected" onclick="exportSelectedItems()">
+                      <i class="ph ph-export"></i>
+                      <span>Export</span>
+                    </button>
+                  </div>
                   <button class="supplier-data-btn" id="exportSupplierBtn" type="button" title="Export supplier data" onclick="exportSupplierData()" disabled>
                     <i class="ph ph-export"></i>
                   </button>
@@ -197,9 +239,26 @@
                   <textarea class="comments-textarea" id="supplierContactText" placeholder="Name, email, phone..."></textarea>
                 </div>
                 
-                <div class="comment-field-group">
-                  <label for="cumminsResponsibleText">Cummins Owner</label>
-                  <input type="text" class="comments-input" id="cumminsResponsibleText" placeholder="Owner name...">
+                <div class="comment-fields-grid">
+                  <div class="comment-field-group">
+                    <label for="supplyContinuityText">Supply Continuity</label>
+                    <input type="text" class="comments-input" id="supplyContinuityText" placeholder="Supply Continuity name...">
+                  </div>
+                  
+                  <div class="comment-field-group">
+                    <label for="sqieText">SQIE</label>
+                    <input type="text" class="comments-input" id="sqieText" placeholder="SQIE name...">
+                  </div>
+                  
+                  <div class="comment-field-group">
+                    <label for="plannerText">Planner</label>
+                    <input type="text" class="comments-input" id="plannerText" placeholder="Planner name...">
+                  </div>
+                  
+                  <div class="comment-field-group">
+                    <label for="sourcingText">Sourcing</label>
+                    <input type="text" class="comments-input" id="sourcingText" placeholder="Sourcing name...">
+                  </div>
                 </div>
               </div>
               <div class="modal-footer">
@@ -219,6 +278,34 @@
             </div>
             <div class="tooling-list" id="toolingList" style="display: none;">
               <!-- Lista de ferramentais será preenchida dinamicamente -->
+            </div>
+            <div class="spreadsheet-container" id="spreadsheetContainer" style="display: none;">
+              <table class="spreadsheet-table" id="spreadsheetTable">
+                <thead>
+                  <tr>
+                    <th class="col-checkbox" id="spreadsheetCheckboxHeader" style="display: none;">
+                      <div class="spreadsheet-checkbox-all" onclick="toggleSpreadsheetSelectAll()" title="Select all / Deselect all">
+                        <i class="ph ph-square" id="spreadsheetSelectAllIcon"></i>
+                      </div>
+                    </th>
+                    <th class="col-id">ID</th>
+                    <th class="col-pn">PN</th>
+                    <th class="col-pn-desc">PN Description</th>
+                    <th class="col-tool-desc">Tooling Description</th>
+                    <th class="col-life">Tooling Life</th>
+                    <th class="col-produced">Produced</th>
+                    <th class="col-prod-date">Production Date</th>
+                    <th class="col-volume">Annual Volume</th>
+                    <th class="col-vol-date">Volume Date</th>
+                    <th class="col-exp-date">Expiration</th>
+                    <th class="col-steps">Steps</th>
+                    <th class="col-status">Status</th>
+                  </tr>
+                </thead>
+                <tbody id="spreadsheetBody">
+                  <!-- Linhas serão preenchidas dinamicamente -->
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -372,13 +459,13 @@
           </div>
         </div>
 
-        <!-- Supplier Filter Options Overlay -->
-        <div class="modal-overlay" id="supplierFilterOverlay">
-          <div class="modal-card">
+        <!-- Expiration Filter Modal -->
+        <div class="modal-overlay" id="expirationFilterOverlay">
+          <div class="modal-card modal-card-small">
             <div class="modal-icon">
-              <i class="ph ph-faders"></i>
+              <i class="ph ph-funnel"></i>
             </div>
-            <h3>Supplier Options</h3>
+            <h3>Filter Options</h3>
             <div class="filter-options-content">
               <label class="filter-option-item">
                 <div class="filter-option-info">
@@ -388,22 +475,54 @@
                 <input type="checkbox" id="expirationFilterSwitch" class="expiration-switch">
                 <span class="expiration-slider"></span>
               </label>
-              
-              <div class="filter-option-divider"></div>
-              
-              <button class="filter-option-button" type="button" onclick="exportAllData()">
+            </div>
+            <div class="modal-actions">
+              <button class="btn-secondary" type="button" onclick="closeExpirationFilterOverlay()">Close</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Supplier Filter Options Overlay -->
+        <div class="modal-overlay" id="supplierFilterOverlay">
+          <div class="modal-card">
+            <div class="modal-icon">
+              <i class="ph ph-faders"></i>
+            </div>
+            <h3>Export & Import Options</h3>
+            <div class="filter-options-content">
+              <div class="filter-option-group-title">Export for Supplier</div>
+              <button class="filter-option-button" type="button" onclick="exportForecastSupplier()">
                 <i class="ph ph-download-simple"></i>
                 <div class="filter-option-info">
-                  <span class="filter-option-label">Export Forecast Data</span>
-                  <span class="filter-option-desc">Export ID, PN, Supplier, Forecast, Forecast Date</span>
+                  <span class="filter-option-label">Export Forecast (Supplier)</span>
+                  <span class="filter-option-desc">ID, PN, Supplier, Forecast, Forecast Date, Expiration</span>
                 </div>
               </button>
               
-              <button class="filter-option-button" type="button" onclick="importAllData()">
+              <button class="filter-option-button" type="button" onclick="importForecastSupplier()">
                 <i class="ph ph-upload-simple"></i>
                 <div class="filter-option-info">
-                  <span class="filter-option-label">Import Forecast Data</span>
+                  <span class="filter-option-label">Import Forecast (Supplier)</span>
                   <span class="filter-option-desc">Update Forecast and Forecast Date by ID</span>
+                </div>
+              </button>
+              
+              <div class="filter-option-divider"></div>
+              
+              <div class="filter-option-group-title">Export for Manager</div>
+              <button class="filter-option-button" type="button" onclick="exportForecastManager()">
+                <i class="ph ph-database"></i>
+                <div class="filter-option-info">
+                  <span class="filter-option-label">Export Full Database (Manager)</span>
+                  <span class="filter-option-desc">Export all columns from database</span>
+                </div>
+              </button>
+              
+              <button class="filter-option-button" type="button" onclick="importForecastManager()">
+                <i class="ph ph-upload-simple"></i>
+                <div class="filter-option-info">
+                  <span class="filter-option-label">Import Full Database (Manager)</span>
+                  <span class="filter-option-desc">Update all fields by ID</span>
                 </div>
               </button>
             </div>
@@ -463,13 +582,79 @@
           </div>
         </div>
 
+        <!-- Steps info modal -->
+        <div class="modal-overlay info-modal-overlay" id="stepsInfoOverlay">
+          <div class="modal-card info-modal-card">
+            <button type="button" class="info-modal-close" data-steps-info-close aria-label="Close">
+              <i class="ph ph-x"></i>
+            </button>
+            <div class="modal-icon">
+              <i class="ph ph-list-numbers"></i>
+            </div>
+            <h3>Management Steps</h3>
+            <p>The steps guide the tooling management process from data collection to supply continuity strategy.</p>
+            <table class="steps-info-table">
+              <thead>
+                <tr>
+                  <th>Steps</th>
+                  <th>Action</th>
+                  <th>Responsible</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td class="step-number">1</td>
+                  <td>Control Data Update</td>
+                  <td>Supply Continuity</td>
+                </tr>
+                <tr>
+                  <td class="step-number">2</td>
+                  <td>Critical Tooling Identification</td>
+                  <td>Supply Continuity</td>
+                </tr>
+                <tr>
+                  <td class="step-number">3</td>
+                  <td>Supplier Validation Request</td>
+                  <td>Supply Continuity</td>
+                </tr>
+                <tr>
+                  <td class="step-number">4</td>
+                  <td>Critical Tooling Reassessment</td>
+                  <td>Supply Continuity</td>
+                </tr>
+                <tr>
+                  <td class="step-number">5</td>
+                  <td>On-Site Technical Analysis</td>
+                  <td>SQIE</td>
+                </tr>
+                <tr>
+                  <td class="step-number">6</td>
+                  <td>Technical Confirmation</td>
+                  <td>SQIE</td>
+                </tr>
+                <tr>
+                  <td class="step-number">7</td>
+                  <td>Supply Continuity Strategy</td>
+                  <td>Sourcing Manager</td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="info-modal-highlight">
+              Select the appropriate step to track the current status of each tooling item.
+            </div>
+            <div class="modal-actions">
+              <button class="btn-secondary" type="button" data-steps-info-close>Close</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Tab Analytics -->
         <div class="tab-content" id="tab-analytics">
           <div class="content-header">
             <h2>Analytics</h2>
           </div>
-          <div class="content-body">
-            <div class="analytics-grid">
+          <div class="content-body" style="padding: 0; overflow: hidden; display: flex; flex-direction: column;">
+            <div class="analytics-grid" style="grid-template-columns: repeat(4, 1fr); padding: 20px 20px 0 20px; gap: 20px; flex-shrink: 0;">
               <div class="metric-card">
                 <div class="metric-icon">
                   <i class="ph ph-wrench"></i>
@@ -506,60 +691,54 @@
                   <p class="metric-value" id="totalSuppliers">0</p>
                 </div>
               </div>
-              <div class="metric-card">
-                <div class="metric-icon">
-                  <i class="ph ph-user"></i>
-                </div>
-                <div class="metric-content">
-                  <h3>Cummins Owners</h3>
-                  <p class="metric-value" id="totalResponsibles">0</p>
-                </div>
-              </div>
-              <div class="metric-card metric-card--active">
-                <div class="metric-icon">
-                  <i class="ph ph-check-circle"></i>
-                </div>
-                <div class="metric-content">
-                  <h3>Active</h3>
-                  <p class="metric-value" id="totalActive">0</p>
-                </div>
-              </div>
             </div>
             
-            <div class="analytics-section">
-              <h3 class="analytics-section-title">Top Suppliers</h3>
-              <div class="analytics-table-container">
-                <table class="analytics-table" id="topSuppliersTable">
-                  <thead>
-                    <tr>
-                      <th>Supplier</th>
-                      <th>Total</th>
-                      <th>Expired</th>
-                      <th>Expiring (2y)</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <!-- Rows will be inserted here -->
-                  </tbody>
-                </table>
+            <div class="analytics-tables-row">
+              <div class="analytics-section">
+                <h3 class="analytics-section-title">Top Suppliers</h3>
+                <div class="analytics-table-container">
+                  <table class="analytics-table" id="topSuppliersTable">
+                    <thead>
+                      <tr>
+                        <th>Supplier</th>
+                        <th>Total</th>
+                        <th>Expired</th>
+                        <th>Expiring (2y)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <!-- Rows will be inserted here -->
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
 
-            <div class="analytics-section">
-              <h3 class="analytics-section-title">Tooling by Steps</h3>
-              <div class="analytics-table-container">
-                <table class="analytics-table" id="stepsSummaryTable">
-                  <thead>
-                    <tr>
-                      <th>Steps</th>
-                      <th>Quantity</th>
-                      <th>Percentage</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <!-- Rows will be inserted here -->
-                  </tbody>
-                </table>
+              <div class="analytics-section">
+                <h3 class="analytics-section-title">Tooling Management Status</h3>
+                <div class="analytics-table-container">
+                  <table class="analytics-table" id="stepsSummaryTable">
+                    <thead>
+                      <tr>
+                        <th>Steps</th>
+                        <th>Action</th>
+                        <th>Responsible</th>
+                        <th>Deadline</th>
+                        <th>Quantity</th>
+                        <th>Percentage</th>
+                        <th>Status</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <!-- Rows will be inserted here -->
+                    </tbody>
+                  </table>
+                </div>
+                <div class="status-legend">
+                  <span class="legend-item"><span class="step-status-badge status-completed">DONE</span> Completed</span>
+                  <span class="legend-item"><span class="step-status-badge status-current">NOW</span> In Progress</span>
+                  <span class="legend-item"><span class="step-status-badge status-behind">LATE</span> Behind Schedule</span>
+                  <span class="legend-item"><span class="step-status-badge status-upcoming">WAIT</span> Upcoming</span>
+                </div>
               </div>
             </div>
           </div>

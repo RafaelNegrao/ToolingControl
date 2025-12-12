@@ -19,10 +19,12 @@ contextBridge.exposeInMainWorld('api', {
   deleteTooling: (id) => ipcRenderer.invoke('delete-tooling', id),
   
   // Exportação de dados
-  exportSupplierData: (supplierName) => ipcRenderer.invoke('export-supplier-data', supplierName),
+  exportSupplierData: (supplierName, filteredIds = null) => ipcRenderer.invoke('export-supplier-data', supplierName, filteredIds),
   importSupplierData: (supplierName) => ipcRenderer.invoke('import-supplier-data', supplierName),
-  exportAllData: () => ipcRenderer.invoke('export-all-data'),
-  importAllData: () => ipcRenderer.invoke('import-all-data'),
+  exportForecastSupplier: () => ipcRenderer.invoke('export-forecast-supplier'),
+  importForecastSupplier: () => ipcRenderer.invoke('import-forecast-supplier'),
+  exportForecastManager: () => ipcRenderer.invoke('export-forecast-manager'),
+  importForecastManager: () => ipcRenderer.invoke('import-forecast-manager'),
   
   // Gerenciamento de anexos
   getAttachments: (supplierName, itemId = null) => 
