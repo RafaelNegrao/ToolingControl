@@ -230,8 +230,8 @@ textarea {
   background: #2b2b2b;
   border-right: 1px solid #1a1a1a;
   padding: 20px;
-  overflow: visible;
-  transition: all 0.3s ease;
+  overflow: hidden;
+  transition: width 0.25s ease, flex 0.25s ease, padding 0.25s ease;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -271,7 +271,21 @@ textarea {
 .sidebar.collapsed .filter-header .supplier-menu-btn,
 .sidebar.collapsed .supplier-search-bar,
 .sidebar.collapsed .steps-filter-container {
-  display: none !important;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  position: absolute;
+}
+
+/* Transição suave para elementos que somem */
+.filter-header span,
+.filter-header .ph-factory,
+.filter-header .filter-active-badge,
+.filter-header .supplier-filter-btn,
+.filter-header .supplier-menu-btn,
+.supplier-search-bar,
+.steps-filter-container {
+  transition: opacity 0.15s ease, visibility 0.15s ease;
 }
 
 /* Header compacto quando colapsado - mostra apenas o botão toggle */
@@ -280,12 +294,6 @@ textarea {
   justify-content: center !important;
   padding: 12px 8px !important;
   margin-bottom: 0 !important;
-}
-
-.sidebar.collapsed .sidebar-toggle-btn {
-  margin: 0 !important;
-  font-size: 20px !important;
-  color: #c8102e !important;
 }
 
 /* Supplier list compacto */
@@ -381,11 +389,6 @@ textarea {
   visibility: visible !important;
 }
 
-/* Quando sidebar está colapsado, ajusta o grid para 1 coluna */
-.sidebar.collapsed + .main-content .tooling-details-grid:not([data-carousel-track]) {
-  grid-template-columns: 1fr;
-}
-
 /* Botão toggle do sidebar */
 .sidebar-toggle-btn {
   background: transparent;
@@ -398,15 +401,20 @@ textarea {
   font-size: 18px;
   padding: 4px;
   margin-left: auto;
-  transition: all 0.2s ease;
+  transition: color 0.2s ease;
+  flex-shrink: 0;
+}
+
+.sidebar-toggle-btn i {
+  transition: transform 0.25s ease;
 }
 
 .sidebar-toggle-btn:hover {
   color: #fff;
 }
 
-.sidebar-toggle-btn i {
-  transition: opacity 0.25s ease, transform 0.25s ease;
+.sidebar.collapsed .sidebar-toggle-btn {
+  margin: 0 auto !important;
 }
 
 .sidebar.hidden {
@@ -551,16 +559,18 @@ textarea {
 }
 
 .filter-active-badge {
-  background: transparent;
-  border: 1px solid #c8102e;
+  background: rgba(200, 16, 46, 0.15);
+  border: none;
   color: #c8102e;
   cursor: pointer;
-  padding: 2px 6px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s;
-  border-radius: 3px;
+  border-radius: 50%;
   font-size: 12px;
   margin-left: auto;
   margin-right: 4px;
@@ -569,7 +579,6 @@ textarea {
 .filter-active-badge:hover {
   background: #c8102e;
   color: #ffffff;
-  border-color: #c8102e;
 }
 
 .supplier-menu-dropdown {
@@ -1772,14 +1781,38 @@ textarea {
   flex: 1 1 100%;
 }
 
+/* Last Update Snick */
+.card-last-update-snick {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: #999;
+}
+
+.card-last-update-snick i {
+  font-size: 12px;
+  color: #bbb;
+}
+
+.card-last-update-snick span {
+  font-style: italic;
+}
+
 .tooling-card-footer {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 12px;
   padding: 20px 0 12px 0;
   border-top: 1px solid #e0e0e0;
   margin-top: 20px;
+}
+
+.tooling-card-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 /* Card Tabs */
@@ -2254,25 +2287,16 @@ textarea {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
   margin-bottom: 16px;
-  transition: transform 0.3s ease;
 }
 
 .details-carousel-wrapper {
   position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
+  display: block;
   width: 100%;
-  min-width: 0;
-  overflow: hidden;
 }
 
 .tooling-details-carousel {
-  flex: 1;
-  overflow: hidden;
-  position: relative;
-  min-width: 0;
+  width: 100%;
 }
 
 .tooling-card.replacement-picker-open .details-carousel-wrapper,
@@ -2280,75 +2304,9 @@ textarea {
   overflow: visible;
 }
 
+/* Carousel desativado */
 .carousel-nav {
   display: none;
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  border: 1px solid #e0e0e0;
-  background: #ffffff;
-  border-radius: 50%;
-  cursor: pointer;
-  align-items: center;
-  justify-content: center;
-  color: #c8102e;
-  transition: all 0.2s;
-  z-index: 5;
-}
-
-.carousel-nav:hover {
-  background: #c8102e;
-  color: #ffffff;
-  border-color: #c8102e;
-}
-
-.carousel-nav:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-  pointer-events: none;
-}
-
-.carousel-nav i {
-  font-size: 20px;
-}
-
-@media (max-width: 1200px) {
-  .carousel-nav {
-    display: flex;
-  }
-  
-  .details-carousel-wrapper {
-    padding: 0 8px;
-  }
-  
-  .tooling-details-carousel {
-    overflow: hidden;
-    width: 100%;
-    min-width: 0;
-  }
-  
-  .tooling-details-grid[data-carousel-track] {
-    display: flex !important;
-    flex-wrap: nowrap;
-    gap: 14px;
-    transform: translateX(0);
-    transition: transform 0.3s ease;
-    align-items: stretch;
-    min-width: 0;
-  }
-  
-  .tooling-details-grid[data-carousel-track] .detail-group {
-    flex: 0 0 100%;
-    min-width: 0;
-    width: 100%;
-    margin: 0;
-  }
-}
-
-@media (max-width: 900px) {
-  .tooling-details-grid:not([data-carousel-track]) {
-    grid-template-columns: 1fr;
-  }
 }
 
 .detail-group {
@@ -5542,7 +5500,7 @@ select.detail-input::-ms-expand {
 
 /* Supplier Comments Modal */
 .modal-card-comments {
-  max-width: 560px;
+  max-width: 700px;
   display: flex;
   flex-direction: column;
 }
@@ -5986,10 +5944,10 @@ select.detail-input::-ms-expand {
 .spreadsheet-table th.col-tool-desc { width: 180px; }
 .spreadsheet-table th.col-life { width: 100px; text-align: right; }
 .spreadsheet-table th.col-produced { width: 100px; text-align: right; }
-.spreadsheet-table th.col-prod-date { width: 110px; text-align: center; }
 .spreadsheet-table th.col-volume { width: 110px; text-align: right; }
-.spreadsheet-table th.col-vol-date { width: 110px; text-align: center; }
 .spreadsheet-table th.col-exp-date { width: 110px; text-align: center; }
+.spreadsheet-table th.col-progress { width: 120px; text-align: center; }
+.spreadsheet-table th.col-icons { width: 60px; text-align: center; }
 .spreadsheet-table th.col-steps { width: 80px; text-align: center; }
 .spreadsheet-table th.col-status { width: 140px; }
 
@@ -6209,6 +6167,65 @@ select.detail-input::-ms-expand {
   color: #333;
   vertical-align: middle;
 }
+
+/* ===== SPREADSHEET PROGRESS BAR ===== */
+.spreadsheet-progress {
+  text-align: center;
+  white-space: nowrap;
+  padding: 8px 6px !important;
+}
+
+.spreadsheet-progress-bar {
+  display: block;
+  width: 100%;
+  height: 8px;
+  background: #e5e7eb;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.spreadsheet-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #c8102e, #ef4444);
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+/* ===== SPREADSHEET ICONS ===== */
+.spreadsheet-icons {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.spreadsheet-icon-chain,
+.spreadsheet-icon-attachment {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  margin: 0 2px;
+  color: #666;
+  font-size: 16px;
+  transition: color 0.2s ease, transform 0.15s ease;
+  cursor: pointer;
+  border-radius: 4px;
+}
+
+.spreadsheet-icon-chain:hover,
+.spreadsheet-icon-attachment:hover {
+  color: #c8102e;
+  transform: scale(1.1);
+}
+
+.spreadsheet-icon-chain {
+  color: #8b5cf6;
+}
+
+.spreadsheet-icon-attachment {
+  color: #3b82f6;
+}
+
 /* ===== SELECTION MODE FOR EXPORT ===== */
 
 /* Botão de ativar/desativar modo seleção */
@@ -6369,4 +6386,203 @@ select.detail-input::-ms-expand {
 
 .spreadsheet-table tr.row-selected:hover {
   background: rgba(200, 16, 46, 0.12) !important;
+}
+
+/* ===== SPREADSHEET EXPANDABLE ROWS ===== */
+
+/* Coluna de expansão - fixa à direita */
+.col-expand {
+  width: 40px !important;
+  min-width: 40px !important;
+  max-width: 40px !important;
+  text-align: center;
+  padding: 0 !important;
+  position: sticky;
+  right: 0;
+  background: #f5f5f5;
+  z-index: 2;
+}
+
+.spreadsheet-table th.col-expand {
+  background: #2d2d2d;
+  position: sticky;
+  right: 0;
+  z-index: 3;
+}
+
+.spreadsheet-table tbody tr:nth-child(even) .col-expand {
+  background: #fafafa;
+}
+
+.spreadsheet-table tbody tr:hover .col-expand {
+  background: #f8f9fa;
+}
+
+.spreadsheet-table tbody tr:nth-child(even):hover .col-expand {
+  background: #f0f0f0;
+}
+
+/* Botão de expandir */
+.spreadsheet-expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  margin: 0 auto;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: #666;
+}
+
+.spreadsheet-expand-btn:hover {
+  background: rgba(200, 16, 46, 0.1);
+  color: #c8102e;
+}
+
+.spreadsheet-expand-btn i {
+  font-size: 18px;
+  transition: transform 0.2s ease;
+}
+
+/* Linha expandida */
+.spreadsheet-table tr.row-expanded {
+  background: rgba(200, 16, 46, 0.05) !important;
+  border-bottom: none;
+}
+
+.spreadsheet-table tr.row-expanded td {
+  border-bottom: none;
+}
+
+.spreadsheet-table tr.row-expanded .spreadsheet-expand-btn {
+  background: rgba(200, 16, 46, 0.15);
+  color: #c8102e;
+}
+
+/* Linha de detalhes */
+.spreadsheet-detail-row {
+  background: #fafafa !important;
+  border-bottom: 2px solid #c8102e !important;
+}
+
+.spreadsheet-detail-row:hover {
+  background: #fafafa !important;
+}
+
+.spreadsheet-detail-cell {
+  padding: 0 !important;
+}
+
+/* Container do card dentro da planilha */
+.spreadsheet-card-container {
+  padding: 16px 24px 24px;
+  background: linear-gradient(to bottom, #f8f9fa, #fff);
+  border-top: 1px solid #e8e8e8;
+}
+
+.spreadsheet-card-container .tooling-card-body {
+  max-height: none;
+  overflow: visible;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.spreadsheet-card-container .card-tabs {
+  margin-bottom: 16px;
+  border-bottom: 1px solid #e8e8e8;
+  padding-bottom: 0;
+}
+
+.spreadsheet-card-container .card-tab {
+  padding: 10px 20px;
+  font-size: 13px;
+}
+
+.spreadsheet-card-container .card-tab-content {
+  padding: 16px 0;
+}
+
+.spreadsheet-card-container .details-carousel-wrapper {
+  margin: 0;
+}
+
+.spreadsheet-card-container .tooling-details-carousel {
+  background: transparent;
+  border: none;
+  padding: 0;
+}
+
+/* Ajustes para o carousel no spreadsheet */
+.spreadsheet-card-container .carousel-nav {
+  background: #fff;
+  border: 1px solid #e0e0e0;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+}
+
+.spreadsheet-card-container .carousel-nav:hover {
+  background: #f5f5f5;
+  border-color: #c8102e;
+  color: #c8102e;
+}
+
+/* Documentation e Attachments tabs no spreadsheet */
+.spreadsheet-card-container .card-documentation-section,
+.spreadsheet-card-container .card-attachments-section {
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e8e8e8;
+  padding: 16px;
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+/* Destaque temporário para seções */
+.highlight-section {
+  box-shadow: 0 0 0 3px rgba(200, 16, 46, 0.3) !important;
+  border-color: #c8102e !important;
+}
+
+/* Remove estilos de card não necessários no container do spreadsheet */
+.spreadsheet-card-container .tooling-card-body {
+  display: block;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}
+
+/* Ajuste nos grupos de detalhes */
+.spreadsheet-card-container .detail-group {
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #eee;
+  padding: 16px;
+}
+
+/* Comentários no spreadsheet */
+.spreadsheet-card-container .comments-section {
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e8e8e8;
+}
+
+/* Aba de documentação */
+.spreadsheet-card-container .card-documentation-content {
+  padding: 16px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e8e8e8;
+}
+
+/* Aba de anexos */
+.spreadsheet-card-container .card-attachments-content {
+  padding: 16px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e8e8e8;
 }

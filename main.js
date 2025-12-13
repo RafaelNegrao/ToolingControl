@@ -1610,6 +1610,7 @@ ipcMain.handle('create-tooling', async (event, data) => {
       const annualForecast = Number.isFinite(parsedForecast) && parsedForecast > 0 ? parsedForecast : null;
       const forecastDateValue = (data?.date_annual_volume || '').trim();
       const forecastDate = forecastDateValue.length > 0 ? forecastDateValue : null;
+      const comments = data?.comments || null;
 
       if (!pn || !supplier) {
         resolve({ success: false, error: 'PN e fornecedor são obrigatórios.' });
@@ -1633,8 +1634,9 @@ ipcMain.handle('create-tooling', async (event, data) => {
           date_annual_volume,
           status,
           last_update,
-          date_remaining_tooling_life
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)`,
+          date_remaining_tooling_life,
+          comments
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?)`,
         [
           pn,
           pnDescription,
@@ -1647,7 +1649,8 @@ ipcMain.handle('create-tooling', async (event, data) => {
           annualForecast,
           forecastDate,
           'ACTIVE',
-          productionDate
+          productionDate,
+          comments
         ],
         function(err) {
           if (err) {
@@ -2224,21 +2227,26 @@ ipcMain.handle('get-attachments', async (event, supplierName, itemId = null) => 
     targetDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
   }
   
-  if (!fs.existsSync(targetDir)) {
+  // Usar caminho longo para Windows se necessário
+  const longTargetDir = getLongPath(targetDir);
+  
+  if (!fs.existsSync(longTargetDir)) {
     return [];
   }
   
   try {
-    const allItems = fs.readdirSync(targetDir);
+    const allItems = fs.readdirSync(longTargetDir);
     const files = allItems.filter(itemName => {
       const fullPath = path.join(targetDir, itemName);
-      const stats = fs.statSync(fullPath);
+      const longFullPath = getLongPath(fullPath);
+      const stats = fs.statSync(longFullPath);
       return stats.isFile();
     });
     
     return files.map(fileName => {
       const filePath = path.join(targetDir, fileName);
-      const stats = fs.statSync(filePath);
+      const longFilePath = getLongPath(filePath);
+      const stats = fs.statSync(longFilePath);
       return {
         fileName,
         supplierName,
@@ -2260,26 +2268,29 @@ ipcMain.handle('get-attachments-count-batch', async (event, supplierName, itemId
 
   const attachmentsDir = getAttachmentsDir();
   const supplierDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
+  const longSupplierDir = getLongPath(supplierDir);
   const counts = {};
 
-  if (!fs.existsSync(supplierDir)) {
+  if (!fs.existsSync(longSupplierDir)) {
     itemIds.forEach(id => { counts[id] = 0; });
     return counts;
   }
 
   itemIds.forEach(itemId => {
     const targetDir = path.join(supplierDir, String(itemId));
-    if (!fs.existsSync(targetDir)) {
+    const longTargetDir = getLongPath(targetDir);
+    if (!fs.existsSync(longTargetDir)) {
       counts[itemId] = 0;
       return;
     }
 
     try {
-      const allItems = fs.readdirSync(targetDir);
+      const allItems = fs.readdirSync(longTargetDir);
       const fileCount = allItems.filter(itemName => {
         try {
           const fullPath = path.join(targetDir, itemName);
-          const stats = fs.statSync(fullPath);
+          const longFullPath = getLongPath(fullPath);
+          const stats = fs.statSync(longFullPath);
           return stats.isFile();
         } catch {
           return false;
@@ -2316,9 +2327,13 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
     targetDir = hasCardScope
       ? path.join(supplierDir, String(itemId))
       : supplierDir;
-    if (!fs.existsSync(targetDir)) {
+    
+    // Usar caminho longo para Windows se necessário
+    const longTargetDir = getLongPath(targetDir);
+    
+    if (!fs.existsSync(longTargetDir)) {
       try {
-        fs.mkdirSync(targetDir, { recursive: true });
+        fs.mkdirSync(longTargetDir, { recursive: true });
       } catch (error) {
         return { success: false, error: 'Não foi possível criar diretório de anexos.' };
       }
@@ -2328,8 +2343,10 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
       try {
         const fileName = path.basename(sourcePath);
         const destPath = path.join(targetDir, fileName);
-        fs.copyFileSync(sourcePath, destPath);
-        const existsAfterCopy = fs.existsSync(destPath);
+        const longDestPath = getLongPath(destPath);
+        const longSourcePath = getLongPath(sourcePath);
+        fs.copyFileSync(longSourcePath, longDestPath);
+        const existsAfterCopy = fs.existsSync(longDestPath);
         return { success: true, fileName };
       } catch (error) {
         return { success: false, fileName: path.basename(sourcePath), error: error.message };
@@ -2362,29 +2379,34 @@ ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, fileP
       ? path.join(supplierDir, String(itemId))
       : supplierDir;
 
-    if (!fs.existsSync(targetDir)) {
+    // Usar caminho longo para Windows se necessário
+    const longTargetDir = getLongPath(targetDir);
+
+    if (!fs.existsSync(longTargetDir)) {
       try {
-        fs.mkdirSync(targetDir, { recursive: true });
+        fs.mkdirSync(longTargetDir, { recursive: true });
       } catch (error) {
         return { success: false, error: 'Não foi possível criar diretório de anexos.' };
       }
     }
 
     const results = filePaths.map(sourcePath => {
-      if (!sourcePath || !fs.existsSync(sourcePath)) {
+      const longSourcePath = getLongPath(sourcePath);
+      if (!sourcePath || !fs.existsSync(longSourcePath)) {
         return { success: false, error: 'Arquivo não encontrado.' };
       }
 
-      const stats = fs.statSync(sourcePath);
+      const stats = fs.statSync(longSourcePath);
       if (!stats.isFile()) {
         return { success: false, error: 'Apenas arquivos podem ser anexados.' };
       }
 
       const fileName = path.basename(sourcePath);
       const destPath = path.join(targetDir, fileName);
+      const longDestPath = getLongPath(destPath);
 
       try {
-        fs.copyFileSync(sourcePath, destPath);
+        fs.copyFileSync(longSourcePath, longDestPath);
         return { success: true, fileName };
       } catch (error) {
         return { success: false, fileName, error: error.message };

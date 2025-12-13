@@ -108,8 +108,8 @@ const DEFAULT_STATUS_OPTIONS = [
 
 const DEFAULT_REPLACEMENT_PICKER_LABEL = 'Select replacement';
 
-// View mode: 'cards' or 'spreadsheet'
-let currentViewMode = 'cards';
+// View mode: always 'spreadsheet' with expandable rows
+let currentViewMode = 'spreadsheet';
 
 let statusOptions = loadStatusOptionsFromStorage();
 let statusSettingsElements = {
@@ -177,7 +177,7 @@ function resolveToolingExpirationDate(item) {
 
 function classifyToolingExpirationState(item) {
   if (!item) {
-    return { state: 'ok', label: 'N/A', expirationDate: '' };
+    return { state: 'ok', label: '', expirationDate: '' };
   }
 
   const normalizedStatus = (item.status || '').toString().trim().toLowerCase();
@@ -621,9 +621,22 @@ function getToolingItemForCard(card) {
   return toolingData.find(item => Number(item.id) === idValue) || null;
 }
 
+// Função utilitária para encontrar o container do card (normal ou spreadsheet)
+function getCardContainer(cardIndex) {
+  // Tenta encontrar o card normal primeiro
+  let card = document.getElementById(`card-${cardIndex}`);
+  
+  // Se não encontrar, tenta no spreadsheet expandido
+  if (!card) {
+    card = document.querySelector(`.spreadsheet-card-container[data-item-index="${cardIndex}"]`);
+  }
+  
+  return card;
+}
+
 async function rebuildReplacementPickerOptions(cardIndex) {
   await ensureReplacementIdOptions();
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (!card) {
     return;
   }
@@ -1999,9 +2012,11 @@ function selectSupplier(evt, supplierName) {
     }
     
     const toolingList = document.getElementById('toolingList');
+    const spreadsheetContainer = document.getElementById('spreadsheetContainer');
     const emptyState = document.getElementById('emptyState');
     if (toolingList) toolingList.style.display = 'none';
-    if (emptyState) emptyState.style.display = 'none';
+    if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
+    if (emptyState) emptyState.style.display = 'flex';
     
     // Desabilitar botões de exportar/importar
     updateSupplierDataButtons(false);
@@ -2418,6 +2433,38 @@ function closeAttachmentsModal() {
   }
 }
 
+// Abre a linha expandida do spreadsheet e foca na seção de anexos
+function openToolingAttachmentsFromSpreadsheet(itemId) {
+  const itemIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
+  if (itemIndex === -1) return;
+  
+  const row = document.querySelector(`tr[data-id="${itemId}"]`);
+  if (!row) return;
+  
+  const isExpanded = row.classList.contains('row-expanded');
+  
+  // Se não está expandida, expande primeiro
+  if (!isExpanded) {
+    toggleSpreadsheetRow(itemId, itemIndex);
+  }
+  
+  // Aguarda um pouco para a animação e depois scroll para a seção de anexos
+  setTimeout(() => {
+    const detailRow = document.querySelector(`tr[data-detail-for="${itemId}"]`);
+    if (detailRow) {
+      const attachmentsSection = detailRow.querySelector('.card-attachments-section');
+      if (attachmentsSection) {
+        attachmentsSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        // Adiciona destaque temporário
+        attachmentsSection.classList.add('highlight-section');
+        setTimeout(() => {
+          attachmentsSection.classList.remove('highlight-section');
+        }, 2000);
+      }
+    }
+  }, 100);
+}
+
 // Retorna ícone baseado na extensão do arquivo
 function getFileIcon(fileName) {
   const ext = fileName.split('.').pop().toLowerCase();
@@ -2678,7 +2725,7 @@ async function searchTooling(term) {
 
 // Calcula status de vencimento
 function getExpirationStatus(expirationDate) {
-  if (!expirationDate) return { class: 'ok', label: 'N/A' };
+  if (!expirationDate) return { class: 'ok', label: '' };
   
   const now = new Date();
   const expDate = new Date(expirationDate);
@@ -2723,7 +2770,7 @@ function calculatePercentageUsed(item) {
 
 // Recalcula lifecycle quando campos são alterados
 function calculateLifecycle(cardIndex) {
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (!card) return;
   
   const itemId = card.getAttribute('data-item-id');
@@ -2784,7 +2831,7 @@ function calculateLifecycle(cardIndex) {
 // Calcula data de vencimento baseada no annual forecast
 // Calcula a data de validade
 function calculateExpirationDate(cardIndex, providedItem = null, skipSave = false) {
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (!card) {
     return;
   }
@@ -2823,9 +2870,9 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
     expirationInput.value = formattedDate;
     item.expiration_date = formattedDate;
     // Atualizar header do card em tempo real
-    const card = document.getElementById(`card-${cardIndex}`);
-    if (card) {
-      const expirationDisplay = card.querySelector('[data-card-expiration]');
+    const cardForUpdate = getCardContainer(cardIndex);
+    if (cardForUpdate) {
+      const expirationDisplay = cardForUpdate.querySelector('[data-card-expiration]');
       if (expirationDisplay) {
         expirationDisplay.textContent = formatDate(formattedDate);
       }
@@ -2834,11 +2881,11 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
     expirationInput.value = '';
     item.expiration_date = '';
     // Limpar header do card
-    const card = document.getElementById(`card-${cardIndex}`);
-    if (card) {
-      const expirationDisplay = card.querySelector('[data-card-expiration]');
+    const cardForClear = getCardContainer(cardIndex);
+    if (cardForClear) {
+      const expirationDisplay = cardForClear.querySelector('[data-card-expiration]');
       if (expirationDisplay) {
-        expirationDisplay.textContent = 'N/A';
+        expirationDisplay.textContent = '';
       }
     }
   }
@@ -2851,7 +2898,7 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
 
 function handleProducedChange(cardIndex) {
   calculateLifecycle(cardIndex);
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (card) {
     triggerDateReminder(card, 'date_remaining_tooling_life');
   }
@@ -2859,7 +2906,7 @@ function handleProducedChange(cardIndex) {
 
 function handleForecastChange(cardIndex) {
   calculateExpirationDate(cardIndex);
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (card) {
     triggerDateReminder(card, 'date_annual_volume');
   }
@@ -2868,7 +2915,7 @@ function handleForecastChange(cardIndex) {
 function handleStatusSelectChange(cardIndex, itemId, selectEl) {
   if (selectEl) {
     const value = (selectEl.value || '').trim();
-    const card = document.getElementById(`card-${cardIndex}`);
+    const card = getCardContainer(cardIndex);
     const previousStatus = card ? (card.dataset.status || '').trim().toLowerCase() : '';
     const newStatus = value.toLowerCase();
     
@@ -2887,7 +2934,7 @@ function handleStatusSelectChange(cardIndex, itemId, selectEl) {
 }
 
 function updateCardHeaderStatus(cardIndex, statusValue) {
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (!card) {
     return;
   }
@@ -2898,7 +2945,7 @@ function updateCardHeaderStatus(cardIndex, statusValue) {
 }
 
 function updateCardHeaderSteps(cardIndex, stepsValue) {
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (!card) {
     return;
   }
@@ -2940,7 +2987,7 @@ function handleStepsSelectChange(cardIndex, itemId, selectEl) {
 function handlePNChange(cardIndex, itemId, inputEl) {
   if (inputEl) {
     const value = (inputEl.value || '').trim();
-    const card = document.getElementById(`card-${cardIndex}`);
+    const card = getCardContainer(cardIndex);
     if (card) {
       const pnDisplay = card.querySelector('.tooling-info-value.highlight');
       if (pnDisplay) {
@@ -2952,7 +2999,7 @@ function handlePNChange(cardIndex, itemId, inputEl) {
 }
 
 function updateCardStatusAttribute(cardIndex, statusValue) {
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (!card) {
     return;
   }
@@ -3039,7 +3086,7 @@ function handleReplacementLinkChange(cardIndex, itemId, inputEl) {
 }
 
 function syncReplacementLinkControls(cardIndex, replacementId) {
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (!card) {
     return;
   }
@@ -3198,7 +3245,7 @@ async function openReplacementPickerOverlay(cardIndex) {
     return;
   }
 
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (!card) {
     return;
   }
@@ -3984,7 +4031,7 @@ async function updateReplacementChainAfterReorder() {
 }
 
 function handleReplacementPickerSearch(cardIndex, searchValue) {
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (!card) {
     return;
   }
@@ -4006,7 +4053,7 @@ function handleReplacementPickerSearch(cardIndex, searchValue) {
 }
 
 function handleReplacementPickerSelect(cardIndex, itemId, selectedId) {
-  const card = document.getElementById(`card-${cardIndex}`);
+  const card = getCardContainer(cardIndex);
   if (!card) {
     return;
   }
@@ -4268,6 +4315,8 @@ function collectCardDomValues(id) {
     return null;
   }
   const values = {};
+  const fieldPriority = {}; // Rastreia prioridade: 2=card expandido, 1=spreadsheet row, 0=outro
+  
   elements.forEach((element) => {
     const field = element.getAttribute('data-field');
     if (!field || typeof field !== 'string') {
@@ -4285,12 +4334,31 @@ function collectCardDomValues(id) {
       return;
     }
     
-    if (element instanceof HTMLInputElement && element.type === 'checkbox') {
-      values[fieldName] = element.checked ? '1' : '0';
-    } else {
-      values[fieldName] = element.value ?? '';
+    // Determinar prioridade do elemento
+    // Card expandido (dentro de .spreadsheet-detail-row ou .tooling-card-body) tem prioridade máxima
+    const isInExpandedCard = element.closest('.spreadsheet-detail-row') || element.closest('.tooling-card-body');
+    const isInSpreadsheetRow = element.closest('tr[data-id]') && element.classList.contains('spreadsheet-input');
+    
+    let priority = 0;
+    if (isInExpandedCard) {
+      priority = 2; // Prioridade máxima - card expandido
+    } else if (isInSpreadsheetRow) {
+      priority = 1; // Prioridade média - linha da spreadsheet
+    }
+    
+    // Só sobrescreve se tiver prioridade maior ou igual
+    const currentPriority = fieldPriority[fieldName] ?? -1;
+    if (priority >= currentPriority) {
+      fieldPriority[fieldName] = priority;
+      
+      if (element instanceof HTMLInputElement && element.type === 'checkbox') {
+        values[fieldName] = element.checked ? '1' : '0';
+      } else {
+        values[fieldName] = element.value ?? '';
+      }
     }
   });
+  
   return values;
 }
 
@@ -4331,7 +4399,11 @@ function buildCardPayloadFromDom(id) {
   
   const serialized = serializeCardValues(rawValues);
   const snapshotKey = getSnapshotKey(id);
-  const hasChanges = cardSnapshotStore.get(snapshotKey) !== serialized;
+  const previousSnapshot = cardSnapshotStore.get(snapshotKey);
+  
+  // Se não tem snapshot anterior, considera que há mudanças (primeiro salvamento)
+  const hasChanges = previousSnapshot === undefined || previousSnapshot !== serialized;
+  
   return {
     payload: normalizeCardPayload(rawValues),
     serialized,
@@ -4835,16 +4907,19 @@ function calculateExpirationFromFormula({
   forecast,
   productionDate
 }) {
+  // Se não há demanda (forecast), a vida útil é indeterminada
+  if (!forecast || forecast <= 0) {
+    return null;
+  }
+  
   const baseDate = productionDate ? new Date(productionDate) : new Date();
   if (Number.isNaN(baseDate.getTime())) {
     return null;
   }
 
-  const totalDays = forecast <= 0
-    ? Math.round(remaining)
-    : Math.round((remaining / forecast) * 365);
+  const totalDays = Math.round((remaining / forecast) * 365);
 
-  if (Number.isNaN(totalDays)) {
+  if (Number.isNaN(totalDays) || totalDays < 0) {
     return null;
   }
 
@@ -5797,13 +5872,13 @@ function toggleSidebar() {
   
   const willCollapse = !sidebar.classList.contains('collapsed');
   
-  // Muda a classe do ícone ANTES da transição (ícone já aponta para a direção correta)
-  if (toggleIcon) {
-    toggleIcon.className = willCollapse ? 'ph ph-caret-right' : 'ph ph-caret-left';
-  }
-  
-  // Aplica a classe
+  // Aplica a classe de transição
   sidebar.classList.toggle('collapsed');
+  
+  // Rotaciona o ícone via CSS transform após a transição
+  if (toggleIcon) {
+    toggleIcon.style.transform = willCollapse ? 'rotate(180deg)' : 'rotate(0deg)';
+  }
   
   // Salva estado no localStorage
   localStorage.setItem('sidebarCollapsed', willCollapse ? 'true' : 'false');
@@ -5818,34 +5893,26 @@ function restoreSidebarState() {
   if (sidebar && isCollapsed) {
     sidebar.classList.add('collapsed');
     if (toggleIcon) {
-      toggleIcon.className = 'ph ph-caret-right';
+      toggleIcon.style.transform = 'rotate(180deg)';
     }
   }
 }
 
 // Alterna entre modo cards e planilha
 function setViewMode(mode) {
-  currentViewMode = mode;
-  
-  // Atualiza botões
-  const cardsBtn = document.getElementById('viewModeCards');
-  const spreadsheetBtn = document.getElementById('viewModeSpreadsheet');
-  const floatingAddBtn = document.getElementById('floatingAddBtn');
-  
-  if (cardsBtn && spreadsheetBtn) {
-    cardsBtn.classList.toggle('active', mode === 'cards');
-    spreadsheetBtn.classList.toggle('active', mode === 'spreadsheet');
-  }
-  
-  // Esconde/mostra botão + baseado no modo
-  if (floatingAddBtn) {
-    floatingAddBtn.style.display = mode === 'cards' ? 'flex' : 'none';
-  }
+  // Força sempre o modo planilha com linhas expansíveis
+  currentViewMode = 'spreadsheet';
   
   // Atualiza containers
   const toolingList = document.getElementById('toolingList');
   const spreadsheetContainer = document.getElementById('spreadsheetContainer');
   const emptyState = document.getElementById('emptyState');
+  const floatingAddBtn = document.getElementById('floatingAddBtn');
+  
+  // Esconde o botão flutuante de adicionar (usamos a linha de criação na planilha)
+  if (floatingAddBtn) {
+    floatingAddBtn.style.display = 'none';
+  }
   
   if (!toolingData || toolingData.length === 0) {
     if (toolingList) toolingList.style.display = 'none';
@@ -5856,16 +5923,10 @@ function setViewMode(mode) {
   
   if (emptyState) emptyState.style.display = 'none';
   
-  if (mode === 'cards') {
-    if (toolingList) toolingList.style.display = 'flex';
-    if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
-    // Re-renderiza os cards para garantir que apareçam
-    displayTooling(toolingData);
-  } else {
-    if (toolingList) toolingList.style.display = 'none';
-    if (spreadsheetContainer) spreadsheetContainer.style.display = 'block';
-    renderSpreadsheetView();
-  }
+  // Sempre mostra apenas a planilha
+  if (toolingList) toolingList.style.display = 'none';
+  if (spreadsheetContainer) spreadsheetContainer.style.display = 'block';
+  renderSpreadsheetView();
 }
 
 // Renderiza a visualização de planilha
@@ -5882,6 +5943,9 @@ function renderSpreadsheetView() {
     });
   }
   
+  // Computa chain membership para ícones
+  const chainMembership = computeLocalChainMembership(filteredData);
+  
   // Gera as linhas da planilha
   const rows = filteredData.map(item => {
     const statusClass = getStatusClass(item.status);
@@ -5893,10 +5957,23 @@ function renderSpreadsheetView() {
     const producedDisplay = formatNumericForSpreadsheet(item.produced);
     const forecastDisplay = formatNumericForSpreadsheet(item.annual_volume_forecast);
     
-    // Calcula expiration date
+    // Calcula expiration date e progresso
     const classification = classifyToolingExpirationState(item);
-    const expirationDateDisplay = formatDate(classification.expirationDate || '');
-    const expirationIconHtml = getSpreadsheetExpirationIcon(classification.state);
+    const hasExpirationDate = classification.expirationDate && classification.expirationDate !== '';
+    const expirationDateDisplay = hasExpirationDate ? formatDate(classification.expirationDate) : '';
+    const expirationIconHtml = hasExpirationDate ? getSpreadsheetExpirationIcon(classification.state) : '';
+    
+    // Calcula progresso
+    const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || Number(item.tooling_life_qty) || 0;
+    const produced = Number(parseLocalizedNumber(item.produced)) || Number(item.produced) || 0;
+    const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
+    const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
+    
+    // Verifica chain membership e anexos
+    const membershipKey = String(item.id || '').trim();
+    const hasChainMembership = chainMembership?.get(membershipKey) === true;
+    const replacementIdValue = sanitizeReplacementId(item.replacement_tooling_id);
+    const hasReplacementLink = replacementIdValue !== '';
     
     const isSelected = selectedToolingIds.has(item.id);
     const checkboxHtml = selectionModeActive ? `
@@ -5906,8 +5983,11 @@ function renderSpreadsheetView() {
         </div>
       </td>` : '';
     
+    // Encontra o índice do item para usar nas funções de card
+    const itemIndex = toolingData.findIndex(t => t.id === item.id);
+    
     return `
-      <tr data-id="${item.id}" class="${isSelected ? 'row-selected' : ''}">
+      <tr data-id="${item.id}" data-item-index="${itemIndex}" class="${isSelected ? 'row-selected' : ''}">
         ${checkboxHtml}
         <td class="col-id">${item.id || ''}</td>
         <td>
@@ -5933,23 +6013,13 @@ function renderSpreadsheetView() {
             onchange="spreadsheetSave(this)">
         </td>
         <td>
-          <input type="date" class="spreadsheet-input input-center spreadsheet-date" 
-            value="${formatDateForDateInput(item.date_remaining_tooling_life)}" 
-            data-field="date_remaining_tooling_life" data-id="${item.id}" onchange="spreadsheetSave(this)">
-        </td>
-        <td>
           <input type="text" class="spreadsheet-input input-right" inputmode="numeric" data-mask="thousands" 
             value="${forecastDisplay}" data-field="annual_volume_forecast" data-id="${item.id}" 
             onchange="spreadsheetSave(this)">
         </td>
-        <td>
-          <input type="date" class="spreadsheet-input input-center spreadsheet-date" 
-            value="${formatDateForDateInput(item.date_annual_volume)}" 
-            data-field="date_annual_volume" data-id="${item.id}" onchange="spreadsheetSave(this)">
-        </td>
         <td class="spreadsheet-expiration">
           ${expirationIconHtml}
-          <span class="expiration-text">${expirationDateDisplay || 'N/A'}</span>
+          <span class="expiration-text">${expirationDateDisplay}</span>
         </td>
         <td>
           <select class="spreadsheet-select input-center" data-field="steps" data-id="${item.id}" onchange="spreadsheetSave(this)">
@@ -5961,17 +6031,39 @@ function renderSpreadsheetView() {
             ${statusOptionsHtml}
           </select>
         </td>
+        <td class="spreadsheet-progress">
+          <div class="spreadsheet-progress-bar">
+            <div class="spreadsheet-progress-fill" style="width: ${percentUsed}%"></div>
+          </div>
+        </td>
+        <td class="spreadsheet-icons">
+          <span class="spreadsheet-icon-chain" ${hasChainMembership ? '' : 'hidden'} title="Replacement chain" onclick="event.stopPropagation(); openReplacementTimelineOverlay(${item.id})">
+            <i class="ph ph-git-branch"></i>
+          </span>
+          <span class="spreadsheet-icon-attachment" data-attachment-icon="${item.id}" hidden title="Has attachments" onclick="event.stopPropagation(); openToolingAttachmentsFromSpreadsheet(${item.id})">
+            <i class="ph ph-paperclip"></i>
+          </span>
+        </td>
+        <td class="col-expand">
+          <button class="spreadsheet-expand-btn" onclick="toggleSpreadsheetRow(${item.id}, ${itemIndex})" title="Expand details">
+            <i class="ph ph-caret-down"></i>
+          </button>
+        </td>
       </tr>
     `;
   }).join('');
   
   spreadsheetBody.innerHTML = rows;
   
+  // Carrega contagem de anexos em background
+  loadSpreadsheetAttachmentIcons(filteredData);
+  
   // Adiciona linha para novo ferramental no final
   const newRow = document.createElement('tr');
   newRow.className = 'spreadsheet-new-row';
   newRow.id = 'spreadsheetNewRow';
   const emptyCheckboxCell = selectionModeActive ? '<td class="col-checkbox"></td>' : '';
+  const emptyExpandCell = '<td class="col-expand"></td>';
   newRow.innerHTML = `
     ${emptyCheckboxCell}
     <td class="col-id new-row-icon"><i class="ph ph-plus-circle"></i></td>
@@ -5993,14 +6085,8 @@ function renderSpreadsheetView() {
         id="newToolingProduced" placeholder="Produced *">
     </td>
     <td>
-      <input type="date" class="spreadsheet-input spreadsheet-new-input input-center spreadsheet-date" id="newToolingProdDate">
-    </td>
-    <td>
       <input type="text" class="spreadsheet-input spreadsheet-new-input input-right" inputmode="numeric" data-mask="thousands" 
         id="newToolingVolume" placeholder="Volume">
-    </td>
-    <td>
-      <input type="date" class="spreadsheet-input spreadsheet-new-input input-center spreadsheet-date" id="newToolingVolDate">
     </td>
     <td></td>
     <td class="new-row-action" colspan="2">
@@ -6008,6 +6094,9 @@ function renderSpreadsheetView() {
         <i class="ph ph-check"></i> Create
       </button>
     </td>
+    <td></td>
+    <td></td>
+    ${emptyExpandCell}
   `;
   spreadsheetBody.appendChild(newRow);
   
@@ -6015,6 +6104,279 @@ function renderSpreadsheetView() {
   const spreadsheetContainer = document.getElementById('spreadsheetContainer');
   if (spreadsheetContainer) {
     applyInitialThousandsMask(spreadsheetContainer);
+  }
+}
+
+// Carrega ícones de anexos para a planilha
+async function loadSpreadsheetAttachmentIcons(data) {
+  const supplierContext = selectedSupplier || currentSupplier || '';
+  if (!supplierContext) return;
+  
+  for (const item of data) {
+    try {
+      const attachments = await window.api.getAttachments(supplierContext, item.id);
+      if (attachments && attachments.length > 0) {
+        const icon = document.querySelector(`[data-attachment-icon="${item.id}"]`);
+        if (icon) {
+          icon.removeAttribute('hidden');
+        }
+      }
+    } catch (error) {
+      // Silently fail
+    }
+  }
+}
+
+// Toggle da expansão de uma linha da planilha para mostrar detalhes do card
+function toggleSpreadsheetRow(itemId, itemIndex) {
+  const row = document.querySelector(`tr[data-id="${itemId}"]`);
+  if (!row) return;
+  
+  const expandBtn = row.querySelector('.spreadsheet-expand-btn');
+  const isExpanded = row.classList.contains('row-expanded');
+  
+  // Fecha todas as outras linhas expandidas primeiro
+  const allExpandedRows = document.querySelectorAll('.spreadsheet-table tr.row-expanded');
+  allExpandedRows.forEach(expandedRow => {
+    if (expandedRow !== row) {
+      expandedRow.classList.remove('row-expanded');
+      const btn = expandedRow.querySelector('.spreadsheet-expand-btn');
+      if (btn) btn.innerHTML = '<i class="ph ph-caret-down"></i>';
+      
+      // Remove a linha de detalhes
+      const detailRow = expandedRow.nextElementSibling;
+      if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
+        // Salva antes de fechar e sincroniza a linha
+        const prevItemId = expandedRow.getAttribute('data-id');
+        if (prevItemId) {
+          Promise.resolve().then(() => {
+            saveToolingQuietly(prevItemId);
+            syncSpreadsheetRowFromCard(prevItemId);
+          });
+        }
+        detailRow.remove();
+      }
+    }
+  });
+  
+  if (isExpanded) {
+    // Fecha a linha atual
+    row.classList.remove('row-expanded');
+    if (expandBtn) expandBtn.innerHTML = '<i class="ph ph-caret-down"></i>';
+    
+    // Remove a linha de detalhes
+    const detailRow = row.nextElementSibling;
+    if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
+      // Salva antes de fechar e sincroniza a linha
+      Promise.resolve().then(() => {
+        saveToolingQuietly(itemId);
+        syncSpreadsheetRowFromCard(itemId);
+      });
+      detailRow.remove();
+    }
+  } else {
+    // Abre a linha atual
+    row.classList.add('row-expanded');
+    if (expandBtn) expandBtn.innerHTML = '<i class="ph ph-caret-up"></i>';
+    
+    // Cria a linha de detalhes com o conteúdo do card
+    const item = toolingData.find(t => String(t.id) === String(itemId));
+    if (item) {
+      const supplierContext = selectedSupplier || currentSupplier || '';
+      const chainMembership = new Map();
+      const bodyHTML = buildToolingCardBodyHTML(item, itemIndex, chainMembership, supplierContext);
+      
+      // Conta o número de colunas
+      const colCount = row.querySelectorAll('td').length;
+      
+      // Cria a linha de detalhes
+      const detailRow = document.createElement('tr');
+      detailRow.className = 'spreadsheet-detail-row';
+      detailRow.setAttribute('data-detail-for', itemId);
+      detailRow.innerHTML = `
+        <td colspan="${colCount}" class="spreadsheet-detail-cell">
+          <div class="spreadsheet-card-container" data-item-id="${itemId}" data-item-index="${itemIndex}">
+            ${bodyHTML}
+          </div>
+        </td>
+      `;
+      
+      // Insere após a linha atual
+      row.after(detailRow);
+      
+      // Inicializa o conteúdo do card
+      const cardContainer = detailRow.querySelector('.spreadsheet-card-container');
+      if (cardContainer) {
+        populateCardDataListForSpreadsheet(itemIndex, cardContainer);
+        applyInitialThousandsMask(cardContainer);
+        
+        // Restaura reminders de data persistentes
+        restoreDateReminders(itemId);
+        
+        // Initialize drag and drop for attachment dropzone
+        const dropzone = cardContainer.querySelector('.card-attachments-dropzone');
+        if (dropzone) {
+          initCardAttachmentDragAndDrop(dropzone, itemId);
+        }
+        
+        // Initialize step description
+        const stepSelect = cardContainer.querySelector(`select[data-field="steps"][data-id="${itemId}"]`);
+        if (stepSelect) {
+          const stepValue = stepSelect.value;
+          const descriptionLabel = document.getElementById(`stepDescription_${itemId}`);
+          if (descriptionLabel) {
+            const description = getStepDescription(stepValue);
+            descriptionLabel.textContent = description;
+            descriptionLabel.style.display = description ? 'block' : 'none';
+          }
+        }
+        
+        // Initialize carousel buttons state
+        const track = cardContainer.querySelector('[data-carousel-track]');
+        const prevBtn = cardContainer.querySelector('.carousel-nav-prev');
+        const nextBtn = cardContainer.querySelector('.carousel-nav-next');
+        if (track && prevBtn && nextBtn) {
+          const columns = Array.from(track.children);
+          prevBtn.disabled = true;
+          nextBtn.disabled = columns.length <= 1;
+          track.style.transform = 'translateX(0)';
+          track.dataset.carouselIndex = '0';
+        }
+        
+        // Carrega dados do card em background
+        setTimeout(() => {
+          calculateExpirationDateForSpreadsheet(itemIndex, cardContainer, true);
+          loadCardAttachmentsForSpreadsheet(itemId, cardContainer).catch(err => {});
+          
+          // Cria snapshot inicial para detectar alterações
+          const snapshotKey = getSnapshotKey(itemId);
+          const values = collectCardDomValues(itemId);
+          if (values) {
+            // Adiciona comentários do item ao snapshot
+            if (item.comments) {
+              values.comments = item.comments;
+            }
+            cardSnapshotStore.set(snapshotKey, serializeCardValues(values));
+          }
+        }, 0);
+      }
+    }
+  }
+}
+
+// Função auxiliar para popular datalist no spreadsheet
+function populateCardDataListForSpreadsheet(index, container) {
+  const suppliers = getSupplierOptions();
+  const responsibles = getResponsibleOptions(toolingData);
+  
+  const supplierList = container.querySelector(`#supplierList-${index}`);
+  if (supplierList) {
+    supplierList.innerHTML = suppliers
+      .map(name => `<option value="${escapeHtml(name)}"></option>`)
+      .join('');
+  }
+
+  const ownerList = container.querySelector(`#ownerList-${index}`);
+  if (ownerList) {
+    ownerList.innerHTML = responsibles
+      .map(name => `<option value="${escapeHtml(name)}"></option>`)
+      .join('');
+  }
+}
+
+// Função auxiliar para calcular expiração no spreadsheet
+function calculateExpirationDateForSpreadsheet(index, container, skipSave) {
+  // Reutiliza a lógica existente adaptada para container
+  const item = toolingData[index];
+  if (!item) return;
+  
+  const classification = classifyToolingExpirationState(item);
+  const expirationDate = classification.expirationDate || '';
+  
+  // Atualiza o input de expiração se existir
+  const expirationInput = container.querySelector(`input[data-field="expiration_date"][data-id="${item.id}"]`);
+  if (expirationInput) {
+    expirationInput.value = formatDateForDateInput(expirationDate);
+  }
+}
+
+// Função auxiliar para carregar anexos no spreadsheet
+async function loadCardAttachmentsForSpreadsheet(itemId, container) {
+  try {
+    const supplierContext = selectedSupplier || currentSupplier || '';
+    const attachments = await window.api.getAttachments(supplierContext, itemId);
+    const list = container.querySelector('.card-attachments-list');
+    const empty = container.querySelector('.card-attachments-empty');
+    
+    if (!list) return;
+    
+    if (!attachments || attachments.length === 0) {
+      if (empty) empty.style.display = 'flex';
+      list.innerHTML = '';
+      return;
+    }
+    
+    if (empty) empty.style.display = 'none';
+    
+    list.innerHTML = attachments.map(att => `
+      <div class="card-attachment-item">
+        <i class="ph ${getFileIcon(att.name)}"></i>
+        <span class="card-attachment-name" title="${escapeHtml(att.name)}">${escapeHtml(att.name)}</span>
+        <div class="card-attachment-actions">
+          <button class="card-attachment-btn" onclick="openToolingAttachment('${escapeHtml(att.path)}')" title="Open">
+            <i class="ph ph-folder-open"></i>
+          </button>
+          <button class="card-attachment-btn danger" onclick="deleteToolingAttachment(${itemId}, '${escapeHtml(att.name)}')" title="Delete">
+            <i class="ph ph-trash"></i>
+          </button>
+        </div>
+      </div>
+    `).join('');
+  } catch (error) {
+    console.error('Error loading attachments for spreadsheet:', error);
+  }
+}
+
+// Sincroniza os dados entre o card expandido e a linha da planilha
+function syncSpreadsheetRowFromCard(itemId) {
+  const row = document.querySelector(`tr[data-id="${itemId}"]`);
+  if (!row) return;
+  
+  const item = toolingData.find(t => String(t.id) === String(itemId));
+  if (!item) return;
+  
+  // Atualiza os inputs na linha
+  const fields = ['pn', 'pn_description', 'tool_description', 'tooling_life_qty', 'produced', 'date_remaining_tooling_life', 'annual_volume_forecast', 'date_annual_volume', 'status', 'steps'];
+  fields.forEach(field => {
+    const input = row.querySelector(`[data-field="${field}"][data-id="${itemId}"]`);
+    if (input) {
+      const value = item[field];
+      if (input.tagName === 'SELECT') {
+        input.value = value || '';
+        if (field === 'status') {
+          input.className = 'spreadsheet-select ' + getStatusClass(value);
+        }
+      } else if (input.type === 'date') {
+        input.value = formatDateForDateInput(value);
+      } else if (['tooling_life_qty', 'produced', 'annual_volume_forecast'].includes(field)) {
+        input.value = formatNumericForSpreadsheet(value);
+      } else {
+        input.value = value || '';
+      }
+    }
+  });
+  
+  // Atualiza a expiração
+  const classification = classifyToolingExpirationState(item);
+  const expirationCell = row.querySelector('.spreadsheet-expiration');
+  if (expirationCell) {
+    const hasExpirationDate = classification.expirationDate && classification.expirationDate !== '';
+    const expirationDateDisplay = hasExpirationDate ? formatDate(classification.expirationDate) : '';
+    const expirationIconHtml = hasExpirationDate ? getSpreadsheetExpirationIcon(classification.state) : '';
+    expirationCell.innerHTML = `
+      ${expirationIconHtml}
+      <span class="expiration-text">${expirationDateDisplay}</span>
+    `;
   }
 }
 
@@ -6224,6 +6586,52 @@ const numericSpreadsheetFields = ['tooling_life_qty', 'produced', 'annual_volume
 // Campos que são datas
 const dateSpreadsheetFields = ['date_remaining_tooling_life', 'date_annual_volume'];
 
+// Sincroniza um campo específico da spreadsheet para o card expandido
+function syncExpandedCardFromSpreadsheet(itemId, field, value) {
+  // Procura o card expandido (dentro de .spreadsheet-detail-row)
+  const detailRow = document.querySelector(`.spreadsheet-detail-row[data-detail-for="${itemId}"]`);
+  if (!detailRow) return;
+  
+  // Encontra o input/select correspondente dentro do card expandido
+  const targetElement = detailRow.querySelector(`[data-field="${field}"][data-id="${itemId}"]`);
+  if (!targetElement) return;
+  
+  // Atualiza o valor
+  if (targetElement.tagName === 'SELECT') {
+    targetElement.value = value || '';
+  } else if (targetElement.type === 'date') {
+    targetElement.value = formatDateForDateInput(value);
+  } else if (numericSpreadsheetFields.includes(field)) {
+    targetElement.value = formatNumericForSpreadsheet(value);
+  } else {
+    targetElement.value = value || '';
+  }
+}
+
+// Sincroniza um campo específico do card expandido para a spreadsheet
+function syncSpreadsheetFromExpandedCard(itemId, field, value) {
+  const row = document.querySelector(`tr[data-id="${itemId}"]`);
+  if (!row) return;
+  
+  // Encontra o input/select correspondente na linha da spreadsheet
+  const targetElement = row.querySelector(`[data-field="${field}"][data-id="${itemId}"].spreadsheet-input, [data-field="${field}"][data-id="${itemId}"].spreadsheet-select`);
+  if (!targetElement) return;
+  
+  // Atualiza o valor
+  if (targetElement.tagName === 'SELECT') {
+    targetElement.value = value || '';
+    if (field === 'status') {
+      targetElement.className = 'spreadsheet-select ' + getStatusClass(value);
+    }
+  } else if (targetElement.type === 'date') {
+    targetElement.value = formatDateForDateInput(value);
+  } else if (numericSpreadsheetFields.includes(field)) {
+    targetElement.value = formatNumericForSpreadsheet(value);
+  } else {
+    targetElement.value = value || '';
+  }
+}
+
 // Salva alteração da planilha
 async function spreadsheetSave(inputElement) {
   const id = inputElement.dataset.id;
@@ -6243,14 +6651,19 @@ async function spreadsheetSave(inputElement) {
   // Não precisa de conversão adicional
   
   try {
-    const updateData = { [field]: value };
+    const now = new Date().toISOString();
+    const updateData = { [field]: value, last_update: now };
     await window.api.updateTooling(id, updateData);
     
     // Atualiza o item no array local
     const item = toolingData.find(t => String(t.id) === String(id));
     if (item) {
       item[field] = value;
+      item.last_update = now;
     }
+    
+    // Atualiza o display do Last Update
+    updateLastUpdateDisplay(id, now);
     
     // Feedback visual sutil
     inputElement.style.backgroundColor = '#e8f5e9';
@@ -6262,6 +6675,9 @@ async function spreadsheetSave(inputElement) {
     if (field === 'status' && inputElement.tagName === 'SELECT') {
       inputElement.className = 'spreadsheet-select ' + getStatusClass(value);
     }
+    
+    // Sincroniza com o card expandido se existir
+    syncExpandedCardFromSpreadsheet(id, field, value);
     
   } catch (error) {
     console.error('Error saving spreadsheet data:', error);
@@ -6428,6 +6844,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
       : DEFAULT_REPLACEMENT_PICKER_LABEL
   );
   const replacementEditorVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
+  const lastUpdateDisplay = formatDateTime(item.last_update);
   
   // Resto do body vem da função original buildToolingCardHTML...
   // Vou copiar só a parte do <div class="tooling-card-body"> em diante
@@ -6718,14 +7135,20 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
 
       <!-- Footer com Botões -->
       <div class="tooling-card-footer">
-        <button class="btn-delete" onclick="confirmDeleteTooling(${item.id})">
-          <i class="ph ph-trash"></i>
-          Delete
-        </button>
-        <button class="btn-save" onclick="saveTooling(${item.id})">
-          <i class="ph ph-floppy-disk"></i>
-          Save Changes
-        </button>
+        <div class="card-last-update-snick" data-last-update-id="${item.id}">
+          <i class="ph ph-clock-clockwise"></i>
+          <span>Last update: ${lastUpdateDisplay}</span>
+        </div>
+        <div class="tooling-card-footer-actions">
+          <button class="btn-delete" onclick="confirmDeleteTooling(${item.id})">
+            <i class="ph ph-trash"></i>
+            Delete
+          </button>
+          <button class="btn-save" onclick="saveTooling(${item.id})">
+            <i class="ph ph-floppy-disk"></i>
+            Save Changes
+          </button>
+        </div>
       </div>
     </div>
   `;
@@ -7294,7 +7717,14 @@ async function toggleAllCards() {
 }
 
 function navigateCarousel(cardIndex, direction) {
-  const card = document.getElementById(`card-${cardIndex}`);
+  // Tenta encontrar o card normal primeiro
+  let card = document.getElementById(`card-${cardIndex}`);
+  
+  // Se não encontrar, tenta no spreadsheet expandido
+  if (!card) {
+    card = document.querySelector(`.spreadsheet-card-container[data-item-index="${cardIndex}"]`);
+  }
+  
   if (!card) return;
   
   const track = card.querySelector('[data-carousel-track]');
@@ -7471,6 +7901,18 @@ function toggleCard(index) {
       if (itemId) {
         loadCardAttachments(itemId).catch(err => {
         });
+        
+        // Cria snapshot inicial para detectar alterações
+        const snapshotKey = getSnapshotKey(itemId);
+        const values = collectCardDomValues(itemId);
+        if (values) {
+          // Adiciona comentários do item ao snapshot
+          const itemData = toolingData.find(t => String(t.id) === String(itemId));
+          if (itemData && itemData.comments) {
+            values.comments = itemData.comments;
+          }
+          cardSnapshotStore.set(snapshotKey, serializeCardValues(values));
+        }
       }
     }, 0);
     
@@ -7480,7 +7922,14 @@ function toggleCard(index) {
 
 // Troca de aba dentro do card
 function switchCardTab(cardIndex, tabName) {
-  const card = document.getElementById(`card-${cardIndex}`);
+  // Tenta encontrar o card normal primeiro
+  let card = document.getElementById(`card-${cardIndex}`);
+  
+  // Se não encontrar, tenta no spreadsheet expandido
+  if (!card) {
+    card = document.querySelector(`.spreadsheet-card-container[data-item-index="${cardIndex}"]`);
+  }
+  
   if (!card) return;
   
   // Atualiza botões das abas
@@ -7724,14 +8173,34 @@ async function saveToolingQuietly(id) {
 
     const index = toolingData.findIndex(item => Number(item.id) === Number(id));
     if (index !== -1) {
-      toolingData[index] = { ...toolingData[index], ...prepared.payload };
+      // Atualiza o last_update com a data atual
+      const now = new Date().toISOString();
+      toolingData[index] = { ...toolingData[index], ...prepared.payload, last_update: now };
+      
       if (updateResult?.comments) {
         updateCommentsDisplay(id);
       }
+      
+      // Atualiza o display do Last Update em tempo real
+      updateLastUpdateDisplay(id, now);
+      
+      // Sincroniza a linha da spreadsheet com os dados atualizados
+      syncSpreadsheetRowFromCard(id);
     }
 
     scheduleInterfaceRefresh('autosave');
   } catch (error) {
+  }
+}
+
+// Atualiza o display do Last Update no card
+function updateLastUpdateDisplay(id, dateValue) {
+  const snickElement = document.querySelector(`[data-last-update-id="${id}"]`);
+  if (snickElement) {
+    const span = snickElement.querySelector('span');
+    if (span) {
+      span.textContent = `Last update: ${formatDateTime(dateValue)}`;
+    }
   }
 }
 

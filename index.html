@@ -112,14 +112,7 @@
                   </div>
                 </div>
                 <div class="attachments-header-actions">
-                  <div class="view-mode-switch" id="viewModeSwitch">
-                    <button class="view-mode-btn active" id="viewModeCards" title="Cards view" onclick="setViewMode('cards')">
-                      <i class="ph ph-squares-four"></i>
-                    </button>
-                    <button class="view-mode-btn" id="viewModeSpreadsheet" title="Spreadsheet view" onclick="setViewMode('spreadsheet')">
-                      <i class="ph ph-table"></i>
-                    </button>
-                  </div>
+                  <!-- View mode switch removed - spreadsheet only with expandable rows -->
                   <button class="supplier-data-btn" id="toggleSelectModeBtn" type="button" title="Select items for export" onclick="toggleSelectionMode()" disabled>
                     <i class="ph ph-check-square"></i>
                   </button>
@@ -294,12 +287,13 @@
                     <th class="col-tool-desc">Tooling Description</th>
                     <th class="col-life">Tooling Life</th>
                     <th class="col-produced">Produced</th>
-                    <th class="col-prod-date">Production Date</th>
                     <th class="col-volume">Annual Volume</th>
-                    <th class="col-vol-date">Volume Date</th>
                     <th class="col-exp-date">Expiration</th>
                     <th class="col-steps">Steps</th>
                     <th class="col-status">Status</th>
+                    <th class="col-progress">Tool. Life</th>
+                    <th class="col-icons">Info</th>
+                    <th class="col-expand"></th>
                   </tr>
                 </thead>
                 <tbody id="spreadsheetBody">
