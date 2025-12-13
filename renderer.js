@@ -85,6 +85,8 @@ let stepsInfoElements = {
 
 let expirationFilterEnabled = false;
 let stepsFilteredSuppliers = null; // Lista de suppliers filtrados por step (null = sem filtro)
+let columnFilters = {}; // Armazena os filtros de coluna ativos
+let columnSort = { column: null, direction: null }; // Armazena a ordenação atual (column: 'expiration' ou 'progress', direction: 'asc' ou 'desc')
 
 let replacementIdOptions = [];
 let replacementIdOptionsLoaded = false;
@@ -2433,7 +2435,7 @@ function closeAttachmentsModal() {
   }
 }
 
-// Abre a linha expandida do spreadsheet e foca na seção de anexos
+// Abre a linha expandida do spreadsheet e foca na aba de anexos
 function openToolingAttachmentsFromSpreadsheet(itemId) {
   const itemIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
   if (itemIndex === -1) return;
@@ -2448,20 +2450,10 @@ function openToolingAttachmentsFromSpreadsheet(itemId) {
     toggleSpreadsheetRow(itemId, itemIndex);
   }
   
-  // Aguarda um pouco para a animação e depois scroll para a seção de anexos
+  // Aguarda um pouco para a animação e depois muda para a aba attachments
   setTimeout(() => {
-    const detailRow = document.querySelector(`tr[data-detail-for="${itemId}"]`);
-    if (detailRow) {
-      const attachmentsSection = detailRow.querySelector('.card-attachments-section');
-      if (attachmentsSection) {
-        attachmentsSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        // Adiciona destaque temporário
-        attachmentsSection.classList.add('highlight-section');
-        setTimeout(() => {
-          attachmentsSection.classList.remove('highlight-section');
-        }, 2000);
-      }
-    }
+    // Muda para a aba de attachments
+    switchCardTab(itemIndex, 'attachments');
   }, 100);
 }
 
@@ -2626,6 +2618,10 @@ async function loadToolingBySupplier(supplier) {
     }
     
     toolingData = data;
+    
+    // Limpa filtros de coluna e ordenação ao trocar de supplier
+    columnFilters = {};
+    columnSort = { column: null, direction: null };
     
     // Renderizar em chunks para não travar a UI
     await displayToolingInChunks(toolingData);
@@ -2930,7 +2926,7 @@ function handleStatusSelectChange(cardIndex, itemId, selectEl) {
     updateCardHeaderStatus(cardIndex, value);
     updateCardStatusAttribute(cardIndex, value);
   }
-  autoSaveTooling(itemId);
+  autoSaveTooling(itemId, true);
 }
 
 function updateCardHeaderStatus(cardIndex, statusValue) {
@@ -2981,7 +2977,7 @@ function handleStepsSelectChange(cardIndex, itemId, selectEl) {
       descriptionLabel.style.display = description ? 'block' : 'none';
     }
   }
-  autoSaveTooling(itemId);
+  autoSaveTooling(itemId, true);
 }
 
 function handlePNChange(cardIndex, itemId, inputEl) {
@@ -4907,19 +4903,24 @@ function calculateExpirationFromFormula({
   forecast,
   productionDate
 }) {
-  // Se não há demanda (forecast), a vida útil é indeterminada
-  if (!forecast || forecast <= 0) {
-    return null;
-  }
-  
   const baseDate = productionDate ? new Date(productionDate) : new Date();
   if (Number.isNaN(baseDate.getTime())) {
     return null;
   }
 
+  // Se remaining <= 0, já expirou - retorna a data base
+  if (remaining <= 0) {
+    return baseDate.toISOString().split('T')[0];
+  }
+
+  // Se não há demanda (forecast), a vida útil é indeterminada
+  if (!forecast || forecast <= 0) {
+    return null;
+  }
+
   const totalDays = Math.round((remaining / forecast) * 365);
 
-  if (Number.isNaN(totalDays) || totalDays < 0) {
+  if (Number.isNaN(totalDays)) {
     return null;
   }
 
@@ -5943,6 +5944,12 @@ function renderSpreadsheetView() {
     });
   }
   
+  // Aplica filtros de coluna
+  filteredData = applyColumnFiltersToData(filteredData);
+  
+  // Aplica ordenação
+  filteredData = applySortToData(filteredData);
+  
   // Computa chain membership para ícones
   const chainMembership = computeLocalChainMembership(filteredData);
   
@@ -6105,6 +6112,372 @@ function renderSpreadsheetView() {
   if (spreadsheetContainer) {
     applyInitialThousandsMask(spreadsheetContainer);
   }
+  
+  // Atualiza indicadores visuais de filtros e ordenação
+  updateFilterButtonIndicators();
+  updateSortButtonIndicators();
+}
+
+// Estado do popup de filtro
+let currentFilterColumn = null;
+let currentFilterPopupData = [];
+
+// Aplica filtros de coluna aos dados (suporta múltiplos valores por coluna)
+function applyColumnFiltersToData(data) {
+  if (!data || Object.keys(columnFilters).length === 0) return data;
+  
+  return data.filter(item => {
+    for (const [column, selectedValues] of Object.entries(columnFilters)) {
+      if (!selectedValues || !Array.isArray(selectedValues) || selectedValues.length === 0) continue;
+      
+      let itemValue = String(item[column] || '').trim();
+      
+      // Verifica se o valor do item está entre os selecionados
+      if (!selectedValues.includes(itemValue)) {
+        return false;
+      }
+    }
+    return true;
+  });
+}
+
+// Atualiza indicadores visuais nos botões de filtro e botão floating de limpar
+function updateFilterButtonIndicators() {
+  let activeFilterCount = 0;
+  
+  document.querySelectorAll('.column-filter-btn').forEach(btn => {
+    const th = btn.closest('th');
+    const column = th?.dataset?.filterable;
+    if (column && columnFilters[column] && columnFilters[column].length > 0) {
+      btn.classList.add('active');
+      activeFilterCount++;
+    } else {
+      btn.classList.remove('active');
+    }
+  });
+  
+  // Atualiza o botão floating de limpar filtros
+  const clearFilterBtn = document.getElementById('floatingClearFilterBtn');
+  if (clearFilterBtn) {
+    clearFilterBtn.style.display = activeFilterCount > 0 ? 'flex' : 'none';
+  }
+}
+
+// Abre o popup de filtro para uma coluna
+function openColumnFilter(event, column) {
+  event.stopPropagation();
+  
+  const popup = document.getElementById('columnFilterPopup');
+  const list = document.getElementById('columnFilterList');
+  const title = document.getElementById('columnFilterPopupTitle');
+  const searchInput = document.getElementById('columnFilterSearch');
+  
+  if (!popup || !list || !toolingData) return;
+  
+  currentFilterColumn = column;
+  
+  // Define título baseado na coluna
+  const columnTitles = {
+    id: 'Filter by ID',
+    pn: 'Filter by PN',
+    pn_description: 'Filter by PN Description',
+    tool_description: 'Filter by Tooling Description',
+    tooling_life_qty: 'Filter by Tooling Life',
+    produced: 'Filter by Produced',
+    annual_volume_forecast: 'Filter by Annual Volume',
+    steps: 'Filter by Steps',
+    status: 'Filter by Status'
+  };
+  title.textContent = columnTitles[column] || 'Filter';
+  
+  // Aplica todos os outros filtros (exceto o da coluna atual) para obter dados segmentados
+  let segmentedData = toolingData;
+  
+  // Aplica filtro de expiração se estiver ativo
+  if (expirationFilterEnabled) {
+    segmentedData = segmentedData.filter(item => {
+      const classification = classifyToolingExpirationState(item);
+      return classification.state === 'expired' || classification.state === 'warning';
+    });
+  }
+  
+  // Aplica filtros das outras colunas (não da coluna atual)
+  for (const [filterColumn, selectedValues] of Object.entries(columnFilters)) {
+    if (filterColumn === column) continue; // Pula a coluna atual
+    if (!selectedValues || !Array.isArray(selectedValues) || selectedValues.length === 0) continue;
+    
+    segmentedData = segmentedData.filter(item => {
+      const itemValue = String(item[filterColumn] || '').trim();
+      return selectedValues.includes(itemValue);
+    });
+  }
+  
+  // Coleta valores únicos da coluna a partir dos dados segmentados
+  const uniqueValues = new Set();
+  segmentedData.forEach(item => {
+    const value = String(item[column] || '').trim();
+    if (value) uniqueValues.add(value);
+  });
+  
+  // Ordena valores
+  const sortedValues = Array.from(uniqueValues).sort((a, b) => {
+    const numA = parseFloat(a.replace(/[^\d.-]/g, ''));
+    const numB = parseFloat(b.replace(/[^\d.-]/g, ''));
+    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+    return a.localeCompare(b);
+  });
+  
+  currentFilterPopupData = sortedValues;
+  
+  // Valores atualmente selecionados para esta coluna
+  const selectedValues = columnFilters[column] || [];
+  
+  // Gera HTML das opções
+  let optionsHtml = '';
+  sortedValues.forEach((value, index) => {
+    const isChecked = selectedValues.includes(value) ? 'checked' : '';
+    optionsHtml += `
+      <div class="column-filter-option" data-value="${escapeHtml(value)}">
+        <input type="checkbox" id="filterOption_${index}" value="${escapeHtml(value)}" ${isChecked}>
+        <label for="filterOption_${index}">${escapeHtml(value)}</label>
+      </div>
+    `;
+  });
+  
+  list.innerHTML = optionsHtml || '<div style="padding: 12px; color: #999; text-align: center;">No values found</div>';
+  
+  // Limpa busca
+  searchInput.value = '';
+  
+  // Atualiza estado dos botões de ordenação no popup
+  updatePopupSortButtons(column);
+  
+  // Posiciona o popup próximo ao botão
+  const btnRect = event.target.closest('.column-filter-btn').getBoundingClientRect();
+  popup.style.top = `${btnRect.bottom + 4}px`;
+  popup.style.left = `${Math.min(btnRect.left, window.innerWidth - 240)}px`;
+  
+  // Abre o popup
+  popup.classList.add('open');
+  
+  // Adiciona listener para fechar ao clicar fora
+  setTimeout(() => {
+    document.addEventListener('click', handleClickOutsideFilterPopup);
+  }, 10);
+}
+
+// Fecha o popup de filtro
+function closeColumnFilter() {
+  const popup = document.getElementById('columnFilterPopup');
+  if (popup) {
+    popup.classList.remove('open');
+  }
+  currentFilterColumn = null;
+  document.removeEventListener('click', handleClickOutsideFilterPopup);
+}
+
+// Handler para fechar ao clicar fora
+function handleClickOutsideFilterPopup(event) {
+  const popup = document.getElementById('columnFilterPopup');
+  if (popup && !popup.contains(event.target) && !event.target.closest('.column-filter-btn')) {
+    closeColumnFilter();
+  }
+}
+
+// Atualiza os botões de ordenação no popup
+function updatePopupSortButtons(column) {
+  const sortBtns = document.querySelectorAll('.column-filter-sort-btn');
+  sortBtns.forEach(btn => {
+    btn.classList.remove('active');
+    const sortDir = btn.dataset.sort;
+    if (columnSort.column === column && columnSort.direction === sortDir) {
+      btn.classList.add('active');
+    }
+  });
+}
+
+// Define a ordenação a partir do popup
+function setColumnSortFromPopup(direction) {
+  if (!currentFilterColumn) return;
+  
+  // Se já está nessa direção, remove a ordenação
+  if (columnSort.column === currentFilterColumn && columnSort.direction === direction) {
+    columnSort = { column: null, direction: null };
+  } else {
+    columnSort = { column: currentFilterColumn, direction };
+  }
+  
+  // Atualiza os botões do popup
+  updatePopupSortButtons(currentFilterColumn);
+  
+  // Atualiza indicadores nos headers
+  updateSortButtonIndicators();
+}
+
+// Filtra as opções pelo texto de busca
+function filterColumnOptions() {
+  const searchInput = document.getElementById('columnFilterSearch');
+  const searchText = (searchInput?.value || '').toLowerCase();
+  
+  document.querySelectorAll('.column-filter-option').forEach(option => {
+    const value = option.dataset.value?.toLowerCase() || '';
+    if (value.includes(searchText)) {
+      option.classList.remove('hidden');
+    } else {
+      option.classList.add('hidden');
+    }
+  });
+}
+
+// Seleciona todas as opções visíveis
+function selectAllFilterOptions() {
+  document.querySelectorAll('.column-filter-option:not(.hidden) input[type="checkbox"]').forEach(cb => {
+    cb.checked = true;
+  });
+}
+
+// Limpa todas as opções
+function clearAllFilterOptions() {
+  document.querySelectorAll('.column-filter-option input[type="checkbox"]').forEach(cb => {
+    cb.checked = false;
+  });
+}
+
+// Aplica o filtro da coluna atual
+function applyColumnFilter() {
+  if (!currentFilterColumn) return;
+  
+  // Coleta valores selecionados
+  const selectedValues = [];
+  document.querySelectorAll('.column-filter-option input[type="checkbox"]:checked').forEach(cb => {
+    selectedValues.push(cb.value);
+  });
+  
+  // Atualiza o filtro
+  if (selectedValues.length > 0) {
+    columnFilters[currentFilterColumn] = selectedValues;
+  } else {
+    delete columnFilters[currentFilterColumn];
+  }
+  
+  // Fecha o popup
+  closeColumnFilter();
+  
+  // Re-renderiza a planilha
+  renderSpreadsheetView();
+}
+
+// Limpa todos os filtros de coluna
+function clearColumnFilters() {
+  columnFilters = {};
+  columnSort = { column: null, direction: null };
+  renderSpreadsheetView();
+}
+
+// Alterna a ordenação de uma coluna
+function toggleColumnSort(event, column) {
+  event.stopPropagation();
+  
+  if (columnSort.column === column) {
+    // Se já está ordenando por esta coluna, alterna a direção ou remove
+    if (columnSort.direction === 'asc') {
+      columnSort.direction = 'desc';
+    } else {
+      // Remove ordenação
+      columnSort = { column: null, direction: null };
+    }
+  } else {
+    // Nova coluna, começa com ascendente
+    columnSort = { column, direction: 'asc' };
+  }
+  
+  renderSpreadsheetView();
+}
+
+// Aplica ordenação aos dados
+function applySortToData(data) {
+  if (!data || !columnSort.column) return data;
+  
+  const sortedData = [...data];
+  const column = columnSort.column;
+  
+  sortedData.sort((a, b) => {
+    let valueA, valueB;
+    
+    if (column === 'expiration') {
+      // Ordena por data de expiração
+      const classA = classifyToolingExpirationState(a);
+      const classB = classifyToolingExpirationState(b);
+      const dateA = classA.expirationDate ? new Date(classA.expirationDate) : null;
+      const dateB = classB.expirationDate ? new Date(classB.expirationDate) : null;
+      
+      // Itens sem data vão para o final
+      if (!dateA && !dateB) return 0;
+      if (!dateA) return 1;
+      if (!dateB) return -1;
+      
+      valueA = dateA.getTime();
+      valueB = dateB.getTime();
+    } else if (column === 'progress') {
+      // Ordena por porcentagem de uso
+      const lifeA = Number(parseLocalizedNumber(a.tooling_life_qty)) || Number(a.tooling_life_qty) || 0;
+      const prodA = Number(parseLocalizedNumber(a.produced)) || Number(a.produced) || 0;
+      const lifeB = Number(parseLocalizedNumber(b.tooling_life_qty)) || Number(b.tooling_life_qty) || 0;
+      const prodB = Number(parseLocalizedNumber(b.produced)) || Number(b.produced) || 0;
+      
+      valueA = lifeA > 0 ? (prodA / lifeA) * 100 : 0;
+      valueB = lifeB > 0 ? (prodB / lifeB) * 100 : 0;
+    } else if (column === 'id' || column === 'tooling_life_qty' || column === 'produced' || column === 'annual_volume_forecast') {
+      // Colunas numéricas
+      valueA = Number(parseLocalizedNumber(a[column])) || Number(a[column]) || 0;
+      valueB = Number(parseLocalizedNumber(b[column])) || Number(b[column]) || 0;
+    } else if (column === 'steps') {
+      // Steps são números de 1-7
+      valueA = Number(a[column]) || 0;
+      valueB = Number(b[column]) || 0;
+    } else {
+      // Colunas de texto (pn, pn_description, tool_description, status)
+      valueA = String(a[column] || '').toLowerCase();
+      valueB = String(b[column] || '').toLowerCase();
+      
+      if (columnSort.direction === 'asc') {
+        return valueA.localeCompare(valueB);
+      } else {
+        return valueB.localeCompare(valueA);
+      }
+    }
+    
+    if (columnSort.direction === 'asc') {
+      return valueA - valueB;
+    } else {
+      return valueB - valueA;
+    }
+  });
+  
+  return sortedData;
+}
+
+// Atualiza indicadores visuais nos botões de ordenação
+function updateSortButtonIndicators() {
+  document.querySelectorAll('.column-sort-btn').forEach(btn => {
+    const th = btn.closest('th');
+    const column = th?.dataset?.sortable;
+    const icon = btn.querySelector('i');
+    
+    btn.classList.remove('sort-asc', 'sort-desc');
+    
+    if (column && columnSort.column === column) {
+      if (columnSort.direction === 'asc') {
+        btn.classList.add('sort-asc');
+        icon.className = 'ph ph-sort-ascending';
+      } else {
+        btn.classList.add('sort-desc');
+        icon.className = 'ph ph-sort-descending';
+      }
+    } else {
+      icon.className = 'ph ph-arrows-down-up';
+    }
+  });
 }
 
 // Carrega ícones de anexos para a planilha
@@ -6508,7 +6881,7 @@ function getSpreadsheetExpirationIcon(state) {
 // Constrói opções de status para o select da planilha
 function buildSpreadsheetStatusOptions(currentStatus) {
   const normalizedCurrent = (currentStatus || '').toString().trim().toUpperCase();
-  let options = '<option value="">Select...</option>';
+  let options = '<option value=""></option>';
   
   statusOptions.forEach(status => {
     const selected = status.toUpperCase() === normalizedCurrent ? 'selected' : '';
@@ -6525,8 +6898,7 @@ function buildSpreadsheetStepsOptions(currentStep) {
   
   return steps.map(step => {
     const selected = step === normalizedCurrent ? 'selected' : '';
-    const label = step === '' ? 'Select...' : step;
-    return `<option value="${step}" ${selected}>${label}</option>`;
+    return `<option value="${step}" ${selected}>${step}</option>`;
   }).join('');
 }
 
@@ -6864,6 +7236,10 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
           <i class="ph ph-paperclip"></i>
           <span>Attachments</span>
         </button>
+        <button class="card-tab" onclick="switchCardTab(${index}, 'step-tracking')">
+          <i class="ph ph-path"></i>
+          <span>Step Tracking</span>
+        </button>
       </div>
 
       <!-- Aba Data -->
@@ -6968,7 +7344,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   <i class="ph ph-info tooltip-icon" title="View all management steps" role="button" tabindex="0" onclick="openStepsInfoModal(event)" onkeydown="handleStepsInfoIconKey(event)"></i>
                 </span>
                 <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)">
-                  <option value="" ${!item.steps ? 'selected' : ''}>Select...</option>
+                  <option value="" ${!item.steps ? 'selected' : ''}></option>
                   <option value="1" ${item.steps === '1' ? 'selected' : ''}>1</option>
                   <option value="2" ${item.steps === '2' ? 'selected' : ''}>2</option>
                   <option value="3" ${item.steps === '3' ? 'selected' : ''}>3</option>
@@ -7130,6 +7506,24 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
             <span>Click or drop files here</span>
           </div>
           <div class="card-attachments-list" id="cardAttachments-${item.id}"></div>
+        </div>
+      </div>
+
+      <!-- Aba Step Tracking -->
+      <div class="card-tab-content" data-tab="step-tracking">
+        <div class="step-tracking-container" data-tooling-id="${item.id}">
+          <div class="step-tracking-header">
+            <span class="step-tracking-current">Current Step: <strong>${item.steps || 'Not set'}</strong></span>
+            <button class="step-tracking-clear-btn" onclick="clearStepHistory(${item.id})" title="Clear history">
+              <i class="ph ph-trash"></i>
+            </button>
+          </div>
+          <div class="step-tracking-timeline" id="stepTimeline-${item.id}">
+            <div class="step-tracking-loading">
+              <i class="ph ph-spinner"></i>
+              <span>Loading history...</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -7313,6 +7707,10 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
               <i class="ph ph-paperclip"></i>
               <span>Attachments</span>
             </button>
+            <button class="card-tab" onclick="switchCardTab(${index}, 'step-tracking')">
+              <i class="ph ph-path"></i>
+              <span>Step Tracking</span>
+            </button>
           </div>
 
           <!-- Aba Data -->
@@ -7414,7 +7812,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                   <div class="detail-item">
                     <span class="detail-label">Steps</span>
                     <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)">
-                      <option value="" ${!item.steps ? 'selected' : ''}>Select...</option>
+                      <option value="" ${!item.steps ? 'selected' : ''}></option>
                       <option value="1" ${item.steps === '1' ? 'selected' : ''}>1</option>
                       <option value="2" ${item.steps === '2' ? 'selected' : ''}>2</option>
                       <option value="3" ${item.steps === '3' ? 'selected' : ''}>3</option>
@@ -7563,6 +7961,24 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                 <span>Click or drop files here</span>
               </div>
               <div class="card-attachments-list" id="cardAttachments-${item.id}"></div>
+            </div>
+          </div>
+
+          <!-- Aba Step Tracking -->
+          <div class="card-tab-content" data-tab="step-tracking">
+            <div class="step-tracking-container" data-tooling-id="${item.id}">
+              <div class="step-tracking-header">
+                <span class="step-tracking-current">Current Step: <strong>${item.steps || 'Not set'}</strong></span>
+                <button class="step-tracking-clear-btn" onclick="clearStepHistory(${item.id})" title="Clear history">
+                  <i class="ph ph-trash"></i>
+                </button>
+              </div>
+              <div class="step-tracking-timeline" id="stepTimeline-${item.id}">
+                <div class="step-tracking-loading">
+                  <i class="ph ph-spinner"></i>
+                  <span>Loading history...</span>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -7951,6 +8367,214 @@ function switchCardTab(cardIndex, tabName) {
   if (itemId && tabName === 'attachments') {
     loadCardAttachments(itemId);
   }
+  if (itemId && tabName === 'step-tracking') {
+    loadStepHistory(itemId);
+  }
+}
+
+async function loadStepHistory(toolingId) {
+  const timeline = document.getElementById(`stepTimeline-${toolingId}`);
+  if (!timeline) return;
+  
+  try {
+    const history = await window.api.getStepHistory(toolingId);
+    
+    if (!history || history.length === 0) {
+      timeline.innerHTML = `
+        <div class="step-tracking-empty">
+          <i class="ph ph-clock-countdown"></i>
+          <span>No step changes recorded yet</span>
+          <p>Changes to the Step field will appear here as a timeline.</p>
+        </div>
+      `;
+      return;
+    }
+    
+    // Build timeline HTML
+    let html = '<div class="step-timeline-list">';
+    
+    history.forEach((entry, index) => {
+      const date = new Date(entry.changed_at);
+      const formattedDate = date.toLocaleDateString('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      });
+      const formattedTime = date.toLocaleTimeString('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      
+      const oldStep = entry.old_step || 'Not set';
+      const newStep = entry.new_step || 'Not set';
+      const isFirst = index === 0;
+      
+      html += `
+        <div class="step-timeline-item ${isFirst ? 'latest' : ''}">
+          <div class="step-timeline-marker">
+            <div class="step-timeline-dot"></div>
+            ${index < history.length - 1 ? '<div class="step-timeline-line"></div>' : ''}
+          </div>
+          <div class="step-timeline-content">
+            <div class="step-timeline-date">
+              <i class="ph ph-calendar-blank"></i>
+              <span>${formattedDate}</span>
+              <span class="step-timeline-time">${formattedTime}</span>
+            </div>
+            <div class="step-timeline-change">
+              <span class="step-from">${escapeHtml(oldStep)}</span>
+              <i class="ph ph-arrow-right"></i>
+              <span class="step-to">${escapeHtml(newStep)}</span>
+            </div>
+          </div>
+        </div>
+      `;
+    });
+    
+    html += '</div>';
+    timeline.innerHTML = html;
+    
+  } catch (error) {
+    console.error('[StepHistory] Error loading step history:', error);
+    timeline.innerHTML = `
+      <div class="step-tracking-error">
+        <i class="ph ph-warning-circle"></i>
+        <span>Failed to load step history</span>
+      </div>
+    `;
+  }
+}
+
+// State for clear step history modal
+let clearStepHistoryState = {
+  toolingId: null,
+  descriptor: ''
+};
+
+function clearStepHistory(toolingId) {
+  const overlay = document.getElementById('clearStepHistoryOverlay');
+  const descriptionEl = document.getElementById('clearStepItemDescription');
+  
+  if (!overlay || !descriptionEl) return;
+  
+  const item = toolingData.find(tool => String(tool.id) === String(toolingId));
+  const descriptorParts = [];
+  if (item?.pn) descriptorParts.push(item.pn);
+  if (item?.tool_description) descriptorParts.push(item.tool_description);
+  const descriptor = descriptorParts.join(' - ') || 'this tooling';
+  
+  clearStepHistoryState = {
+    toolingId,
+    descriptor
+  };
+  
+  descriptionEl.textContent = descriptor;
+  overlay.classList.add('active');
+}
+
+function cancelClearStepHistory() {
+  const overlay = document.getElementById('clearStepHistoryOverlay');
+  if (overlay) {
+    overlay.classList.remove('active');
+  }
+  clearStepHistoryState = { toolingId: null, descriptor: '' };
+}
+
+async function confirmClearStepHistory() {
+  const { toolingId } = clearStepHistoryState;
+  
+  if (!toolingId) {
+    cancelClearStepHistory();
+    return;
+  }
+  
+  try {
+    await window.api.clearStepHistory(toolingId);
+    loadStepHistory(toolingId);
+    showToast('Step history cleared', 'success');
+  } catch (error) {
+    console.error('[StepHistory] Error clearing step history:', error);
+    showToast('Failed to clear step history', 'error');
+  }
+  
+  cancelClearStepHistory();
+}
+
+// State for clear ALL step history modal
+let clearAllStepHistoryState = {
+  code: ''
+};
+
+function openClearAllStepHistoryModal() {
+  const overlay = document.getElementById('clearAllStepHistoryOverlay');
+  const codeEl = document.getElementById('clearAllStepsConfirmCode');
+  const inputEl = document.getElementById('clearAllStepsConfirmInput');
+  
+  if (!overlay || !codeEl || !inputEl) {
+    console.error('[ClearAllStepHistory] Missing elements!');
+    return;
+  }
+  
+  // Close the supplier menu overlay first
+  closeSupplierFilterOverlay();
+  
+  clearAllStepHistoryState.code = generateConfirmationCode();
+  codeEl.textContent = clearAllStepHistoryState.code;
+  inputEl.value = '';
+  
+  overlay.classList.add('active');
+  inputEl.focus();
+}
+
+function cancelClearAllStepHistory() {
+  const overlay = document.getElementById('clearAllStepHistoryOverlay');
+  const inputEl = document.getElementById('clearAllStepsConfirmInput');
+  
+  if (overlay) {
+    overlay.classList.remove('active');
+  }
+  if (inputEl) {
+    inputEl.value = '';
+  }
+  clearAllStepHistoryState.code = '';
+}
+
+async function handleClearAllStepHistoryConfirmation() {
+  const inputEl = document.getElementById('clearAllStepsConfirmInput');
+  
+  if (!inputEl) {
+    cancelClearAllStepHistory();
+    return;
+  }
+  
+  const enteredCode = inputEl.value.trim().toUpperCase();
+  const expectedCode = clearAllStepHistoryState.code.toUpperCase();
+  
+  console.log('[ClearAllSteps] Entered:', enteredCode, 'Expected:', expectedCode);
+  
+  if (enteredCode !== expectedCode) {
+    inputEl.classList.add('error');
+    inputEl.focus();
+    setTimeout(() => inputEl.classList.remove('error'), 500);
+    return;
+  }
+  
+  try {
+    console.log('[ClearAllSteps] Calling API...');
+    const result = await window.api.clearAllStepHistory();
+    console.log('[ClearAllSteps] Result:', result);
+    showToast('All steps and step history cleared successfully', 'success');
+    
+    // Reload tooling data to reflect the changes
+    if (selectedSupplier) {
+      await loadToolingBySupplier(selectedSupplier);
+    }
+  } catch (error) {
+    console.error('[StepHistory] Error clearing all step history:', error);
+    showToast('Failed to clear all step history', 'error');
+  }
+  
+  cancelClearAllStepHistory();
 }
 
 function ensureCardVisible(card) {

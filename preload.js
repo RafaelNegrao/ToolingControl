@@ -46,6 +46,11 @@ contextBridge.exposeInMainWorld('api', {
   updateTodo: (todoId, text, completed) => ipcRenderer.invoke('update-todo', todoId, text, completed),
   deleteTodo: (todoId) => ipcRenderer.invoke('delete-todo', todoId),
   
+  // Step History
+  getStepHistory: (toolingId) => ipcRenderer.invoke('get-step-history', toolingId),
+  clearStepHistory: (toolingId) => ipcRenderer.invoke('clear-step-history', toolingId),
+  clearAllStepHistory: () => ipcRenderer.invoke('clear-all-step-history'),
+  
   // Controles da janela
   minimizeWindow: () => ipcRenderer.send('minimize-window'),
   maximizeWindow: () => ipcRenderer.send('maximize-window'),

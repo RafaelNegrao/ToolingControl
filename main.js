@@ -3,6 +3,7 @@ const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const fs = require('fs');
 const ExcelJS = require('exceljs');
+const { exec } = require('child_process');
 
 let mainWindow;
 let db;
@@ -147,6 +148,11 @@ function calculateExpirationFromFormula({ remaining, forecast, productionDate })
   const baseDate = productionDate ? new Date(productionDate) : new Date();
   if (Number.isNaN(baseDate.getTime())) {
     return null;
+  }
+
+  // Se remaining <= 0, já expirou - retorna a data base
+  if (remaining <= 0) {
+    return baseDate.toISOString().split('T')[0];
   }
 
   const totalDays = forecast <= 0
@@ -942,6 +948,7 @@ function connectDatabase() {
       }
       checkAndAddColumns()
         .then(() => ensureTodosTable())
+        .then(() => ensureStepHistoryTable())
         .then(resolve)
         .catch((schemaError) => {
           reject(schemaError);
@@ -1080,6 +1087,126 @@ function ensureReplacementColumnExists(force = false) {
   });
 
   return replacementColumnEnsuringPromise;
+}
+
+function ensureStepHistoryTable() {
+  return new Promise((resolve, reject) => {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS step_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tooling_id INTEGER NOT NULL,
+        old_step TEXT,
+        new_step TEXT NOT NULL,
+        changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (tooling_id) REFERENCES ferramental(id) ON DELETE CASCADE
+      )
+    `, (err) => {
+      if (err) {
+        console.error('[StepHistory] Error creating step_history table:', err);
+        reject(err);
+      } else {
+        console.log('[StepHistory] step_history table ensured');
+        resolve();
+      }
+    });
+  });
+}
+
+function recordStepChange(toolingId, oldStep, newStep) {
+  return new Promise((resolve, reject) => {
+    if (oldStep === newStep) {
+      resolve({ recorded: false, reason: 'no_change' });
+      return;
+    }
+    
+    db.run(
+      `INSERT INTO step_history (tooling_id, old_step, new_step) VALUES (?, ?, ?)`,
+      [toolingId, oldStep || null, newStep],
+      function(err) {
+        if (err) {
+          console.error('[StepHistory] Error recording step change:', err);
+          reject(err);
+        } else {
+          console.log(`[StepHistory] Recorded step change for tooling ${toolingId}: ${oldStep} -> ${newStep}`);
+          resolve({ recorded: true, id: this.lastID });
+        }
+      }
+    );
+  });
+}
+
+function getStepHistory(toolingId) {
+  return new Promise((resolve, reject) => {
+    db.all(
+      `SELECT * FROM step_history WHERE tooling_id = ? ORDER BY changed_at DESC`,
+      [toolingId],
+      (err, rows) => {
+        if (err) {
+          console.error('[StepHistory] Error getting step history:', err);
+          reject(err);
+        } else {
+          resolve(rows || []);
+        }
+      }
+    );
+  });
+}
+
+function clearStepHistory(toolingId) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `DELETE FROM step_history WHERE tooling_id = ?`,
+      [toolingId],
+      function(err) {
+        if (err) {
+          console.error('[StepHistory] Error clearing step history:', err);
+          reject(err);
+        } else {
+          console.log(`[StepHistory] Cleared ${this.changes} entries for tooling ${toolingId}`);
+          resolve({ success: true, deleted: this.changes });
+        }
+      }
+    );
+  });
+}
+
+function clearAllStepHistory() {
+  return new Promise((resolve, reject) => {
+    // First, ensure the step_history table exists
+    db.run(`CREATE TABLE IF NOT EXISTS step_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tooling_id INTEGER NOT NULL,
+      old_step TEXT,
+      new_step TEXT NOT NULL,
+      changed_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )`, (createErr) => {
+      if (createErr) {
+        console.error('[StepHistory] Error ensuring step_history table:', createErr);
+      }
+      
+      // Delete all step history records
+      db.run(`DELETE FROM step_history`, function(err) {
+        if (err) {
+          console.error('[StepHistory] Error clearing step_history table:', err);
+          // Continue anyway to clear the steps field
+        }
+        
+        const historyDeleted = this ? this.changes : 0;
+        console.log(`[StepHistory] Cleared ${historyDeleted} entries from step_history`);
+        
+        // Then, set all steps fields to empty in ferramental table
+        db.run(`UPDATE ferramental SET steps = '', last_update = datetime('now')`, function(updateErr) {
+          if (updateErr) {
+            console.error('[StepHistory] Error clearing steps field:', updateErr);
+            reject(updateErr);
+          } else {
+            console.log(`[StepHistory] Cleared steps field from ${this.changes} tooling records`);
+            resolve({ success: true, historyDeleted, toolingsUpdated: this.changes });
+          }
+        });
+      });
+    });
+  });
 }
 
 function isMissingReplacementColumnError(err) {
@@ -1280,6 +1407,19 @@ function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
           if (err) {
             reject(err);
           } else {
+            // Record step change if steps field was modified
+            if (data.hasOwnProperty('steps') && existingRecord) {
+              const oldStep = existingRecord.steps || null;
+              const newStep = data.steps || null;
+              if (oldStep !== newStep) {
+                try {
+                  await recordStepChange(id, oldStep, newStep);
+                } catch (stepErr) {
+                  console.error('[StepHistory] Failed to record step change:', stepErr);
+                }
+              }
+            }
+            
             resolve({
               success: true,
               changes: this.changes,
@@ -2445,8 +2585,8 @@ ipcMain.handle('open-attachment', async (event, supplierName, fileName, itemId =
   }
   
   try {
-    await shell.openPath(longPath);
-    return { success: true };
+    // Usar função que lida com caminhos longos no Windows
+    return await openFileWithLongPath(filePath);
   } catch (error) {
     throw error;
   }
@@ -2486,7 +2626,7 @@ function sanitizeFileName(name) {
 // Função auxiliar para lidar com caminhos longos no Windows (>260 caracteres)
 function getLongPath(filePath) {
   // No Windows, caminhos longos precisam do prefixo \\?\
-  if (process.platform === 'win32' && filePath.length > 250) {
+  if (process.platform === 'win32' && filePath.length > 200) {
     // Normaliza o caminho e adiciona o prefixo para caminhos longos
     const normalizedPath = path.resolve(filePath);
     if (!normalizedPath.startsWith('\\\\?\\')) {
@@ -2494,6 +2634,35 @@ function getLongPath(filePath) {
     }
   }
   return filePath;
+}
+
+// Função para abrir arquivo com suporte a caminhos longos no Windows
+function openFileWithLongPath(filePath) {
+  return new Promise((resolve, reject) => {
+    if (process.platform === 'win32') {
+      // No Windows, usar PowerShell para abrir arquivos com caminhos longos
+      // O PowerShell lida melhor com caminhos extensos
+      const escapedPath = filePath.replace(/'/g, "''");
+      const command = `powershell -Command "Start-Process -FilePath '${escapedPath}'"`;
+      
+      exec(command, { shell: true, windowsHide: true }, (error) => {
+        if (error) {
+          console.error('[OpenFile] PowerShell failed, trying shell.openPath:', error);
+          // Fallback para shell.openPath
+          shell.openPath(filePath)
+            .then(() => resolve({ success: true }))
+            .catch((err) => reject(err));
+        } else {
+          resolve({ success: true });
+        }
+      });
+    } else {
+      // Em outros sistemas, usar shell.openPath normalmente
+      shell.openPath(filePath)
+        .then(() => resolve({ success: true }))
+        .catch((err) => reject(err));
+    }
+  });
 }
 
 function createWindow () {
@@ -2579,6 +2748,37 @@ ipcMain.handle('delete-todo', async (event, todoId) => {
       }
     });
   });
+});
+
+// Step History handlers
+ipcMain.handle('get-step-history', async (event, toolingId) => {
+  try {
+    const history = await getStepHistory(toolingId);
+    return history;
+  } catch (err) {
+    console.error('[IPC] Error getting step history:', err);
+    throw err;
+  }
+});
+
+ipcMain.handle('clear-step-history', async (event, toolingId) => {
+  try {
+    const result = await clearStepHistory(toolingId);
+    return result;
+  } catch (err) {
+    console.error('[IPC] Error clearing step history:', err);
+    throw err;
+  }
+});
+
+ipcMain.handle('clear-all-step-history', async () => {
+  try {
+    const result = await clearAllStepHistory();
+    return result;
+  } catch (err) {
+    console.error('[IPC] Error clearing all step history:', err);
+    throw err;
+  }
 });
 
 // Window control handlers

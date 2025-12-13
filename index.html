@@ -70,7 +70,7 @@
             </div>
             <div class="supplier-search-bar">
               <i class="ph ph-magnifying-glass"></i>
-              <input type="text" id="supplierSearchInput" placeholder="Search suppliers and tooling...">
+              <input type="text" id="supplierSearchInput" placeholder="Type to search...">
               <button class="btn-clear-supplier-search" id="clearSupplierSearch" onclick="clearSupplierSearch()" style="display: none;">
                 <i class="ph ph-x"></i>
               </button>
@@ -281,17 +281,94 @@
                         <i class="ph ph-square" id="spreadsheetSelectAllIcon"></i>
                       </div>
                     </th>
-                    <th class="col-id">ID</th>
-                    <th class="col-pn">PN</th>
-                    <th class="col-pn-desc">PN Description</th>
-                    <th class="col-tool-desc">Tooling Description</th>
-                    <th class="col-life">Tooling Life</th>
-                    <th class="col-produced">Produced</th>
-                    <th class="col-volume">Annual Volume</th>
-                    <th class="col-exp-date">Expiration</th>
-                    <th class="col-steps">Steps</th>
-                    <th class="col-status">Status</th>
-                    <th class="col-progress">Tool. Life</th>
+                    <th class="col-id" data-filterable="id">
+                      <div class="th-content">
+                        <span>ID</span>
+                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'id')" title="Filter">
+                          <i class="ph ph-funnel"></i>
+                        </button>
+                      </div>
+                    </th>
+                    <th class="col-pn" data-filterable="pn">
+                      <div class="th-content">
+                        <span>PN</span>
+                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'pn')" title="Filter">
+                          <i class="ph ph-funnel"></i>
+                        </button>
+                      </div>
+                    </th>
+                    <th class="col-pn-desc" data-filterable="pn_description">
+                      <div class="th-content">
+                        <span>PN Description</span>
+                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'pn_description')" title="Filter">
+                          <i class="ph ph-funnel"></i>
+                        </button>
+                      </div>
+                    </th>
+                    <th class="col-tool-desc" data-filterable="tool_description">
+                      <div class="th-content">
+                        <span>Tooling Description</span>
+                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'tool_description')" title="Filter">
+                          <i class="ph ph-funnel"></i>
+                        </button>
+                      </div>
+                    </th>
+                    <th class="col-life" data-filterable="tooling_life_qty">
+                      <div class="th-content">
+                        <span>Tooling Life</span>
+                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'tooling_life_qty')" title="Filter">
+                          <i class="ph ph-funnel"></i>
+                        </button>
+                      </div>
+                    </th>
+                    <th class="col-produced" data-filterable="produced">
+                      <div class="th-content">
+                        <span>Produced</span>
+                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'produced')" title="Filter">
+                          <i class="ph ph-funnel"></i>
+                        </button>
+                      </div>
+                    </th>
+                    <th class="col-volume" data-filterable="annual_volume_forecast">
+                      <div class="th-content">
+                        <span>Annual Volume</span>
+                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'annual_volume_forecast')" title="Filter">
+                          <i class="ph ph-funnel"></i>
+                        </button>
+                      </div>
+                    </th>
+                    <th class="col-exp-date" data-sortable="expiration">
+                      <div class="th-content">
+                        <span>Expiration</span>
+                        <button class="column-sort-btn" onclick="toggleColumnSort(event, 'expiration')" title="Sort">
+                          <i class="ph ph-arrows-down-up"></i>
+                        </button>
+                      </div>
+                    </th>
+                    <th class="col-steps" data-filterable="steps">
+                      <div class="th-content">
+                        <span>Steps</span>
+                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'steps')" title="Filter">
+                          <i class="ph ph-funnel"></i>
+                        </button>
+                      </div>
+                    </th>
+                    <th class="col-status" data-filterable="status">
+                      <div class="th-content">
+                        <span>Status</span>
+                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'status')" title="Filter">
+                          <i class="ph ph-funnel"></i>
+                        </button>
+                      </div>
+                    </th>
+                    <th class="col-progress" data-sortable="progress">
+                      <div class="th-content">
+                        <span>Tool. Life</span>
+                        <button class="column-sort-btn" onclick="toggleColumnSort(event, 'progress')" title="Sort">
+                          <i class="ph ph-arrows-down-up"></i>
+                        </button>
+                      </div>
+                    </th>
                     <th class="col-icons">Info</th>
                     <th class="col-expand"></th>
                   </tr>
@@ -306,6 +383,9 @@
         
         <!-- Floating buttons -->
         <div class="floating-actions">
+          <button class="floating-clear-filter-btn" id="floatingClearFilterBtn" onclick="clearColumnFilters()" title="Clear all filters" style="display: none;">
+            <i class="ph ph-funnel-x"></i>
+          </button>
           <button class="floating-add-btn" id="floatingAddBtn" onclick="openAddToolingModal()" title="New Tooling">
             <i class="ph ph-plus"></i>
           </button>
@@ -316,7 +396,7 @@
           <div class="search-overlay-content">
             <div class="search-overlay-header">
               <i class="ph ph-magnifying-glass"></i>
-              <input type="text" id="searchInput" placeholder="Search tooling..." autofocus>
+              <input type="text" id="searchInput" placeholder="Type to search..." autofocus>
               <button class="btn-close-search" id="searchActionBtn" onclick="handleSearchAction()">
                 <i class="ph ph-x"></i>
               </button>
@@ -380,6 +460,57 @@
               <button type="button" class="comment-delete-btn confirm" id="commentDeleteConfirmBtn" onclick="confirmCommentDelete()">
                 <i class="ph ph-trash"></i>
                 <span>Delete comment</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Clear step history modal -->
+        <div class="modal-overlay" id="clearStepHistoryOverlay">
+          <div class="delete-modal">
+            <div class="delete-modal-icon clear-step-icon">
+              <i class="ph ph-path"></i>
+            </div>
+            <div class="delete-modal-content">
+              <h3 class="delete-modal-title">Clear Step History</h3>
+              <p class="delete-modal-description">You are about to clear all step tracking history for <strong id="clearStepItemDescription"></strong>. This action cannot be undone.</p>
+            </div>
+            <div class="delete-modal-actions">
+              <button class="delete-btn-cancel" type="button" onclick="cancelClearStepHistory()">
+                <i class="ph ph-x"></i>
+                <span>Cancel</span>
+              </button>
+              <button class="delete-btn-confirm" type="button" onclick="confirmClearStepHistory()">
+                <i class="ph ph-trash"></i>
+                <span>Clear History</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Clear ALL step history modal -->
+        <div class="modal-overlay" id="clearAllStepHistoryOverlay">
+          <div class="delete-modal">
+            <div class="delete-modal-icon clear-step-icon">
+              <i class="ph ph-path"></i>
+            </div>
+            <div class="delete-modal-content">
+              <h3 class="delete-modal-title">Clear All Step History</h3>
+              <p class="delete-modal-description">You are about to clear <strong>ALL step tracking history</strong> from the entire database. This action cannot be undone.</p>
+              <div class="delete-modal-code-box">
+                <span class="delete-code-label">Enter confirmation code</span>
+                <span class="delete-code-value" id="clearAllStepsConfirmCode"></span>
+              </div>
+              <input type="text" id="clearAllStepsConfirmInput" class="delete-modal-input" maxlength="3" placeholder="000" autocomplete="off"/>
+            </div>
+            <div class="delete-modal-actions">
+              <button class="delete-btn-cancel" type="button" onclick="cancelClearAllStepHistory()">
+                <i class="ph ph-x"></i>
+                <span>Cancel</span>
+              </button>
+              <button class="delete-btn-confirm" type="button" onclick="handleClearAllStepHistoryConfirmation()">
+                <i class="ph ph-trash"></i>
+                <span>Clear All</span>
               </button>
             </div>
           </div>
@@ -517,6 +648,17 @@
                 <div class="filter-option-info">
                   <span class="filter-option-label">Import Full Database (Manager)</span>
                   <span class="filter-option-desc">Update all fields by ID</span>
+                </div>
+              </button>
+              
+              <div class="filter-option-divider"></div>
+              
+              <div class="filter-option-group-title">Data Management</div>
+              <button class="filter-option-button filter-option-danger" type="button" onclick="openClearAllStepHistoryModal()">
+                <i class="ph ph-path"></i>
+                <div class="filter-option-info">
+                  <span class="filter-option-label">Clear All Step History</span>
+                  <span class="filter-option-desc">Remove step tracking data from all tooling</span>
                 </div>
               </button>
             </div>
@@ -883,6 +1025,38 @@
         <i class="ph ph-check-circle"></i>
       </div>
       <div class="toast-message" id="toastMessage">Success!</div>
+    </div>
+
+    <!-- Column Filter Popup -->
+    <div class="column-filter-popup" id="columnFilterPopup">
+      <div class="column-filter-popup-header">
+        <span class="column-filter-popup-title" id="columnFilterPopupTitle">Filter</span>
+        <button class="column-filter-popup-close" onclick="closeColumnFilter()">
+          <i class="ph ph-x"></i>
+        </button>
+      </div>
+      <div class="column-filter-popup-sort" id="columnFilterSort">
+        <span class="column-filter-sort-label">Sort:</span>
+        <button class="column-filter-sort-btn" data-sort="asc" onclick="setColumnSortFromPopup('asc')">
+          <i class="ph ph-sort-ascending"></i> Ascending
+        </button>
+        <button class="column-filter-sort-btn" data-sort="desc" onclick="setColumnSortFromPopup('desc')">
+          <i class="ph ph-sort-descending"></i> Descending
+        </button>
+      </div>
+      <div class="column-filter-popup-search">
+        <input type="text" id="columnFilterSearch" placeholder="Search..." oninput="filterColumnOptions()">
+      </div>
+      <div class="column-filter-popup-actions">
+        <button class="column-filter-action-btn" onclick="selectAllFilterOptions()">Select All</button>
+        <button class="column-filter-action-btn" onclick="clearAllFilterOptions()">Clear All</button>
+      </div>
+      <div class="column-filter-popup-list" id="columnFilterList">
+        <!-- Options will be populated dynamically -->
+      </div>
+      <div class="column-filter-popup-footer">
+        <button class="column-filter-apply-btn" onclick="applyColumnFilter()">Apply</button>
+      </div>
     </div>
 
     <script src="renderer.js"></script>
