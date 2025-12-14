@@ -1743,7 +1743,10 @@ ipcMain.handle('update-tooling', async (event, id, data) => {
     await ensureReplacementColumnExists();
   } catch (error) {
   }
-  return executeToolingUpdate(id, data);
+  // Don't skip tracked changes for manual edits
+  return executeToolingUpdate(id, data, 1, {
+    skipWhenNoTrackedChanges: false
+  });
 });
 
 ipcMain.handle('create-tooling', async (event, data) => {
@@ -2936,19 +2939,19 @@ ipcMain.on('close-window', () => {
   }
 });
 
-// Export Forecast for Supplier (ID, PN, Supplier, Forecast, Annual Volume Date, Expiration)
+// Export Annual Volume for Supplier (PN unique, Supplier, Annual Volume, Annual Volume Date)
 ipcMain.handle('export-forecast-supplier', async () => {
   return new Promise((resolve, reject) => {
     db.all(`
       SELECT 
-        id,
         pn,
         supplier,
         annual_volume_forecast as forecast,
-        date_annual_volume as forecast_date,
-        expiration_date
+        date_annual_volume as forecast_date
       FROM ferramental 
-      ORDER BY id
+      WHERE pn IS NOT NULL AND pn != ''
+      GROUP BY pn
+      ORDER BY pn
     `, [], async (err, rows) => {
       if (err) {
         reject(err);
@@ -2960,12 +2963,10 @@ ipcMain.handle('export-forecast-supplier', async () => {
         const worksheet = workbook.addWorksheet('Forecast Data');
 
         worksheet.columns = [
-          { header: 'ID', key: 'id', width: 10 },
           { header: 'PN', key: 'pn', width: 25 },
           { header: 'Supplier', key: 'supplier', width: 30 },
-          { header: 'Annual Forecast', key: 'forecast', width: 20 },
-          { header: 'Annual Volume Date', key: 'forecast_date', width: 20 },
-          { header: 'Expiration', key: 'expiration_date', width: 20 }
+          { header: 'Annual Volume', key: 'forecast', width: 20 },
+          { header: 'Annual Volume Date', key: 'forecast_date', width: 20 }
         ];
 
         // Header styling
@@ -2984,29 +2985,39 @@ ipcMain.handle('export-forecast-supplier', async () => {
         // Add data rows
         rows.forEach(row => {
           const foreDate = normalizeDateInputToBR(row.forecast_date);
-          const expDate = normalizeDateInputToBR(row.expiration_date);
           worksheet.addRow({
-            id: row.id || '',
             pn: row.pn || '',
             supplier: row.supplier || '',
             forecast: row.forecast || '',
-            forecast_date: foreDate,
-            expiration_date: expDate
+            forecast_date: foreDate
           });
         });
 
-        // Center align ID and date columns
-        ['A', 'D', 'E', 'F'].forEach(columnKey => {
+        // Center align date columns
+        ['C', 'D'].forEach(columnKey => {
           const column = worksheet.getColumn(columnKey);
           column.alignment = { horizontal: 'center', vertical: 'middle' };
+        });
+
+        // Auto-adjust column widths based on content
+        worksheet.columns.forEach(column => {
+          let maxLength = 0;
+          column.eachCell({ includeEmpty: true }, (cell) => {
+            const cellValue = cell.value ? cell.value.toString() : '';
+            if (cellValue.length > maxLength) {
+              maxLength = cellValue.length;
+            }
+          });
+          // Set width with padding (minimum 10, maximum 50)
+          column.width = Math.min(Math.max(maxLength + 2, 10), 50);
         });
 
         // Add data validations
         const lastRow = worksheet.rowCount;
         
-        // Annual Forecast validation (column D) - numeric only
+        // Annual Volume validation (column C) - numeric only
         for (let i = 2; i <= lastRow; i++) {
-          worksheet.getCell(`D${i}`).dataValidation = {
+          worksheet.getCell(`C${i}`).dataValidation = {
             type: 'decimal',
             operator: 'greaterThanOrEqual',
             allowBlank: true,
@@ -3014,13 +3025,13 @@ ipcMain.handle('export-forecast-supplier', async () => {
             showErrorMessage: true,
             errorStyle: 'warning',
             errorTitle: 'Invalid Number',
-            error: 'Please enter a valid number for Annual Forecast'
+            error: 'Please enter a valid number for Annual Volume'
           };
         }
         
-        // Annual Volume Date validation (column E) - date only
+        // Annual Volume Date validation (column D) - date only
         for (let i = 2; i <= lastRow; i++) {
-          worksheet.getCell(`E${i}`).dataValidation = {
+          worksheet.getCell(`D${i}`).dataValidation = {
             type: 'date',
             operator: 'greaterThan',
             showErrorMessage: true,
@@ -3034,8 +3045,8 @@ ipcMain.handle('export-forecast-supplier', async () => {
           };
         }
 
-        // Lock ID, PN, Supplier, Expiration columns
-        ['A', 'B', 'C', 'F'].forEach(columnKey => {
+        // Lock PN and Supplier columns
+        ['A', 'B'].forEach(columnKey => {
           worksheet.getColumn(columnKey).eachCell({ includeEmpty: true }, (cell, rowNumber) => {
             if (rowNumber > 1) {
               cell.protection = { locked: true };
@@ -3043,8 +3054,8 @@ ipcMain.handle('export-forecast-supplier', async () => {
           });
         });
 
-        // Unlock Forecast and Annual Volume Date columns
-        ['D', 'E'].forEach(columnKey => {
+        // Unlock Annual Volume and Annual Volume Date columns
+        ['C', 'D'].forEach(columnKey => {
           worksheet.getColumn(columnKey).eachCell({ includeEmpty: true }, (cell, rowNumber) => {
             if (rowNumber > 1) {
               cell.protection = { locked: false };
@@ -3089,7 +3100,7 @@ ipcMain.handle('export-forecast-supplier', async () => {
   });
 });
 
-// Import Forecast for Supplier (updates Forecast and Annual Volume Date by ID)
+// Import Annual Volume for Supplier (updates Annual Volume and Annual Volume Date by PN)
 ipcMain.handle('import-forecast-supplier', async () => {
   const dialogResult = await dialog.showOpenDialog(mainWindow, {
     title: 'Import Forecast Data (Supplier)',
@@ -3112,16 +3123,16 @@ ipcMain.handle('import-forecast-supplier', async () => {
       return { success: false, error: 'No worksheet found in file' };
     }
 
-    // Validate header row - accept both old (5 columns) and new (6 columns) format
+    // Validate header row - new format with 4 columns (PN, Supplier, Annual Volume, Annual Volume Date)
     const headerRow = worksheet.getRow(1);
     const firstHeader = headerRow.getCell(1).value?.toString().trim();
+    const thirdHeader = headerRow.getCell(3).value?.toString().trim();
     const fourthHeader = headerRow.getCell(4).value?.toString().trim();
-    const fifthHeader = headerRow.getCell(5).value?.toString().trim();
 
-    if (firstHeader !== 'ID' || fourthHeader !== 'Annual Forecast' || (fifthHeader !== 'Annual Volume Date' && fifthHeader !== 'Forecast Date')) {
+    if (firstHeader !== 'PN' || thirdHeader !== 'Annual Volume' || fourthHeader !== 'Annual Volume Date') {
       return { 
         success: false, 
-        error: 'Invalid file format. Expected columns: ID, PN, Supplier, Annual Forecast, Annual Volume Date' 
+        error: 'Invalid file format. Expected columns: PN, Supplier, Annual Volume, Annual Volume Date' 
       };
     }
 
@@ -3133,12 +3144,15 @@ ipcMain.handle('import-forecast-supplier', async () => {
     for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
       const row = worksheet.getRow(rowNumber);
       
-      const id = row.getCell(1).value; // Column A
-      const forecast = row.getCell(4).value; // Column D
-      const forecastDate = row.getCell(5).value; // Column E
+      const pn = row.getCell(1).value; // Column A - PN
+      const forecast = row.getCell(3).value; // Column C - Annual Volume
+      const forecastDate = row.getCell(4).value; // Column D - Annual Volume Date
 
-      // Skip if no ID
-      if (!id) continue;
+      // Skip if no PN
+      if (!pn) continue;
+
+      const pnStr = pn.toString().trim();
+      if (!pnStr) continue;
 
       try {
         // Prepare update data
@@ -3149,7 +3163,7 @@ ipcMain.handle('import-forecast-supplier', async () => {
           // Validate that forecast is a number
           const forecastNum = parseFloat(normalizedForecast.replace(/,/g, '.'));
           if (isNaN(forecastNum)) {
-            errors.push(`Row ${rowNumber} (ID ${id}): Annual Forecast must be a number`);
+            errors.push(`Row ${rowNumber} (PN ${pnStr}): Annual Volume must be a number`);
             continue;
           }
           updateData.annual_volume_forecast = normalizedForecast;
@@ -3157,7 +3171,7 @@ ipcMain.handle('import-forecast-supplier', async () => {
 
         const normalizedForecastDate = normalizeDateInputToISO(forecastDate);
         if (forecastDate && !normalizedForecastDate) {
-          errors.push(`Row ${rowNumber} (ID ${id}): Invalid date format for Annual Volume Date`);
+          errors.push(`Row ${rowNumber} (PN ${pnStr}): Invalid date format for Annual Volume Date`);
           continue;
         }
         if (normalizedForecastDate) {
@@ -3166,17 +3180,33 @@ ipcMain.handle('import-forecast-supplier', async () => {
 
         // Only update if there's data to update
         if (Object.keys(updateData).length > 0) {
-          const result = await executeToolingUpdate(id, updateData, 1, {
-            commentTimestamp: importDateStamp,
-            skipWhenNoTrackedChanges: true
+          // Find all records with this PN and update them
+          const idsToUpdate = await new Promise((resolve, reject) => {
+            db.all('SELECT id FROM ferramental WHERE pn = ?', [pnStr], (err, rows) => {
+              if (err) reject(err);
+              else resolve(rows.map(r => r.id));
+            });
           });
-          if (result?.changes > 0) {
-            updatedCount++;
+
+          if (idsToUpdate.length === 0) {
+            errors.push(`Row ${rowNumber} (PN ${pnStr}): No records found with this PN`);
+            continue;
+          }
+
+          // Update all records with this PN
+          for (const id of idsToUpdate) {
+            const result = await executeToolingUpdate(id, updateData, 1, {
+              commentTimestamp: `Import: ${importDateStamp}`,
+              skipWhenNoTrackedChanges: true
+            });
+            if (result?.changes > 0) {
+              updatedCount++;
+            }
           }
         }
 
       } catch (error) {
-        errors.push(`Row ${rowNumber} (ID ${id}): ${error.message}`);
+        errors.push(`Row ${rowNumber} (PN ${pnStr}): ${error.message}`);
       }
     }
 
@@ -3291,6 +3321,24 @@ ipcMain.handle('export-forecast-manager', async () => {
         // Center align ID column
         worksheet.getColumn('A').alignment = { horizontal: 'center', vertical: 'middle' };
 
+        // Auto-adjust column widths based on content
+        worksheet.columns.forEach(column => {
+          let maxLength = 0;
+          column.eachCell({ includeEmpty: true }, (cell) => {
+            const cellValue = cell.value ? cell.value.toString() : '';
+            if (cellValue.length > maxLength) {
+              maxLength = cellValue.length;
+            }
+          });
+          // Set width with padding (minimum 10, maximum 50)
+          column.width = Math.min(Math.max(maxLength + 2, 10), 50);
+        });
+
+        // Freeze first row (header) and first column (ID)
+        worksheet.views = [
+          { state: 'frozen', xSplit: 1, ySplit: 1, topLeftCell: 'B2', activeCell: 'B2' }
+        ];
+
         // Add data validations
         const lastRow = worksheet.rowCount;
         
@@ -3308,19 +3356,27 @@ ipcMain.handle('export-forecast-manager', async () => {
           };
         }
 
-        // Numeric columns validation
-        const numericColumns = ['J', 'K', 'L', 'M', 'N', 'R', 'S']; // Tooling Life, Produced, Remaining, %, Forecast, Amount, Qty
+        // Numeric columns validation - only numbers allowed (% Life excluded - calculated field)
+        const numericColumns = [
+          { col: 'J', name: 'Tooling Life Qty' },
+          { col: 'K', name: 'Produced' },
+          { col: 'L', name: 'Remaining Life' },
+          { col: 'N', name: 'Annual Forecast' },
+          { col: 'R', name: 'Amount BRL' },
+          { col: 'S', name: 'Tool Quantity' }
+        ];
+        
         for (let i = 2; i <= lastRow; i++) {
-          numericColumns.forEach(col => {
+          numericColumns.forEach(({ col, name }) => {
             worksheet.getCell(`${col}${i}`).dataValidation = {
               type: 'decimal',
               operator: 'greaterThanOrEqual',
               allowBlank: true,
-              formulae: [-999999999],
+              formulae: [0],
               showErrorMessage: true,
-              errorStyle: 'warning',
+              errorStyle: 'stop',
               errorTitle: 'Invalid Number',
-              error: 'Please enter a valid number'
+              error: `${name} must be a valid number (0 or greater)`
             };
           });
         }
@@ -3344,8 +3400,14 @@ ipcMain.handle('export-forecast-manager', async () => {
           });
         }
 
-        // Lock ID column
+        // Lock ID column and % Life column (calculated field)
         worksheet.getColumn('A').eachCell({ includeEmpty: true }, (cell, rowNumber) => {
+          if (rowNumber > 1) {
+            cell.protection = { locked: true };
+          }
+        });
+        
+        worksheet.getColumn('M').eachCell({ includeEmpty: true }, (cell, rowNumber) => {
           if (rowNumber > 1) {
             cell.protection = { locked: true };
           }
@@ -3353,6 +3415,9 @@ ipcMain.handle('export-forecast-manager', async () => {
 
         // Unlock all other columns (use column index instead of letter for >26 columns)
         for (let colIdx = 2; colIdx <= columns.length; colIdx++) {
+          // Skip column 13 (M - % Life), it's locked
+          if (colIdx === 13) continue;
+          
           worksheet.getColumn(colIdx).eachCell({ includeEmpty: true }, (cell, rowNumber) => {
             if (rowNumber > 1) {
               cell.protection = { locked: false };
@@ -3453,7 +3518,6 @@ ipcMain.handle('import-forecast-manager', async () => {
       'Tooling Life Qty': 'tooling_life_qty',
       'Produced': 'produced',
       'Remaining Life': 'remaining_tooling_life_pcs',
-      '% Life': 'percent_tooling_life',
       'Annual Forecast': 'annual_volume_forecast',
       'Annual Volume Date': 'date_annual_volume',
       'Forecast Date': 'date_annual_volume',
@@ -3476,8 +3540,8 @@ ipcMain.handle('import-forecast-manager', async () => {
     // Date columns for validation
     const dateColumns = ['Annual Volume Date', 'Forecast Date', 'Expiration Date', 'Finish Due Date'];
     
-    // Numeric columns for validation
-    const numericColumns = ['Tooling Life Qty', 'Produced', 'Remaining Life', '% Life', 'Annual Forecast', 'Amount BRL', 'Tool Quantity'];
+    // Numeric columns for validation (% Life excluded - calculated field)
+    const numericColumns = ['Tooling Life Qty', 'Produced', 'Remaining Life', 'Annual Forecast', 'Amount BRL', 'Tool Quantity'];
 
     let updatedCount = 0;
     const errors = [];
@@ -3537,7 +3601,7 @@ ipcMain.handle('import-forecast-manager', async () => {
         // Only update if there's data to update
         if (Object.keys(updateData).length > 0) {
           const result = await executeToolingUpdate(id, updateData, 1, {
-            commentTimestamp: importDateStamp,
+            commentTimestamp: `Import: ${importDateStamp}`,
             skipWhenNoTrackedChanges: true
           });
           if (result?.changes > 0) {

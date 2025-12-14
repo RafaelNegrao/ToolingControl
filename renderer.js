@@ -1264,7 +1264,7 @@ function closeSupplierFilterOverlay() {
   }
 }
 
-// Export Forecast for Supplier (ID, PN, Supplier, Forecast, Forecast Date, Expiration)
+// Export Annual Volume for Supplier (ID, PN, Supplier, Annual Volume, Annual Volume Date)
 async function exportForecastSupplier() {
   try {
     const result = await window.api.exportForecastSupplier();
@@ -1279,7 +1279,7 @@ async function exportForecastSupplier() {
   }
 }
 
-// Import Forecast for Supplier (updates Forecast and Forecast Date by ID)
+// Import Annual Volume for Supplier (updates Annual Volume and Annual Volume Date by ID)
 async function importForecastSupplier() {
   try {
     const result = await window.api.importForecastSupplier();
@@ -7137,13 +7137,19 @@ async function spreadsheetSave(inputElement) {
   try {
     const now = new Date().toISOString();
     const updateData = { [field]: value, last_update: now };
-    await window.api.updateTooling(id, updateData);
+    const updateResult = await window.api.updateTooling(id, updateData);
     
     // Atualiza o item no array local
     const item = toolingData.find(t => String(t.id) === String(id));
     if (item) {
       item[field] = value;
       item.last_update = now;
+      
+      // Atualiza os comentários se foram modificados pelo backend
+      if (updateResult?.comments) {
+        item.comments = updateResult.comments;
+        updateCommentsDisplay(id);
+      }
     }
     
     // Atualiza o display do Last Update
