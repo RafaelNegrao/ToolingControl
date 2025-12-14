@@ -1699,6 +1699,12 @@ textarea {
   transition: box-shadow 0.3s ease;
 }
 
+.row-highlight {
+  box-shadow: 0 0 0 2px rgba(200, 16, 46, 0.35);
+  background: rgba(200, 16, 46, 0.05) !important;
+  transition: box-shadow 0.3s ease, background 0.3s ease;
+}
+
 .tooling-card-main-info,
 .tooling-card-main-info .tooling-info-item {
   white-space: nowrap;
@@ -2789,6 +2795,43 @@ select.detail-input::-ms-expand {
 
 .detail-item-full {
   grid-column: 1 / -1;
+}
+
+/* Checkbox de Análise Concluída */
+.analysis-completed-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #f8f9fa;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.analysis-completed-checkbox:hover {
+  background: #e8eaed;
+  border-color: #d0d0d0;
+}
+
+.analysis-completed-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: #10b981;
+  margin: 0;
+}
+
+.analysis-completed-checkbox span {
+  font-size: 13px;
+  font-weight: 500;
+  color: #424242;
+}
+
+.analysis-completed-checkbox input[type="checkbox"]:checked + span {
+  color: #10b981;
 }
 
 /* Barra de Progresso */

@@ -1006,7 +1006,8 @@ function checkAndAddColumns() {
     { name: 'todos', type: 'TEXT' },
     { name: 'stim_tooling_management', type: 'TEXT' },
     { name: 'vpcr', type: 'TEXT' },
-    { name: 'replacement_tooling_id', type: 'INTEGER' }
+    { name: 'replacement_tooling_id', type: 'INTEGER' },
+    { name: 'analysis_completed', type: 'INTEGER' }
   ];
   
   return new Promise((resolve, reject) => {
@@ -1209,13 +1210,13 @@ function clearAllStepHistory() {
         const historyDeleted = this ? this.changes : 0;
         console.log(`[StepHistory] Cleared ${historyDeleted} entries from step_history`);
         
-        // Then, set all steps fields to empty in ferramental table
-        db.run(`UPDATE ferramental SET steps = '', last_update = datetime('now')`, function(updateErr) {
+        // Then, set all steps fields to empty and clear analysis_completed in ferramental table
+        db.run(`UPDATE ferramental SET steps = '', analysis_completed = 0, last_update = datetime('now')`, function(updateErr) {
           if (updateErr) {
             console.error('[StepHistory] Error clearing steps field:', updateErr);
             reject(updateErr);
           } else {
-            console.log(`[StepHistory] Cleared steps field from ${this.changes} tooling records`);
+            console.log(`[StepHistory] Cleared steps field and analysis_completed from ${this.changes} tooling records`);
             resolve({ success: true, historyDeleted, toolingsUpdated: this.changes });
           }
         });

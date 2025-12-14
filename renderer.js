@@ -2922,6 +2922,52 @@ function handleProducedChange(cardIndex) {
   }
 }
 
+// Atualiza a barra de progresso no spreadsheet (linha e card expandido)
+function updateSpreadsheetProgressBar(itemId) {
+  if (!itemId) return;
+  
+  // Encontra o item nos dados
+  const item = toolingData.find(t => String(t.id) === String(itemId));
+  if (!item) return;
+  
+  // Calcula o percentual
+  const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || Number(item.tooling_life_qty) || 0;
+  const produced = Number(parseLocalizedNumber(item.produced)) || Number(item.produced) || 0;
+  const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
+  const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
+  
+  // Atualiza a barra na linha do spreadsheet
+  const row = document.querySelector(`#spreadsheetBody tr[data-id="${itemId}"]`);
+  if (row) {
+    const progressFill = row.querySelector('.spreadsheet-progress-fill');
+    if (progressFill) {
+      progressFill.style.width = percentUsed + '%';
+    }
+  }
+  
+  // Atualiza a barra no card expandido se estiver aberto
+  const expandedCard = document.querySelector(`.spreadsheet-card-container[data-item-id="${itemId}"]`);
+  if (expandedCard) {
+    // Barra de progresso interna (aba Data)
+    const lifecycleProgressFill = expandedCard.querySelector('[data-lifecycle-progress-fill]');
+    if (lifecycleProgressFill) {
+      lifecycleProgressFill.style.width = percentUsed + '%';
+    }
+    
+    // Barra de progresso externa (header)
+    const externalProgressFill = expandedCard.querySelector('[data-progress-fill]');
+    const externalProgressPercent = expandedCard.querySelector('[data-progress-percent]');
+    
+    if (externalProgressFill) {
+      externalProgressFill.style.width = percentUsed + '%';
+    }
+    
+    if (externalProgressPercent) {
+      externalProgressPercent.textContent = percentUsed + '%';
+    }
+  }
+}
+
 function handleForecastChange(cardIndex) {
   calculateExpirationDate(cardIndex);
   const card = getCardContainer(cardIndex);
@@ -2986,20 +3032,157 @@ function getStepDescription(stepValue) {
   return descriptions[stepValue] || '';
 }
 
+function getStepResponsible(stepValue) {
+  const responsibles = {
+    '1': 'Supply Continuity',
+    '2': 'Supply Continuity',
+    '3': 'Supply Continuity',
+    '4': 'Supply Continuity',
+    '5': 'SQIE',
+    '6': 'SQIE',
+    '7': 'Sourcing Manager'
+  };
+  return responsibles[stepValue] || '';
+}
+
 function handleStepsSelectChange(cardIndex, itemId, selectEl) {
   if (selectEl) {
     const value = (selectEl.value || '').trim();
     updateCardHeaderSteps(cardIndex, value);
     
-    // Update step description label
+    // Update step description label with description and responsible
     const descriptionLabel = document.getElementById(`stepDescription_${itemId}`);
     if (descriptionLabel) {
       const description = getStepDescription(value);
-      descriptionLabel.textContent = description;
-      descriptionLabel.style.display = description ? 'block' : 'none';
+      const responsible = getStepResponsible(value);
+      
+      if (description) {
+        descriptionLabel.innerHTML = `<div style="color: #8b92a7; line-height: 1.4;">${description}<br><span style="font-size: 0.9em;">Responsible: ${responsible}</span></div>`;
+        descriptionLabel.style.display = 'block';
+        descriptionLabel.style.textAlign = 'left';
+        descriptionLabel.style.marginTop = '4px';
+      } else {
+        descriptionLabel.textContent = '';
+        descriptionLabel.style.display = 'none';
+      }
     }
   }
   autoSaveTooling(itemId, true);
+}
+
+async function handleAnalysisCompletedChange(itemId, isChecked) {
+  try {
+    // Atualiza o campo no banco de dados
+    const value = isChecked ? 1 : 0;
+    await window.api.updateTooling(itemId, { analysis_completed: value });
+    
+    // Atualiza o item local
+    const item = toolingData.find(t => t.id === itemId);
+    if (item) {
+      item.analysis_completed = value;
+      
+      // Adiciona comentário automático se foi marcado
+      if (isChecked) {
+        const timestamp = new Date().toISOString();
+        const commentText = 'Analysis completed - tooling reviewed and no revitalization required.';
+        const newComment = {
+          timestamp,
+          text: commentText
+        };
+        
+        // Adiciona ao array de comentários
+        let comments = [];
+        if (item.comments) {
+          try {
+            comments = typeof item.comments === 'string' ? JSON.parse(item.comments) : item.comments;
+          } catch {
+            comments = [];
+          }
+        }
+        comments.push(newComment);
+        item.comments = JSON.stringify(comments);
+        
+        // Salva comentário no banco
+        await window.api.updateTooling(itemId, { comments: item.comments });
+        
+        // Atualiza UI dos comentários
+        const commentsList = document.getElementById(`commentsList_${itemId}`);
+        if (commentsList) {
+          commentsList.innerHTML = buildCommentsListHTML(item.comments, itemId);
+        }
+      }
+      
+      // Atualiza o ícone de expiração em todos os lugares
+      updateExpirationIconsForItem(itemId);
+    }
+    
+    showNotification(isChecked ? 'Analysis marked as completed' : 'Analysis marked as pending', 'success');
+  } catch (error) {
+    console.error('Error updating analysis completed:', error);
+    showNotification('Error updating analysis status', 'error');
+  }
+}
+
+function updateExpirationIconsForItem(itemId) {
+  const item = toolingData.find(t => t.id === itemId);
+  if (!item) return;
+  
+  const classification = classifyToolingExpirationState(item);
+  const isAnalysisCompleted = item.analysis_completed === 1;
+  const hasExpirationDate = classification.expirationDate && classification.expirationDate !== '';
+  
+  // Atualiza ícone na linha do spreadsheet
+  const spreadsheetRow = document.querySelector(`#spreadsheetBody tr[data-id="${itemId}"]`);
+  if (spreadsheetRow) {
+    const expirationCell = spreadsheetRow.querySelector('.spreadsheet-expiration');
+    if (expirationCell) {
+      const expirationDateDisplay = hasExpirationDate ? formatDate(classification.expirationDate) : '';
+      const expirationIconHtml = hasExpirationDate ? getSpreadsheetExpirationIcon(classification.state, isAnalysisCompleted) : '';
+      expirationCell.innerHTML = `
+        ${expirationIconHtml}
+        <span class="expiration-text">${expirationDateDisplay}</span>
+      `;
+    }
+  }
+  
+  // Atualiza ícone no card expandido (se estiver aberto)
+  const cardContainers = document.querySelectorAll(`[data-item-id="${itemId}"]`);
+  cardContainers.forEach(container => {
+    const expirationInput = container.querySelector('input[data-field="expiration_date"]');
+    if (expirationInput) {
+      const inputContainer = expirationInput.closest('.input-with-icon') || expirationInput.parentElement;
+      const iconElement = inputContainer?.querySelector('.input-icon');
+      
+      if (isAnalysisCompleted && (classification.state === 'expired' || classification.state === 'warning')) {
+        // Remove ícone de alerta se análise foi concluída
+        if (iconElement) {
+          iconElement.remove();
+        }
+        expirationInput.classList.remove('with-icon');
+      } else {
+        // Recria ícone se necessário
+        if (classification.state === 'expired' || classification.state === 'warning') {
+          const iconClass = classification.state === 'expired' ? 'ph-fill ph-warning-circle' : 'ph-fill ph-warning';
+          const iconColor = classification.state === 'expired' ? '#ef4444' : '#f59e0b';
+          
+          if (!iconElement) {
+            const newIcon = document.createElement('i');
+            newIcon.className = `${iconClass} input-icon`;
+            newIcon.style.color = iconColor;
+            
+            if (!expirationInput.classList.contains('with-icon')) {
+              const wrapper = document.createElement('div');
+              wrapper.className = 'input-with-icon';
+              expirationInput.parentElement.insertBefore(wrapper, expirationInput);
+              wrapper.appendChild(newIcon);
+              wrapper.appendChild(expirationInput);
+              expirationInput.classList.add('with-icon');
+            }
+          }
+        }
+      }
+    }
+  });
 }
 
 function handlePNChange(cardIndex, itemId, inputEl) {
@@ -3478,7 +3661,7 @@ function renderReplacementTimeline(chain = []) {
             <span class="timeline-item-id">#${toolingId}</span>
             <div class="timeline-header-right">
               <span class="timeline-status-badge ${badgeClass}">${label}</span>
-              <button class="timeline-item-action" type="button" onclick="handleTimelineCardNavigate(event, '${toolingId}')" title="Open card">
+              <button class="timeline-item-action" type="button" onclick="handleTimelineCardNavigate(event, ${toolingId})" title="Open card">
                 <i class="ph ph-arrow-square-out"></i>
               </button>
             </div>
@@ -4092,8 +4275,12 @@ function handleReplacementLinkButtonClick(event, buttonEl) {
   if (!buttonEl || buttonEl.disabled) {
     return;
   }
-  const card = buttonEl.closest('.tooling-card');
-  openReplacementTimelineForCard(card);
+  
+  // Obtém o ID do target diretamente do botão
+  const targetId = buttonEl.getAttribute('data-target-id');
+  if (targetId) {
+    navigateToLinkedCard(targetId);
+  }
 }
 
 function handleReplacementLinkChipClick(event, buttonEl) {
@@ -4103,8 +4290,12 @@ function handleReplacementLinkChipClick(event, buttonEl) {
   if (!buttonEl || buttonEl.disabled) {
     return;
   }
-  const card = buttonEl.closest('.tooling-card');
-  openReplacementTimelineForCard(card);
+  
+  // Tenta encontrar o card (normal ou spreadsheet)
+  const card = buttonEl.closest('.tooling-card') || buttonEl.closest('.spreadsheet-card-container');
+  if (card) {
+    openReplacementTimelineForCard(card);
+  }
 }
 
 async function navigateToLinkedCard(targetId) {
@@ -4114,83 +4305,139 @@ async function navigateToLinkedCard(targetId) {
     return;
   }
 
-  let targetCard = document.querySelector(`.tooling-card[data-item-id="${normalizedId}"]`);
-  if (!targetCard) {
-    const cardLoaded = await ensureCardLoadedById(normalizedId);
-    if (!cardLoaded) {
-      showNotification(`O card #${normalizedId} não foi encontrado. Verifique se o registro existe.`, 'warning');
+  // Verifica se está no modo spreadsheet
+  const isSpreadsheetMode = currentViewMode === 'spreadsheet';
+  
+  if (isSpreadsheetMode) {
+    // Modo Spreadsheet: procura pela linha da tabela
+    let targetRow = document.querySelector(`tr[data-id="${normalizedId}"]`);
+    
+    if (!targetRow) {
+      const cardLoaded = await ensureCardLoadedById(normalizedId);
+      if (!cardLoaded) {
+        showNotification(`O card #${normalizedId} não foi encontrado. Verifique se o registro existe.`, 'warning');
+        return;
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 400));
+      targetRow = document.querySelector(`tr[data-id="${normalizedId}"]`);
+    }
+
+    if (!targetRow) {
+      showNotification(`Não foi possível exibir o card #${normalizedId}. O registro pode não existir mais.`, 'warning');
       return;
     }
+
+    // Encontra o índice do item
+    const item = toolingData.find(t => String(t.id) === String(normalizedId));
+    const itemIndex = toolingData.indexOf(item);
     
-    // Aguarda um pouco mais para o DOM ser atualizado
-    await new Promise(resolve => setTimeout(resolve, 400));
-    targetCard = document.querySelector(`.tooling-card[data-item-id="${normalizedId}"]`);
-    // Tenta novamente com um tempo maior se ainda não encontrou
+    if (itemIndex === -1) {
+      showNotification(`Não foi possível encontrar o item #${normalizedId}.`, 'warning');
+      return;
+    }
+
+    // Expande a linha se não estiver expandida
+    const isExpanded = targetRow.classList.contains('row-expanded');
+    if (!isExpanded) {
+      toggleSpreadsheetRow(normalizedId, itemIndex);
+    }
+
+    // Aguarda a linha ser expandida e carrega dados
+    setTimeout(() => {
+      const detailRow = targetRow.nextElementSibling;
+      if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
+        // Carrega anexos e calcula expiração
+        loadCardAttachments(normalizedId).catch(err => {
+        });
+        
+        // Calcula expiração (se necessário)
+        const cardContainer = detailRow.querySelector('.spreadsheet-card-container');
+        if (cardContainer) {
+          const expirationInput = cardContainer.querySelector('[data-field="expiration_date"]');
+          if (expirationInput) {
+            calculateExpirationDate(itemIndex, null, true);
+          }
+        }
+        
+        ensureSpreadsheetRowVisible(detailRow);
+        flashSpreadsheetRowHighlight(detailRow);
+      } else {
+        ensureSpreadsheetRowVisible(targetRow);
+        flashSpreadsheetRowHighlight(targetRow);
+      }
+    }, 150);
+    
+  } else {
+    // Modo Card: comportamento original
+    let targetCard = document.querySelector(`.tooling-card[data-item-id="${normalizedId}"]`);
     if (!targetCard) {
+      const cardLoaded = await ensureCardLoadedById(normalizedId);
+      if (!cardLoaded) {
+        showNotification(`O card #${normalizedId} não foi encontrado. Verifique se o registro existe.`, 'warning');
+        return;
+      }
+      
       await new Promise(resolve => setTimeout(resolve, 400));
       targetCard = document.querySelector(`.tooling-card[data-item-id="${normalizedId}"]`);
-    }
-  }
-
-  if (!targetCard) {
-    showNotification(`Não foi possível exibir o card #${normalizedId}. O registro pode não existir mais.`, 'warning');
-    return;
-  }
-
-  const cardIndex = parseInt(targetCard.id.replace('card-', ''), 10);
-  const wasExpanded = targetCard.classList.contains('expanded');
-  // Save any previously expanded cards (except the target)
-  const expandedCards = document.querySelectorAll('.tooling-card.expanded');
-  for (const expandedCard of expandedCards) {
-    if (expandedCard !== targetCard) {
-      const itemId = expandedCard.getAttribute('data-item-id');
-      if (itemId) {
-        await saveToolingQuietly(itemId);
+      if (!targetCard) {
+        await new Promise(resolve => setTimeout(resolve, 400));
+        targetCard = document.querySelector(`.tooling-card[data-item-id="${normalizedId}"]`);
       }
-      expandedCard.classList.remove('expanded');
     }
-  }
-  
-  // LAZY LOAD: Carrega body apenas se ainda não foi carregado (igual ao toggleCard)
-  const bodyLoaded = targetCard.getAttribute('data-body-loaded') === 'true';
-  if (!bodyLoaded) {
-    const itemId = targetCard.getAttribute('data-item-id');
-    const item = toolingData.find(t => String(t.id) === String(itemId));
+
+    if (!targetCard) {
+      showNotification(`Não foi possível exibir o card #${normalizedId}. O registro pode não existir mais.`, 'warning');
+      return;
+    }
+
+    const cardIndex = parseInt(targetCard.id.replace('card-', ''), 10);
+    const expandedCards = document.querySelectorAll('.tooling-card.expanded');
+    for (const expandedCard of expandedCards) {
+      if (expandedCard !== targetCard) {
+        const itemId = expandedCard.getAttribute('data-item-id');
+        if (itemId) {
+          await saveToolingQuietly(itemId);
+        }
+        expandedCard.classList.remove('expanded');
+      }
+    }
     
-    if (item) {
-      // Gera o body completo agora
-      const supplierContext = selectedSupplier || currentSupplier || '';
-      const chainMembership = new Map(); // Já foi computado antes
-      const bodyHTML = buildToolingCardBodyHTML(item, cardIndex, chainMembership, supplierContext);
+    const bodyLoaded = targetCard.getAttribute('data-body-loaded') === 'true';
+    if (!bodyLoaded) {
+      const itemId = targetCard.getAttribute('data-item-id');
+      const item = toolingData.find(t => String(t.id) === String(itemId));
       
-      // Insere o body no card
-      targetCard.insertAdjacentHTML('beforeend', bodyHTML);
-      targetCard.setAttribute('data-body-loaded', 'true');
-      applyInitialThousandsMask(targetCard);
-      
-      // Initialize drag and drop for attachment dropzone
-      const dropzone = targetCard.querySelector('.card-attachments-dropzone');
-      if (dropzone && itemId) {
-        initCardAttachmentDragAndDrop(dropzone, itemId);
+      if (item) {
+        const supplierContext = selectedSupplier || currentSupplier || '';
+        const chainMembership = new Map();
+        const bodyHTML = buildToolingCardBodyHTML(item, cardIndex, chainMembership, supplierContext);
+        
+        targetCard.insertAdjacentHTML('beforeend', bodyHTML);
+        targetCard.setAttribute('data-body-loaded', 'true');
+        applyInitialThousandsMask(targetCard);
+        
+        const dropzone = targetCard.querySelector('.card-attachments-dropzone');
+        if (dropzone && itemId) {
+          initCardAttachmentDragAndDrop(dropzone, itemId);
+        }
       }
     }
+    
+    targetCard.classList.add('expanded');
+    
+    setTimeout(() => {
+      calculateExpirationDate(cardIndex, null, true);
+      const itemId = targetCard.getAttribute('data-item-id');
+      if (itemId) {
+        loadCardAttachments(itemId).catch(err => {
+        });
+      }
+    }, 0);
+    
+    ensureCardVisible(targetCard);
+    flashCardHighlight(targetCard);
   }
-  
-  // Always expand the target card
-  targetCard.classList.add('expanded');
-  
-  // Calculate expiration and load attachments in background
-  setTimeout(() => {
-    calculateExpirationDate(cardIndex, null, true); // skipSave = true
-    const itemId = targetCard.getAttribute('data-item-id');
-    if (itemId) {
-      loadCardAttachments(itemId).catch(err => {
-      });
-    }
-  }, 0);
-  
-  ensureCardVisible(targetCard);
-  flashCardHighlight(targetCard);
 }
 
 async function ensureCardLoadedById(cardId) {
@@ -4229,6 +4476,28 @@ function flashCardHighlight(card) {
   setTimeout(() => {
     card.classList.remove('card-highlight');
   }, 1200);
+}
+
+function flashSpreadsheetRowHighlight(row) {
+  if (!row) {
+    return;
+  }
+  row.classList.add('row-highlight');
+  setTimeout(() => {
+    row.classList.remove('row-highlight');
+  }, 1200);
+}
+
+function ensureSpreadsheetRowVisible(row) {
+  if (!row) return;
+  
+  setTimeout(() => {
+    row.scrollIntoView({ 
+      behavior: 'smooth', 
+      block: 'center', 
+      inline: 'nearest' 
+    });
+  }, 200);
 }
 
 function triggerDateReminder(card, fieldName) {
@@ -6051,7 +6320,8 @@ function renderSpreadsheetView() {
     const classification = classifyToolingExpirationState(item);
     const hasExpirationDate = classification.expirationDate && classification.expirationDate !== '';
     const expirationDateDisplay = hasExpirationDate ? formatDate(classification.expirationDate) : '';
-    const expirationIconHtml = hasExpirationDate ? getSpreadsheetExpirationIcon(classification.state) : '';
+    const isAnalysisCompleted = item.analysis_completed === 1;
+    const expirationIconHtml = hasExpirationDate ? getSpreadsheetExpirationIcon(classification.state, isAnalysisCompleted) : '';
     
     // Calcula progresso
     const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || Number(item.tooling_life_qty) || 0;
@@ -6110,12 +6380,12 @@ function renderSpreadsheetView() {
         <td>
           <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
             value="${toolingLifeDisplay}" data-field="tooling_life_qty" data-id="${item.id}" 
-            onchange="spreadsheetSave(this)">
+            onchange="spreadsheetSave(this)" oninput="updateSpreadsheetProgressBar(${item.id})">
         </td>
         <td>
           <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
             value="${producedDisplay}" data-field="produced" data-id="${item.id}" 
-            onchange="spreadsheetSave(this)">
+            onchange="spreadsheetSave(this)" oninput="updateSpreadsheetProgressBar(${item.id})">
         </td>
         <td>
           <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
@@ -6707,15 +6977,24 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
           initCardAttachmentDragAndDrop(dropzone, itemId);
         }
         
-        // Initialize step description
+        // Initialize step description and responsible
         const stepSelect = cardContainer.querySelector(`select[data-field="steps"][data-id="${itemId}"]`);
         if (stepSelect) {
           const stepValue = stepSelect.value;
           const descriptionLabel = document.getElementById(`stepDescription_${itemId}`);
           if (descriptionLabel) {
             const description = getStepDescription(stepValue);
-            descriptionLabel.textContent = description;
-            descriptionLabel.style.display = description ? 'block' : 'none';
+            const responsible = getStepResponsible(stepValue);
+            
+            if (description) {
+              descriptionLabel.innerHTML = `<div style="color: #8b92a7; line-height: 1.4;">${description}<br><span style="font-size: 0.9em;">Responsible: ${responsible}</span></div>`;
+              descriptionLabel.style.display = 'block';
+              descriptionLabel.style.textAlign = 'left';
+              descriptionLabel.style.marginTop = '4px';
+            } else {
+              descriptionLabel.textContent = '';
+              descriptionLabel.style.display = 'none';
+            }
           }
         }
         
@@ -6860,7 +7139,8 @@ function syncSpreadsheetRowFromCard(itemId) {
   if (expirationCell) {
     const hasExpirationDate = classification.expirationDate && classification.expirationDate !== '';
     const expirationDateDisplay = hasExpirationDate ? formatDate(classification.expirationDate) : '';
-    const expirationIconHtml = hasExpirationDate ? getSpreadsheetExpirationIcon(classification.state) : '';
+    const isAnalysisCompleted = item.analysis_completed === 1;
+    const expirationIconHtml = hasExpirationDate ? getSpreadsheetExpirationIcon(classification.state, isAnalysisCompleted) : '';
     expirationCell.innerHTML = `
       ${expirationIconHtml}
       <span class="expiration-text">${expirationDateDisplay}</span>
@@ -6976,7 +7256,12 @@ async function spreadsheetCreateTooling() {
 }
 
 // Retorna o ícone HTML para o estado de expiração na planilha
-function getSpreadsheetExpirationIcon(state) {
+function getSpreadsheetExpirationIcon(state, isAnalysisCompleted = false) {
+  // Se a análise foi concluída, não mostra ícone de alerta
+  if (isAnalysisCompleted && (state === 'expired' || state === 'warning')) {
+    return '<i class="ph ph-check-circle expiration-icon ok" title="Analysis Completed"></i>';
+  }
+  
   switch (state) {
     case 'expired':
       return '<i class="ph ph-fill ph-warning-circle expiration-icon expired" title="Expired"></i>';
@@ -7155,6 +7440,11 @@ async function spreadsheetSave(inputElement) {
     // Atualiza o display do Last Update
     updateLastUpdateDisplay(id, now);
     
+    // Atualiza a barra de progresso se mudou tool_life_qty ou produced
+    if (field === 'tooling_life_qty' || field === 'produced') {
+      updateSpreadsheetProgressBar(id);
+    }
+    
     // Feedback visual sutil
     inputElement.style.backgroundColor = '#e8f5e9';
     setTimeout(() => {
@@ -7292,16 +7582,17 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
   const classification = classifyToolingExpirationState(item);
   let expirationDateValue = resolveToolingExpirationDate(item);
   
-  // Define o ícone baseado no estado de expiração (só mostra se expired ou warning)
+  // Define o ícone baseado no estado de expiração (só mostra se expired ou warning E não estiver concluído)
   let expirationIconClass = '';
   let expirationIconColor = '';
   let hasExpirationIcon = false;
+  const isAnalysisCompleted = item.analysis_completed === 1;
   
-  if (classification.state === 'expired') {
+  if (classification.state === 'expired' && !isAnalysisCompleted) {
     expirationIconClass = 'ph-fill ph-warning-circle';
     expirationIconColor = '#ef4444';
     hasExpirationIcon = true;
-  } else if (classification.state === 'warning') {
+  } else if (classification.state === 'warning' && !isAnalysisCompleted) {
     expirationIconClass = 'ph-fill ph-warning';
     expirationIconColor = '#f59e0b';
     hasExpirationIcon = true;
@@ -7473,6 +7764,19 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                 </select>
                 <span class="detail-sublabel" id="stepDescription_${item.id}" data-step-description></span>
               </div>
+              ${(() => {
+                const classification = classifyToolingExpirationState(item);
+                const showCheckbox = classification.state === 'expired' || classification.state === 'warning';
+                if (!showCheckbox) return '';
+                const isChecked = item.analysis_completed === 1;
+                return `
+              <div class="detail-item detail-item-full">
+                <label class="analysis-completed-checkbox">
+                  <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
+                  <span>Análise Concluída</span>
+                </label>
+              </div>`;
+              })()}
               <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
                 <span class="detail-label">Replacement Tooling</span>
                 <div class="replacement-link-field">
@@ -7964,7 +8268,21 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                       <option value="6" ${item.steps === '6' ? 'selected' : ''}>6</option>
                       <option value="7" ${item.steps === '7' ? 'selected' : ''}>7</option>
                     </select>
+                    <span class="detail-sublabel" id="stepDescription_${item.id}" data-step-description></span>
                   </div>
+                  ${(() => {
+                    const classification = classifyToolingExpirationState(item);
+                    const showCheckbox = classification.state === 'expired' || classification.state === 'warning';
+                    if (!showCheckbox) return '';
+                    const isChecked = item.analysis_completed === 1;
+                    return `
+                  <div class="detail-item detail-item-full">
+                    <label class="analysis-completed-checkbox">
+                      <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
+                      <span>Análise Concluída</span>
+                    </label>
+                  </div>`;
+                  })()}
                   <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
                     <span class="detail-label">Replacement Tooling</span>
                     <div class="replacement-link-field">
