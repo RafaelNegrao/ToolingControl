@@ -19,19 +19,20 @@ const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const TOOLING_DATA_HEADERS = [
   'ID',
-  'PN',
-  'PN Description',
-  'Tooling Description',
-  'Tooling Life (quantity)',
-  'Produced (quantity)',
+  'PN *',
+  'PN Description *',
+  'Tooling Description *',
+  'Tooling Life (quantity) *',
+  'Produced (quantity) *',
   'Production Date',
-  'Forecast',
-  'Forecast Date',
+  'Annual Volume',
+  'Annual Volume Date',
+  'Expiration Date',
   "Supplier's Comments"
 ];
 const VERIFICATION_SHEET_NAME = '_verification';
 const VERIFICATION_KEY_VALUE = '123456';
-const SUPPLIER_INFO_SHEET_NAME = 'Supplier Info';
+const SUPPLIER_INFO_SHEET_NAME = 'Info & Instructions';
 const SUPPLIER_INFO_TIMESTAMP_LABEL = 'Last Import Timestamp';
 const SUPPLIER_METADATA_TABLE = 'supplier_metadata';
 const CHANGE_TRACKING_FIELDS = {
@@ -39,7 +40,7 @@ const CHANGE_TRACKING_FIELDS = {
   tooling_life_qty: { label: 'Tooling Life (qty)', type: 'number' },
   annual_volume_forecast: { label: 'Forecast (qty)', type: 'number' },
   date_remaining_tooling_life: { label: 'Production Date', type: 'date' },
-  date_annual_volume: { label: 'Forecast Date', type: 'date' }
+  date_annual_volume: { label: 'Annual Volume Date', type: 'date' }
 };
 const CHANGE_TRACKING_IGNORED_FIELDS = new Set([
   'comments',
@@ -655,10 +656,24 @@ function ensureToolingHeaderOrder(worksheet) {
     throw new Error('Spreadsheet missing header row.');
   }
 
+  // Aliases para retrocompatibilidade (planilhas antigas podem ter nomes antigos)
+  const headerAliases = {
+    'Annual Volume': ['Annual Volume', 'Forecast'],
+    'Annual Volume Date': ['Annual Volume Date', 'Forecast Date'],
+    // Aceita headers com ou sem asterisco para campos obrigatórios
+    'PN *': ['PN *', 'PN'],
+    'PN Description *': ['PN Description *', 'PN Description'],
+    'Tooling Description *': ['Tooling Description *', 'Tooling Description'],
+    'Tooling Life (quantity) *': ['Tooling Life (quantity) *', 'Tooling Life (quantity)'],
+    'Produced (quantity) *': ['Produced (quantity) *', 'Produced (quantity)']
+  };
+
   const mismatches = [];
   TOOLING_DATA_HEADERS.forEach((expected, index) => {
     const actual = cellValueToString(headerRow.getCell(index + 1).value);
-    if (actual !== expected) {
+    // Verifica se o header atual corresponde ao esperado ou a um alias aceito
+    const acceptedValues = headerAliases[expected] || [expected];
+    if (!acceptedValues.includes(actual)) {
       mismatches.push({ expected, actual: actual || '(empty)', position: index + 1 });
     }
   });
@@ -1878,16 +1893,22 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
 
         // Definir colunas com larguras
         worksheet.columns = [
-          { header: 'ID', key: 'id', width: 8 },
-          { header: 'PN', key: 'pn', width: 20 },
-          { header: 'PN Description', key: 'pn_description', width: 35 },
-          { header: 'Tooling Description', key: 'tool_description', width: 35 },
-          { header: 'Tooling Life (quantity)', key: 'tooling_life_qty', width: 25 },
-          { header: 'Produced (quantity)', key: 'produced', width: 25 },
-          { header: 'Production Date', key: 'production_date', width: 20 },
-          { header: 'Forecast', key: 'forecast', width: 18 },
-          { header: 'Forecast Date', key: 'forecast_date', width: 20 },
-          { header: "Supplier's Comments", key: 'supplier_comments', width: 45 }
+          { header: 'ID', key: 'id', width: 6 },
+          { header: 'PN *', key: 'pn', width: 15 },
+          { header: 'PN Description *', key: 'pn_description', width: 25 },
+          { header: 'Tooling Description *', key: 'tool_description', width: 25 },
+          { header: 'Tooling Life (quantity) *', key: 'tooling_life_qty', width: 12 },
+          { header: 'Produced (quantity) *', key: 'produced', width: 12 },
+          { header: 'Production Date', key: 'production_date', width: 14 },
+          { header: 'Annual Volume', key: 'forecast', width: 12 },
+          { header: 'Annual Volume Date', key: 'forecast_date', width: 14 },
+          { header: 'Expiration Date', key: 'expiration_date', width: 14 },
+          { header: "Supplier's Comments", key: 'supplier_comments', width: 50 }
+        ];
+
+        // Fixar primeira linha (cabeçalho)
+        worksheet.views = [
+          { state: 'frozen', xSplit: 0, ySplit: 1, topLeftCell: 'A2', activeCell: 'A2' }
         ];
 
         // Aplicar estilo Cummins Red no cabeçalho para destaque visual
@@ -1906,25 +1927,33 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         });
         headerRow.commit();
 
-        // Centralizar colunas A, E, F, G, H, I para facilitar leitura
-        ['A', 'E', 'F', 'G', 'H', 'I'].forEach(columnKey => {
+        // Centralizar colunas A, E, F, G, H, I, J para facilitar leitura
+        ['A', 'E', 'F', 'G', 'H', 'I', 'J'].forEach(columnKey => {
           const column = worksheet.getColumn(columnKey);
           column.alignment = { horizontal: 'center', vertical: 'middle' };
         });
 
+        // Função auxiliar para converter string de data para objeto Date
+        function parseExcelDate(dateStr) {
+          if (!dateStr || typeof dateStr !== 'string') return null;
+          // Formato YYYY-MM-DD
+          if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+            const [year, month, day] = dateStr.split('-').map(Number);
+            return new Date(year, month - 1, day); // mês é 0-indexed
+          }
+          // Formato DD/MM/YYYY
+          if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
+            const [day, month, year] = dateStr.split('/').map(Number);
+            return new Date(year, month - 1, day);
+          }
+          return null;
+        }
+
         // Adicionar dados
         rows.forEach(row => {
-          // Converter datas de YYYY-MM-DD para DD/MM/YYYY
-          let prodDate = row.production_date || '';
-          if (prodDate && /^\d{4}-\d{2}-\d{2}$/.test(prodDate)) {
-            const [year, month, day] = prodDate.split('-');
-            prodDate = `${day}/${month}/${year}`;
-          }
-          let foreDate = row.forecast_date || '';
-          if (foreDate && /^\d{4}-\d{2}-\d{2}$/.test(foreDate)) {
-            const [year, month, day] = foreDate.split('-');
-            foreDate = `${day}/${month}/${year}`;
-          }
+          // Converter datas para objetos Date do JavaScript (ExcelJS converte automaticamente)
+          const prodDate = parseExcelDate(row.production_date);
+          const foreDate = parseExcelDate(row.forecast_date);
           
           worksheet.addRow({
             id: row.id || '',
@@ -1933,21 +1962,22 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
             tool_description: row.tool_description || '',
             tooling_life_qty: row.tooling_life_qty || '',
             produced: row.produced || '',
-            production_date: prodDate,
+            production_date: prodDate, // Objeto Date real
             forecast: row.forecast || '',
-            forecast_date: foreDate,
+            forecast_date: foreDate, // Objeto Date real
+            expiration_date: '', // Será preenchido com fórmula depois
             supplier_comments: ''
           });
         });
 
         const numericColumnIndexes = [5, 6, 8]; // Tooling Life, Produced, Forecast
-        const dateColumnIndexes = [7, 9]; // Production Date, Forecast Date
+        const dateColumnIndexes = [7, 9, 10]; // Production Date, Annual Volume Date, Expiration Date
 
         // Calcular primeira linha vazia (para desbloquear PN)
         const firstEmptyRow = rows.length + 2; // +2 porque: +1 para header, +1 para próxima linha
         
-        // Adicionar 10 linhas vazias extras para permitir que fornecedores adicionem novos ferramentais
-        for (let i = 0; i < 10; i++) {
+        // Adicionar 100 linhas vazias extras
+        for (let i = 0; i < 100; i++) {
           worksheet.addRow({
             id: '',
             pn: '',
@@ -1958,8 +1988,27 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
             production_date: '',
             forecast: '',
             forecast_date: '',
+            expiration_date: '', // Será preenchido com fórmula depois
             supplier_comments: ''
           });
+        }
+
+        // Adicionar fórmula de Expiration Date para todas as linhas (exceto header)
+        const totalRows = rows.length + 100; // Total de linhas de dados + vazias
+        for (let rowNum = 2; rowNum <= totalRows + 1; rowNum++) {
+          const row = worksheet.getRow(rowNum);
+          const expirationCell = row.getCell(10); // Coluna J (Expiration Date)
+          
+          // Fórmula: Segue a mesma lógica do programa
+          // 1. Se Production Date vazio ou dados incompletos -> não mostra nada
+          // 2. Se remaining (Tooling Life - Produced) <= 0 -> retorna Production Date (já expirou)
+          // 3. Se Forecast <= 0 -> não mostra nada (vida útil indeterminada)
+          // 4. Caso contrário: Production Date + ROUND((remaining / forecast) * 365, 0)
+          expirationCell.value = {
+            formula: `IF(OR(G${rowNum}="",E${rowNum}="",F${rowNum}=""),"",IF((E${rowNum}-F${rowNum})<=0,G${rowNum},IF(H${rowNum}<=0,"",G${rowNum}+ROUND((E${rowNum}-F${rowNum})/H${rowNum}*365,0))))`,
+            date1904: false
+          };
+          expirationCell.numFmt = 'dd/mm/yyyy';
         }
 
         // Proteger planilha com senha
@@ -1989,8 +2038,9 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
           // Verificar se é linha vazia ou além dos dados existentes
           const isEmptyOrNew = rowNumber >= firstEmptyRow;
           
-          // Desbloquear colunas C até J (índices 3 a 10)
-          for (let colIndex = 3; colIndex <= 10; colIndex++) {
+          // Desbloquear colunas C até I e K (índices 3 a 9 e 11) - excluindo J (Expiration Date)
+          for (let colIndex = 3; colIndex <= 11; colIndex++) {
+            if (colIndex === 10) continue; // Pular coluna J (Expiration Date) - mantém bloqueada
             const cell = row.getCell(colIndex);
             cell.protection = { locked: false };
           }
@@ -2043,6 +2093,12 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         await ensureSupplierMetadataTable();
         const lastImportTimestamp = await getSupplierImportTimestamp(supplierName);
         const supplierSheet = workbook.addWorksheet(SUPPLIER_INFO_SHEET_NAME);
+        
+        // Remover gridlines da aba Instructions
+        supplierSheet.views = [
+          { showGridLines: false }
+        ];
+        
         supplierSheet.columns = [
           { header: 'Field', key: 'field', width: 28 },
           { header: 'Value', key: 'value', width: 55 }
@@ -2055,23 +2111,29 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         );
         // Adicionar instruções para fornecedores
         supplierSheet.addRow({ field: '', value: '' }); // Linha em branco
-        supplierSheet.addRow({ field: 'INSTRUCTIONS', value: '' });
+        const instrRow = supplierSheet.addRow({ field: 'INSTRUÇÕES', value: '' });
+        instrRow.getCell(1).font = { bold: true, size: 12 };
         supplierSheet.addRow({ field: '', value: '' });
-        supplierSheet.addRow({ field: 'Adding New Tooling:', value: '' });
-        supplierSheet.addRow({ field: '→ Leave ID empty', value: 'System will assign automatically' });
-        supplierSheet.addRow({ field: '→ Part Number required', value: 'You must fill the PN column' });
-        supplierSheet.addRow({ field: '→ Fill all data', value: 'Description, quantities, dates, comments' });
-        supplierSheet.addRow({ field: '→ Add at the end', value: 'PN column is unlocked from first empty row' });
+        const addNewRow = supplierSheet.addRow({ field: 'Como Adicionar Novo Ferramental:', value: '' });
+        addNewRow.getCell(1).font = { bold: true };
+        supplierSheet.addRow({ field: '', value: 'Os itens com * são obrigatórios para adição de novo ferramental' });
+        supplierSheet.addRow({ field: '', value: 'Adicione todos os dados necessários e deixe o ID vazio.' });
+        supplierSheet.addRow({ field: '', value: 'O sistema atribuirá o ID automaticamente ao importar.' });
         supplierSheet.addRow({ field: '', value: '' });
-        supplierSheet.addRow({ field: 'Date Fields Meaning:', value: '' });
-        supplierSheet.addRow({ field: '→ Production Date', value: 'Date when "Produced" quantity was measured (snapshot date)' });
-        supplierSheet.addRow({ field: '→ Forecast Date', value: 'Date when "Annual Volume Forecast" was calculated or projected' });
+        const reqFieldsRow = supplierSheet.addRow({ field: 'Campos Obrigatórios:', value: '' });
+        reqFieldsRow.getCell(1).font = { bold: true };
+        supplierSheet.addRow({ field: '→ PN', value: 'Part Number do ferramental' });
+        supplierSheet.addRow({ field: '→ PN Description', value: 'Descrição do Part Number' });
+        supplierSheet.addRow({ field: '→ Tooling Description', value: 'Descrição do ferramental' });
+        supplierSheet.addRow({ field: '→ Tooling Life', value: 'Vida útil do ferramental (quantidade)' });
+        supplierSheet.addRow({ field: '→ Produced', value: 'Quantidade já produzida' });
         supplierSheet.addRow({ field: '', value: '' });
-        supplierSheet.addRow({ field: 'File Protection:', value: '' });
-        supplierSheet.addRow({ field: '→ ID column', value: 'Locked for existing items' });
-        supplierSheet.addRow({ field: '→ PN column', value: 'Locked for existing items, unlocked for new rows' });
-        supplierSheet.addRow({ field: '→ Other columns', value: 'Editable (Description, quantities, dates, comments)' });
-        supplierSheet.addRow({ field: '→ Comments', value: 'Timestamped automatically when imported' });
+        const optFieldsRow = supplierSheet.addRow({ field: 'Campos Opcionais:', value: '' });
+        optFieldsRow.getCell(1).font = { bold: true };
+        supplierSheet.addRow({ field: '→ Production Date', value: 'Data em que a quantidade "Produced" foi medida' });
+        supplierSheet.addRow({ field: '→ Annual Volume', value: 'Volume anual previsto' });
+        supplierSheet.addRow({ field: '→ Annual Volume Date', value: 'Data em que o "Annual Volume" foi calculado' });
+        supplierSheet.addRow({ field: '→ Supplier\'s Comments', value: 'Comentários adicionais (carimbados com data/hora ao importar)' });
 
         const supplierHeaderRow = supplierSheet.getRow(1);
         supplierHeaderRow.eachCell(cell => {
@@ -2104,6 +2166,51 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         verificationSheet.state = 'veryHidden';
         verificationSheet.getCell('A1').value = 'key';
         verificationSheet.getCell('B1').value = VERIFICATION_KEY_VALUE;
+
+        // Auto-fit nas colunas da aba Tooling Data - calcular largura baseada no conteúdo real
+        worksheet.columns.forEach((column, index) => {
+          let maxContentLength = 0;
+          
+          column.eachCell({ includeEmpty: false }, cell => {
+            // Pular o cabeçalho (linha 1) - vamos tratar separadamente
+            if (cell.row === 1) return;
+            
+            let cellLength = 0;
+            // Tratar datas especialmente
+            if (cell.value instanceof Date) {
+              cellLength = 10; // DD/MM/YYYY = 10 caracteres
+            } else if (typeof cell.value === 'number') {
+              cellLength = cell.value.toString().length;
+            } else if (cell.value) {
+              cellLength = cell.value.toString().length;
+            }
+            
+            if (cellLength > maxContentLength) {
+              maxContentLength = cellLength;
+            }
+          });
+          
+          // Calcular largura do header
+          const headerLength = column.header ? column.header.toString().length : 0;
+          
+          // Largura final = maior entre header e conteúdo + padding de 2
+          // Largura mínima de 8, máxima de 50 para acomodar colunas de comentários
+          const calculatedWidth = Math.max(headerLength, maxContentLength) + 2;
+          column.width = Math.min(Math.max(calculatedWidth, 8), 50);
+        });
+
+        // Auto-fit nas colunas da aba Info & Instructions
+        supplierSheet.columns.forEach(column => {
+          let maxLength = 0;
+          column.eachCell({ includeEmpty: false }, cell => {
+            const cellLength = cell.value ? cell.value.toString().length : 0;
+            if (cellLength > maxLength) {
+              maxLength = cellLength;
+            }
+          });
+          // Largura baseada no conteúdo com padding moderado
+          column.width = Math.min(Math.max(maxLength + 2, 10), 50);
+        });
 
         // Escolher onde salvar o arquivo
         const result = await dialog.showSaveDialog(mainWindow, {
@@ -2160,7 +2267,7 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
   validateVerificationSheet(workbook);
   const supplierInfoSheet = workbook.getWorksheet(SUPPLIER_INFO_SHEET_NAME);
   if (!supplierInfoSheet) {
-    throw new Error('Supplier Info sheet missing. Please re-export the template.');
+    throw new Error('Aba "Info & Instructions" não encontrada. Por favor, re-exporte o template.');
   }
 
   const supplierNameInFile = extractSupplierNameFromInfoSheet(supplierInfoSheet);
@@ -2207,7 +2314,8 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
     const productionDateISO = formatDateToISO(parseExcelDate(row.getCell(7).value));
     const forecastQty = parseNumericCell(row.getCell(8).value);
     const forecastDateISO = formatDateToISO(parseExcelDate(row.getCell(9).value));
-    const supplierCommentRaw = cellValueToString(row.getCell(10).value);
+    // Coluna 10 (Expiration Date) é ignorada - calculada automaticamente pelo programa
+    const supplierCommentRaw = cellValueToString(row.getCell(11).value);
     const supplierComment = supplierCommentRaw?.trim() || '';
 
     // Se não há ID mas há PN, é um novo ferramental
@@ -2592,6 +2700,25 @@ ipcMain.handle('open-attachment', async (event, supplierName, fileName, itemId =
   }
 });
 
+// Abre a pasta de anexos do supplier
+ipcMain.handle('open-attachments-folder', async (event, supplierName) => {
+  const attachmentsDir = getAttachmentsDir();
+  const supplierDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
+  
+  // Criar diretório se não existir
+  const longSupplierDir = getLongPath(supplierDir);
+  if (!fs.existsSync(longSupplierDir)) {
+    fs.mkdirSync(longSupplierDir, { recursive: true });
+  }
+  
+  try {
+    await shell.openPath(supplierDir);
+    return { success: true };
+  } catch (error) {
+    throw new Error('Error opening folder: ' + error.message);
+  }
+});
+
 // Exclui arquivo anexado
 ipcMain.handle('delete-attachment', async (event, supplierName, fileName, itemId = null) => {
   const attachmentsDir = getAttachmentsDir();
@@ -2625,11 +2752,16 @@ function sanitizeFileName(name) {
 
 // Função auxiliar para lidar com caminhos longos no Windows (>260 caracteres)
 function getLongPath(filePath) {
-  // No Windows, caminhos longos precisam do prefixo \\?\
-  if (process.platform === 'win32' && filePath.length > 200) {
-    // Normaliza o caminho e adiciona o prefixo para caminhos longos
+  // No Windows, usar sempre o prefixo \\?\ para caminhos longos ou próximos do limite
+  if (process.platform === 'win32') {
+    // Normaliza o caminho
     const normalizedPath = path.resolve(filePath);
-    if (!normalizedPath.startsWith('\\\\?\\')) {
+    // Se já tem o prefixo ou é muito curto, retorna normalizado
+    if (normalizedPath.startsWith('\\\\?\\')) {
+      return normalizedPath;
+    }
+    // Adiciona prefixo para caminhos maiores que 200 caracteres (margem de segurança antes do limite de 260)
+    if (normalizedPath.length > 200) {
       return '\\\\?\\' + normalizedPath;
     }
   }
@@ -2640,14 +2772,14 @@ function getLongPath(filePath) {
 function openFileWithLongPath(filePath) {
   return new Promise((resolve, reject) => {
     if (process.platform === 'win32') {
-      // No Windows, usar PowerShell para abrir arquivos com caminhos longos
-      // O PowerShell lida melhor com caminhos extensos
-      const escapedPath = filePath.replace(/'/g, "''");
-      const command = `powershell -Command "Start-Process -FilePath '${escapedPath}'"`;
+      // No Windows, usar cmd /c start para abrir arquivos com caminhos longos
+      // Funciona melhor que PowerShell para caminhos extensos
+      const normalizedPath = path.resolve(filePath);
+      const command = `cmd /c start "" "${normalizedPath}"`;  
       
       exec(command, { shell: true, windowsHide: true }, (error) => {
         if (error) {
-          console.error('[OpenFile] PowerShell failed, trying shell.openPath:', error);
+          console.error('[OpenFile] cmd /c start failed, trying shell.openPath:', error);
           // Fallback para shell.openPath
           shell.openPath(filePath)
             .then(() => resolve({ success: true }))
@@ -2804,7 +2936,7 @@ ipcMain.on('close-window', () => {
   }
 });
 
-// Export Forecast for Supplier (ID, PN, Supplier, Forecast, Forecast Date, Expiration)
+// Export Forecast for Supplier (ID, PN, Supplier, Forecast, Annual Volume Date, Expiration)
 ipcMain.handle('export-forecast-supplier', async () => {
   return new Promise((resolve, reject) => {
     db.all(`
@@ -2832,7 +2964,7 @@ ipcMain.handle('export-forecast-supplier', async () => {
           { header: 'PN', key: 'pn', width: 25 },
           { header: 'Supplier', key: 'supplier', width: 30 },
           { header: 'Annual Forecast', key: 'forecast', width: 20 },
-          { header: 'Forecast Date', key: 'forecast_date', width: 20 },
+          { header: 'Annual Volume Date', key: 'forecast_date', width: 20 },
           { header: 'Expiration', key: 'expiration_date', width: 20 }
         ];
 
@@ -2886,7 +3018,7 @@ ipcMain.handle('export-forecast-supplier', async () => {
           };
         }
         
-        // Forecast Date validation (column E) - date only
+        // Annual Volume Date validation (column E) - date only
         for (let i = 2; i <= lastRow; i++) {
           worksheet.getCell(`E${i}`).dataValidation = {
             type: 'date',
@@ -2911,7 +3043,7 @@ ipcMain.handle('export-forecast-supplier', async () => {
           });
         });
 
-        // Unlock Forecast and Forecast Date columns
+        // Unlock Forecast and Annual Volume Date columns
         ['D', 'E'].forEach(columnKey => {
           worksheet.getColumn(columnKey).eachCell({ includeEmpty: true }, (cell, rowNumber) => {
             if (rowNumber > 1) {
@@ -2957,7 +3089,7 @@ ipcMain.handle('export-forecast-supplier', async () => {
   });
 });
 
-// Import Forecast for Supplier (updates Forecast and Forecast Date by ID)
+// Import Forecast for Supplier (updates Forecast and Annual Volume Date by ID)
 ipcMain.handle('import-forecast-supplier', async () => {
   const dialogResult = await dialog.showOpenDialog(mainWindow, {
     title: 'Import Forecast Data (Supplier)',
@@ -2986,10 +3118,10 @@ ipcMain.handle('import-forecast-supplier', async () => {
     const fourthHeader = headerRow.getCell(4).value?.toString().trim();
     const fifthHeader = headerRow.getCell(5).value?.toString().trim();
 
-    if (firstHeader !== 'ID' || fourthHeader !== 'Annual Forecast' || fifthHeader !== 'Forecast Date') {
+    if (firstHeader !== 'ID' || fourthHeader !== 'Annual Forecast' || (fifthHeader !== 'Annual Volume Date' && fifthHeader !== 'Forecast Date')) {
       return { 
         success: false, 
-        error: 'Invalid file format. Expected columns: ID, PN, Supplier, Annual Forecast, Forecast Date' 
+        error: 'Invalid file format. Expected columns: ID, PN, Supplier, Annual Forecast, Annual Volume Date' 
       };
     }
 
@@ -3025,7 +3157,7 @@ ipcMain.handle('import-forecast-supplier', async () => {
 
         const normalizedForecastDate = normalizeDateInputToISO(forecastDate);
         if (forecastDate && !normalizedForecastDate) {
-          errors.push(`Row ${rowNumber} (ID ${id}): Invalid date format for Forecast Date`);
+          errors.push(`Row ${rowNumber} (ID ${id}): Invalid date format for Annual Volume Date`);
           continue;
         }
         if (normalizedForecastDate) {
@@ -3088,7 +3220,7 @@ ipcMain.handle('export-forecast-manager', async () => {
           { header: 'Remaining Life', key: 'remaining_tooling_life_pcs', width: 15 },
           { header: '% Life', key: 'percent_tooling_life', width: 10 },
           { header: 'Annual Forecast', key: 'annual_volume_forecast', width: 15 },
-          { header: 'Forecast Date', key: 'date_annual_volume', width: 15 },
+          { header: 'Annual Volume Date', key: 'date_annual_volume', width: 15 },
           { header: 'Expiration Date', key: 'expiration_date', width: 15 },
           { header: 'Finish Due Date', key: 'finish_due_date', width: 15 },
           { header: 'Amount BRL', key: 'amount_brl', width: 15 },
@@ -3194,7 +3326,7 @@ ipcMain.handle('export-forecast-manager', async () => {
         }
 
         // Date columns validation
-        const dateColumns = ['O', 'P', 'Q']; // Forecast Date, Expiration Date, Finish Due Date
+        const dateColumns = ['O', 'P', 'Q']; // Annual Volume Date, Expiration Date, Finish Due Date
         for (let i = 2; i <= lastRow; i++) {
           dateColumns.forEach(col => {
             worksheet.getCell(`${col}${i}`).dataValidation = {
@@ -3323,6 +3455,7 @@ ipcMain.handle('import-forecast-manager', async () => {
       'Remaining Life': 'remaining_tooling_life_pcs',
       '% Life': 'percent_tooling_life',
       'Annual Forecast': 'annual_volume_forecast',
+      'Annual Volume Date': 'date_annual_volume',
       'Forecast Date': 'date_annual_volume',
       'Expiration Date': 'expiration_date',
       'Finish Due Date': 'finish_due_date',
@@ -3341,7 +3474,7 @@ ipcMain.handle('import-forecast-manager', async () => {
     };
 
     // Date columns for validation
-    const dateColumns = ['Forecast Date', 'Expiration Date', 'Finish Due Date'];
+    const dateColumns = ['Annual Volume Date', 'Forecast Date', 'Expiration Date', 'Finish Due Date'];
     
     // Numeric columns for validation
     const numericColumns = ['Tooling Life Qty', 'Produced', 'Remaining Life', '% Life', 'Annual Forecast', 'Amount BRL', 'Tool Quantity'];

@@ -37,6 +37,8 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('upload-attachment-from-paths', supplierName, filePaths, itemId),
   openAttachment: (supplierName, fileName, itemId = null) => 
     ipcRenderer.invoke('open-attachment', supplierName, fileName, itemId),
+  openAttachmentsFolder: (supplierName) => 
+    ipcRenderer.invoke('open-attachments-folder', supplierName),
   deleteAttachment: (supplierName, fileName, itemId = null) => 
     ipcRenderer.invoke('delete-attachment', supplierName, fileName, itemId),
   

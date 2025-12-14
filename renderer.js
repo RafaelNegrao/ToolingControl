@@ -1108,6 +1108,15 @@ document.addEventListener('click', (e) => {
   }
 });
 
+// Fecha popup de filtro de comentários ao clicar fora
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.comments-filter-wrapper')) {
+    document.querySelectorAll('.comments-filter-popup.active').forEach(popup => {
+      popup.classList.remove('active');
+    });
+  }
+});
+
 document.addEventListener('click', (event) => {
   if (event.target.closest('[data-replacement-picker]')) {
     return;
@@ -2432,6 +2441,19 @@ function closeAttachmentsModal() {
   const { modalOverlay } = attachmentsElements;
   if (modalOverlay) {
     modalOverlay.classList.remove('active');
+  }
+}
+
+async function openAttachmentsFolder() {
+  const supplierLabel = currentSupplier || selectedSupplier;
+  if (!supplierLabel) {
+    showNotification('Select a supplier first', 'error');
+    return;
+  }
+  try {
+    await window.api.openAttachmentsFolder(supplierLabel);
+  } catch (error) {
+    showNotification('Error opening folder', 'error');
   }
 }
 
@@ -5117,7 +5139,7 @@ function closeAddToolingModal() {
   if (forecastDateInput) forecastDateInput.value = '';
 }
 
-function buildCommentsListHTML(commentsJson, itemId) {
+function buildCommentsListHTML(commentsJson, itemId, filterText = null) {
   let comments = [];
 
   if (commentsJson) {
@@ -5131,11 +5153,28 @@ function buildCommentsListHTML(commentsJson, itemId) {
     }
   }
 
-  if (comments.length === 0) {
-    return '<div class="comments-empty">No comments yet</div>';
+  // Manter índices originais para edição/exclusão antes de filtrar
+  const indexedComments = comments.map((comment, idx) => ({ ...comment, originalIndex: idx }));
+
+  // Aplicar filtro por texto se fornecido
+  let filteredComments = indexedComments;
+  if (filterText && filterText !== 'all') {
+    const searchTerm = filterText.toLowerCase();
+    filteredComments = indexedComments.filter(comment => {
+      const commentText = (comment.text || '').toLowerCase();
+      return commentText.includes(searchTerm);
+    });
   }
 
-  return comments.map((comment, index) => {
+  if (filteredComments.length === 0) {
+    const emptyMessage = filterText && filterText !== 'all' 
+      ? 'No comments matching this filter'
+      : 'No comments yet';
+    return `<div class="comments-empty">${emptyMessage}</div>`;
+  }
+
+  return filteredComments.map((comment) => {
+    const index = comment.originalIndex;
     const date = comment.date || 'N/A';
     const text = escapeHtml(comment.text || '');
     const isInitial = comment.initial === true;
@@ -5490,7 +5529,51 @@ function updateCommentsDisplay(itemId) {
   const commentsList = document.getElementById(`commentsList_${itemId}`);
   if (!commentsList) return;
   
-  commentsList.innerHTML = buildCommentsListHTML(item.comments || '', itemId);
+  // Obter o filtro atual, se houver
+  const filterBtn = document.getElementById(`commentsFilterBtn_${itemId}`);
+  const currentFilter = filterBtn ? filterBtn.dataset.currentFilter : null;
+  
+  commentsList.innerHTML = buildCommentsListHTML(item.comments || '', itemId, currentFilter);
+}
+
+function toggleCommentsFilterPopup(itemId) {
+  const popup = document.getElementById(`commentsFilterPopup_${itemId}`);
+  if (!popup) return;
+  
+  // Fechar outros popups abertos
+  document.querySelectorAll('.comments-filter-popup.active').forEach(p => {
+    if (p.id !== `commentsFilterPopup_${itemId}`) {
+      p.classList.remove('active');
+    }
+  });
+  
+  popup.classList.toggle('active');
+}
+
+function applyCommentsFilter(itemId, filterText) {
+  const item = toolingData.find(item => Number(item.id) === Number(itemId));
+  if (!item) return;
+  
+  const commentsList = document.getElementById(`commentsList_${itemId}`);
+  if (!commentsList) return;
+  
+  // Guardar filtro atual no botão
+  const filterBtn = document.getElementById(`commentsFilterBtn_${itemId}`);
+  if (filterBtn) {
+    filterBtn.dataset.currentFilter = filterText;
+    // Destacar ícone se filtro ativo
+    if (filterText && filterText !== 'all') {
+      filterBtn.classList.add('filter-active');
+    } else {
+      filterBtn.classList.remove('filter-active');
+    }
+  }
+  
+  // Fechar popup
+  const popup = document.getElementById(`commentsFilterPopup_${itemId}`);
+  if (popup) popup.classList.remove('active');
+  
+  commentsList.innerHTML = buildCommentsListHTML(item.comments || '', itemId, filterText);
 }
 
 async function submitAddToolingForm() {
@@ -5993,34 +6076,49 @@ function renderSpreadsheetView() {
     // Encontra o índice do item para usar nas funções de card
     const itemIndex = toolingData.findIndex(t => t.id === item.id);
     
+    // Prepara informações para o tooltip do ID
+    const tooltipPnDesc = item.pn_description ? escapeHtml(item.pn_description) : 'N/A';
+    const tooltipSupplier = item.supplier ? escapeHtml(item.supplier) : 'N/A';
+    const tooltipAssetNumber = item.asset_number ? escapeHtml(item.asset_number) : 'N/A';
+    const tooltipProdDate = item.date_remaining_tooling_life ? formatDate(item.date_remaining_tooling_life) : 'N/A';
+    const tooltipVolDate = item.date_annual_volume ? formatDate(item.date_annual_volume) : 'N/A';
+    const tooltipLastUpdate = item.last_update ? formatDate(item.last_update) : 'N/A';
+    
     return `
       <tr data-id="${item.id}" data-item-index="${itemIndex}" class="${isSelected ? 'row-selected' : ''}">
         ${checkboxHtml}
-        <td class="col-id">${item.id || ''}</td>
+        <td class="col-id id-with-tooltip">
+          <span class="id-number">${item.id || ''}</span>
+          <div class="id-tooltip">
+            <div class="id-tooltip-header">Tooling #${item.id}</div>
+            <div class="id-tooltip-item"><span class="tooltip-label">PN Description:</span> ${tooltipPnDesc}</div>
+            <div class="id-tooltip-item"><span class="tooltip-label">Supplier:</span> ${tooltipSupplier}</div>
+            <div class="id-tooltip-item"><span class="tooltip-label">Asset Number:</span> ${tooltipAssetNumber}</div>
+            <div class="id-tooltip-item"><span class="tooltip-label">Production Date:</span> ${tooltipProdDate}</div>
+            <div class="id-tooltip-item"><span class="tooltip-label">Volume Date:</span> ${tooltipVolDate}</div>
+            <div class="id-tooltip-item"><span class="tooltip-label">Last Update:</span> ${tooltipLastUpdate}</div>
+          </div>
+        </td>
         <td>
           <input type="text" class="spreadsheet-input" value="${escapeHtml(item.pn || '')}" 
             data-field="pn" data-id="${item.id}" onchange="spreadsheetSave(this)">
-        </td>
-        <td>
-          <input type="text" class="spreadsheet-input" value="${escapeHtml(item.pn_description || '')}" 
-            data-field="pn_description" data-id="${item.id}" onchange="spreadsheetSave(this)">
         </td>
         <td>
           <input type="text" class="spreadsheet-input" value="${escapeHtml(item.tool_description || '')}" 
             data-field="tool_description" data-id="${item.id}" onchange="spreadsheetSave(this)">
         </td>
         <td>
-          <input type="text" class="spreadsheet-input input-right" inputmode="numeric" data-mask="thousands" 
+          <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
             value="${toolingLifeDisplay}" data-field="tooling_life_qty" data-id="${item.id}" 
             onchange="spreadsheetSave(this)">
         </td>
         <td>
-          <input type="text" class="spreadsheet-input input-right" inputmode="numeric" data-mask="thousands" 
+          <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
             value="${producedDisplay}" data-field="produced" data-id="${item.id}" 
             onchange="spreadsheetSave(this)">
         </td>
         <td>
-          <input type="text" class="spreadsheet-input input-right" inputmode="numeric" data-mask="thousands" 
+          <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
             value="${forecastDisplay}" data-field="annual_volume_forecast" data-id="${item.id}" 
             onchange="spreadsheetSave(this)">
         </td>
@@ -6078,9 +6176,6 @@ function renderSpreadsheetView() {
       <input type="text" class="spreadsheet-input spreadsheet-new-input" id="newToolingPN" placeholder="PN *">
     </td>
     <td>
-      <input type="text" class="spreadsheet-input spreadsheet-new-input" id="newToolingPNDesc" placeholder="PN Description">
-    </td>
-    <td>
       <input type="text" class="spreadsheet-input spreadsheet-new-input" id="newToolingDesc" placeholder="Tooling Description">
     </td>
     <td>
@@ -6116,6 +6211,26 @@ function renderSpreadsheetView() {
   // Atualiza indicadores visuais de filtros e ordenação
   updateFilterButtonIndicators();
   updateSortButtonIndicators();
+  
+  // Adiciona listeners para os tooltips do ID
+  initIdTooltips();
+}
+
+// Inicializa tooltips do ID
+function initIdTooltips() {
+  const idCells = document.querySelectorAll('.id-with-tooltip');
+  
+  idCells.forEach(cell => {
+    cell.addEventListener('mouseenter', (event) => {
+      const tooltip = cell.querySelector('.id-tooltip');
+      if (!tooltip) return;
+      
+      // Posiciona o tooltip baseado na posição do mouse
+      const rect = cell.getBoundingClientRect();
+      tooltip.style.left = `${rect.right + 10}px`;
+      tooltip.style.top = `${rect.top}px`;
+    });
+  });
 }
 
 // Estado do popup de filtro
@@ -6756,7 +6871,6 @@ function syncSpreadsheetRowFromCard(itemId) {
 // Cria novo ferramental a partir da planilha
 async function spreadsheetCreateTooling() {
   const pnInput = document.getElementById('newToolingPN');
-  const pnDescInput = document.getElementById('newToolingPNDesc');
   const descInput = document.getElementById('newToolingDesc');
   const lifeInput = document.getElementById('newToolingLife');
   const producedInput = document.getElementById('newToolingProduced');
@@ -6766,8 +6880,7 @@ async function spreadsheetCreateTooling() {
   
   // Validar campos obrigatórios
   const pn = pnInput ? pnInput.value.trim() : '';
-  const pnDesc = pnDescInput ? pnDescInput.value.trim() : '';
-  const desc = descInput ? descInput.value.trim() : '';
+  const desc = descInput ? descInput.value.trim() : '';;
   const toolingLife = lifeInput ? parseLocalizedNumber(lifeInput.value) : 0;
   const produced = producedInput ? parseLocalizedNumber(producedInput.value) : 0;
   const prodDate = prodDateInput ? prodDateInput.value : null;
@@ -6819,7 +6932,7 @@ async function spreadsheetCreateTooling() {
     
     const payload = {
       pn,
-      pn_description: pnDesc,
+      pn_description: null,
       supplier: currentSupplier,
       cummins_responsible: null,
       tool_description: desc,
@@ -6841,7 +6954,6 @@ async function spreadsheetCreateTooling() {
     
     // Limpar campos
     if (pnInput) pnInput.value = '';
-    if (pnDescInput) pnDescInput.value = '';
     if (descInput) descInput.value = '';
     if (lifeInput) lifeInput.value = '';
     if (producedInput) producedInput.value = '';
@@ -7382,7 +7494,32 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
 
             <!-- Column 3: Comments -->
             <div class="detail-group detail-grid comments-group">
-              <div class="detail-group-title">Comments</div>
+              <div class="detail-group-title">
+                Comments
+                <div class="comments-filter-wrapper">
+                  <button type="button" class="btn-comments-filter" id="commentsFilterBtn_${item.id}" onclick="toggleCommentsFilterPopup(${item.id})" title="Filter comments">
+                    <i class="ph ph-funnel"></i>
+                  </button>
+                  <div class="comments-filter-popup" id="commentsFilterPopup_${item.id}">
+                    <div class="comments-filter-popup-header">Filter by keyword</div>
+                    <div class="comments-filter-popup-options">
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'all')">All Comments</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'created')">Created</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'produced')">Produced (qty)</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'tooling life')">Tooling Life (qty)</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'forecast')">Forecast (qty)</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'production date')">Production Date</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'annual volume date')">Annual Volume Date</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'expiration')">Expiration Date</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'status')">Status</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'steps')">Steps</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'disposition')">Disposition</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'category')">Category</button>
+                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'responsible')">Cummins Responsible</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div class="card-comments-container">
                 <div class="comments-input-area">
                   <textarea 
@@ -7849,15 +7986,52 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
 
                 <!-- Column 3: Comments -->
                   <div class="detail-group detail-grid comments-group">
-                    <div class="detail-group-title">Comments</div>
+                    <div class="detail-group-title">
+                      Comments
+                      <div class="comments-filter-wrapper">
+                        <button type="button" class="btn-comments-filter" id="commentsFilterBtn_${item.id}" onclick="toggleCommentsFilterPopup(${item.id})" title="Filter comments">
+                          <i class="ph ph-funnel"></i>
+                        </button>
+                        <div class="comments-filter-popup" id="commentsFilterPopup_${item.id}">
+                          <div class="comments-filter-popup-header">Filter by keyword</div>
+                          <div class="comments-filter-popup-options">
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'all')">All Comments</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'created')">Created</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'produced')">Produced (qty)</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'tooling life')">Tooling Life (qty)</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'forecast')">Forecast (qty)</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'production date')">Production Date</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'annual volume date')">Annual Volume Date</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'expiration')">Expiration Date</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'status')">Status</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'steps')">Steps</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'disposition')">Disposition</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'category')">Category</button>
+                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'responsible')">Cummins Responsible</button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                     <div class="card-comments-container">
-                      <textarea 
-                      class="card-comments-textarea" 
-                      placeholder="Add comments or notes here..."
-                      data-field="comments" 
-                      data-id="${item.id}"
-                      onchange="autoSaveTooling(${item.id})"
-                      >${item.comments || ''}</textarea>
+                      <div class="comments-input-area">
+                        <textarea 
+                          class="comment-input" 
+                          id="commentInput_${item.id}"
+                          placeholder="Add a comment..."
+                          rows="3"
+                          onkeydown="handleCommentKeydown(event, ${item.id})"
+                        ></textarea>
+                        <button 
+                          class="btn-add-comment" 
+                          onclick="addComment(${item.id})"
+                          title="Add comment"
+                        >
+                          <i class="ph ph-plus"></i>
+                        </button>
+                      </div>
+                      <div class="comments-list" id="commentsList_${item.id}">
+                        ${buildCommentsListHTML(item.comments || '', item.id)}
+                      </div>
                     </div>
                   </div>
               </div>
@@ -9082,7 +9256,7 @@ async function displayStepsSummary() {
       'completed': { text: 'DONE', class: 'status-completed' },
       'current': { text: 'NOW', class: 'status-current' },
       'behind': { text: 'LATE', class: 'status-behind' },
-      'upcoming': { text: 'WAIT', class: 'status-upcoming' }
+      'upcoming': { text: 'ON-GOING', class: 'status-upcoming' }
     };
     
     const config = statusConfig[status] || statusConfig['upcoming'];

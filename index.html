@@ -159,6 +159,9 @@
                 <div class="attachments-modal-list scrollable" id="attachmentsModalList"></div>
               </div>
               <div class="modal-actions">
+                <button class="btn-secondary" type="button" onclick="openAttachmentsFolder()" title="Open attachments folder">
+                  <i class="ph ph-folder-open"></i> Open Folder
+                </button>
                 <button class="btn-secondary" type="button" onclick="closeAttachmentsModal()">Close</button>
               </div>
             </div>
@@ -293,14 +296,6 @@
                       <div class="th-content">
                         <span>PN</span>
                         <button class="column-filter-btn" onclick="openColumnFilter(event, 'pn')" title="Filter">
-                          <i class="ph ph-funnel"></i>
-                        </button>
-                      </div>
-                    </th>
-                    <th class="col-pn-desc" data-filterable="pn_description">
-                      <div class="th-content">
-                        <span>PN Description</span>
-                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'pn_description')" title="Filter">
                           <i class="ph ph-funnel"></i>
                         </button>
                       </div>
@@ -829,6 +824,8 @@
               </div>
             </div>
             
+            <div class="analytics-divider"></div>
+            
             <div class="analytics-tables-row">
               <div class="analytics-section">
                 <h3 class="analytics-section-title">Top Suppliers</h3>
@@ -873,7 +870,7 @@
                   <span class="legend-item"><span class="step-status-badge status-completed">DONE</span> Completed</span>
                   <span class="legend-item"><span class="step-status-badge status-current">NOW</span> In Progress</span>
                   <span class="legend-item"><span class="step-status-badge status-behind">LATE</span> Behind Schedule</span>
-                  <span class="legend-item"><span class="step-status-badge status-upcoming">WAIT</span> Upcoming</span>
+                  <span class="legend-item"><span class="step-status-badge status-upcoming">ON-GOING</span> Upcoming</span>
                 </div>
               </div>
             </div>
