@@ -214,8 +214,15 @@ function classifyToolingExpirationState(item) {
 
 function computeSupplierMetricsFromItems(items) {
   return items.reduce((acc, item) => {
-    const classification = classifyToolingExpirationState(item);
+    // Total sempre conta todos os itens
     acc.total += 1;
+    
+    // Ignora itens com análise concluída apenas para expired e expiring
+    if (item.analysis_completed === 1) {
+      return acc;
+    }
+    
+    const classification = classifyToolingExpirationState(item);
     if (classification.state === 'expired') {
       acc.expired += 1;
     } else if (classification.state === 'warning') {
@@ -3083,10 +3090,15 @@ async function handleAnalysisCompletedChange(itemId, isChecked) {
       
       // Adiciona comentário automático se foi marcado
       if (isChecked) {
-        const timestamp = new Date().toISOString();
+        const now = new Date();
+        const dateStr = now.toLocaleDateString('pt-BR', { 
+          day: '2-digit', 
+          month: '2-digit', 
+          year: 'numeric'
+        });
         const commentText = 'Analysis completed - tooling reviewed and no revitalization required.';
         const newComment = {
-          timestamp,
+          date: dateStr,
           text: commentText
         };
         
@@ -3114,6 +3126,11 @@ async function handleAnalysisCompletedChange(itemId, isChecked) {
       
       // Atualiza o ícone de expiração em todos os lugares
       updateExpirationIconsForItem(itemId);
+      
+      // Atualiza métricas do card do supplier em tempo real
+      if (selectedSupplier) {
+        updateSupplierCardMetricsFromItems(selectedSupplier, toolingData);
+      }
     }
     
     showNotification(isChecked ? 'Analysis marked as completed' : 'Analysis marked as pending', 'success');
@@ -5633,7 +5650,18 @@ function saveCommentEdit(itemId, commentIndex) {
   
   if (commentIndex < 0 || commentIndex >= comments.length) return;
   
+  // Atualiza o texto e a data do comentário
+  const now = new Date();
+  const dateStr = now.toLocaleString('pt-BR', { 
+    day: '2-digit', 
+    month: '2-digit', 
+    year: 'numeric', 
+    hour: '2-digit', 
+    minute: '2-digit' 
+  });
+  
   comments[commentIndex].text = newText;
+  comments[commentIndex].date = dateStr;
   item.comments = JSON.stringify(comments);
   
   updateCommentsDisplay(itemId);
@@ -5981,6 +6009,8 @@ async function deleteToolingItem(id) {
     await refreshReplacementIdOptions(true);
     if (selectedSupplier) {
       await loadToolingBySupplier(selectedSupplier);
+      // Atualiza métricas do card do supplier em tempo real
+      updateSupplierCardMetricsFromItems(selectedSupplier, toolingData);
     } else {
       displayTooling([]);
     }
@@ -9305,6 +9335,11 @@ async function saveToolingQuietly(id) {
       
       // Atualiza o display do Last Update em tempo real
       updateLastUpdateDisplay(id, now);
+      
+      // Atualiza métricas do card do supplier em tempo real
+      if (selectedSupplier) {
+        updateSupplierCardMetricsFromItems(selectedSupplier, toolingData);
+      }
       
       // Sincroniza a linha da spreadsheet com os dados atualizados
       syncSpreadsheetRowFromCard(id);
