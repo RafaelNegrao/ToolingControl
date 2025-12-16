@@ -2356,7 +2356,8 @@ textarea {
 .card-attachment-item {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 12px;
   padding: 6px 12px;
   background: #ffffff;
   border: 1px solid #e0e0e0;
@@ -2388,6 +2389,7 @@ textarea {
   gap: 4px;
   min-width: 0;
   flex: 1;
+  text-align: left;
 }
 
 .card-attachment-name {
@@ -2397,6 +2399,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
 }
 
 .card-attachment-meta {
@@ -2405,6 +2408,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  text-align: left;
 }
 
 .card-attachment-actions {
@@ -5458,10 +5462,30 @@ select.detail-input::-ms-expand {
   border-top: none;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   padding: 0 20px;
-  gap: 30px;
   font-size: 12px;
   z-index: 100;
+  overflow: hidden;
+}
+
+.status-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-shrink: 0;
+}
+
+.status-bar-center {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.status-bar-right {
+  flex-shrink: 0;
 }
 
 .status-item {
@@ -5469,6 +5493,7 @@ select.detail-input::-ms-expand {
   align-items: center;
   gap: 6px;
   color: #999;
+  white-space: nowrap;
 }
 
 .status-item i {
@@ -5486,9 +5511,130 @@ select.detail-input::-ms-expand {
 }
 
 .status-version {
-  margin-left: auto;
   color: #666;
   font-size: 11px;
+}
+
+.status-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-search-btn {
+  background: transparent;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+}
+
+.status-search-btn:hover {
+  background: rgba(255, 152, 0, 0.1);
+  color: #ff9800;
+}
+
+.status-search-btn i {
+  font-size: 18px;
+}
+
+.status-search-input-wrapper {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  padding: 0 8px;
+  height: 26px;
+  min-width: 240px;
+  animation: slideIn 0.2s ease;
+}
+
+.status-search-input-wrapper.active {
+  display: flex;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+#statusSupplierSearchInput {
+  background: transparent;
+  border: none;
+  color: #e0e0e0;
+  font-size: 12px;
+  width: 200px;
+  outline: none;
+  padding: 4px 0;
+  text-transform: none;
+}
+
+#statusSupplierSearchInput::placeholder {
+  color: #666;
+  text-transform: none;
+}
+
+.status-search-clear {
+  background: transparent;
+  border: none;
+  color: #999;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  padding: 0;
+}
+
+.status-search-clear:hover {
+  background: rgba(255, 152, 0, 0.1);
+  color: #ff9800;
+}
+
+.status-search-clear i {
+  font-size: 14px;
+}
+
+/* Botão de adicionar na status bar */
+.status-add-btn {
+  background: transparent;
+  border: none;
+  color: #10b981;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.status-add-btn:hover {
+  background: rgba(16, 185, 129, 0.1);
+  color: #059669;
+}
+
+.status-add-btn i {
+  font-size: 18px;
 }
 
 /* Todos */
@@ -5635,7 +5781,7 @@ select.detail-input::-ms-expand {
   }
 }
 
-@media (max-width: 1100px) {
+@media (max-width: 1200px) {
   .sidebar {
     width: 240px;
   }
@@ -6518,7 +6664,19 @@ select.detail-input::-ms-expand {
   transition: all 0.2s ease;
 }
 
-.spreadsheet-input:hover {
+.spreadsheet-input[readonly] {
+  cursor: default;
+  color: #333;
+  pointer-events: none;
+  user-select: none;
+}
+
+.spreadsheet-input[readonly]:hover {
+  border-color: transparent;
+  background: transparent;
+}
+
+.spreadsheet-input:not([readonly]):hover {
   border-color: #ddd;
   background: #fff;
 }
@@ -6528,6 +6686,12 @@ select.detail-input::-ms-expand {
   border-color: #c8102e;
   background: #fff;
   box-shadow: 0 0 0 2px rgba(200, 16, 46, 0.1);
+}
+
+.spreadsheet-input[readonly]:focus {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
 }
 
 .spreadsheet-input.input-right {
@@ -6566,15 +6730,36 @@ select.detail-input::-ms-expand {
   transition: all 0.2s ease;
 }
 
-.spreadsheet-select:hover {
+.spreadsheet-select:disabled {
+  cursor: default;
+  opacity: 1;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  color: #333;
+  pointer-events: none;
+  user-select: none;
+}
+
+.spreadsheet-select:not(:disabled):hover {
   border-color: #ddd;
   background: #fff;
+}
+
+.spreadsheet-select:disabled:hover {
+  border-color: transparent;
+  background: transparent;
 }
 
 .spreadsheet-select:focus {
   outline: none;
   border-color: #c8102e;
   background: #fff;
+}
+
+.spreadsheet-select:disabled:focus {
+  border-color: transparent;
+  background: transparent;
 }
 
 /* Status colors in spreadsheet */
@@ -6973,6 +7158,16 @@ select.detail-input::-ms-expand {
 .spreadsheet-expand-btn i {
   font-size: 18px;
   transition: transform 0.2s ease;
+}
+
+/* Botão de adicionar na mesma coluna */
+.spreadsheet-add-btn {
+  color: #10b981;
+}
+
+.spreadsheet-add-btn:hover {
+  background: rgba(16, 185, 129, 0.1);
+  color: #059669;
 }
 
 /* Linha expandida */

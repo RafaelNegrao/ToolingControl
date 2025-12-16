@@ -936,16 +936,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Listener para a barra de pesquisa de suppliers
-  if (supplierSearchInput) {
+  // Listener para a barra de pesquisa de suppliers (agora na status bar)
+  const statusSupplierSearchInput = document.getElementById('statusSupplierSearchInput');
+  if (statusSupplierSearchInput) {
     supplierSearchDebouncedHandler = debounce((term) => {
       filterSuppliersAndTooling(term);
     }, 200);
 
-    supplierSearchInput.addEventListener('input', (e) => {
+    statusSupplierSearchInput.addEventListener('input', (e) => {
       const searchTerm = e.target.value.trim();
-      if (clearSupplierSearchBtn) {
-        clearSupplierSearchBtn.style.display = searchTerm ? 'flex' : 'none';
+      const clearBtn = document.getElementById('statusSearchClear');
+      if (clearBtn) {
+        clearBtn.style.display = searchTerm ? 'flex' : 'none';
       }
       supplierSearchDebouncedHandler(searchTerm);
     });
@@ -1173,6 +1175,26 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeAllReplacementPickers();
     closeReplacementPickerOverlay();
+    // Fechar barra de pesquisa do status bar
+    const statusSearchWrapper = document.getElementById('statusSearchInputWrapper');
+    if (statusSearchWrapper && statusSearchWrapper.classList.contains('active')) {
+      clearStatusSearch();
+    }
+  }
+});
+
+// Fechar barra de pesquisa ao clicar fora
+document.addEventListener('click', (e) => {
+  const statusSearchWrapper = document.getElementById('statusSearchInputWrapper');
+  const statusSearchBtn = document.getElementById('statusSearchBtn');
+  
+  if (statusSearchWrapper && statusSearchWrapper.classList.contains('active')) {
+    if (!statusSearchWrapper.contains(e.target) && e.target !== statusSearchBtn && !statusSearchBtn.contains(e.target)) {
+      const input = document.getElementById('statusSupplierSearchInput');
+      if (input && !input.value.trim()) {
+        statusSearchWrapper.classList.remove('active');
+      }
+    }
   }
 });
 
@@ -2648,6 +2670,9 @@ async function loadToolingBySupplier(supplier) {
     
     toolingData = data;
     
+    // Recalcula todas as expiration dates ao carregar
+    await recalculateAllExpirationDates();
+    
     // Limpa filtros de coluna e ordenação ao trocar de supplier
     columnFilters = {};
     columnSort = { column: null, direction: null };
@@ -2827,6 +2852,15 @@ function calculateLifecycle(cardIndex) {
     item.percent_tooling_life = percent;
   }
   
+  // Atualiza o toolingData global
+  const toolingIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
+  if (toolingIndex !== -1) {
+    toolingData[toolingIndex].tooling_life_qty = toolingLife;
+    toolingData[toolingIndex].produced = produced;
+    toolingData[toolingIndex].remaining_tooling_life_pcs = remaining;
+    toolingData[toolingIndex].percent_tooling_life = percent;
+  }
+  
   // Atualiza barra de progresso interna (aba Data)
   const lifecycleProgressFill = card.querySelector('[data-lifecycle-progress-fill]');
 
@@ -2845,6 +2879,13 @@ function calculateLifecycle(cardIndex) {
   if (externalProgressPercent) {
     externalProgressPercent.textContent = percent + '%';
   }
+  
+  // Atualiza a barra de progresso na linha da spreadsheet
+  updateSpreadsheetProgressBar(itemId);
+  
+  // Sincroniza tooling_life_qty e produced com a linha da spreadsheet
+  syncSpreadsheetFromExpandedCard(itemId, 'tooling_life_qty', toolingLife);
+  syncSpreadsheetFromExpandedCard(itemId, 'produced', produced);
   
   // Recalcula data de expiração
   calculateExpirationDate(cardIndex, item);
@@ -2894,6 +2935,13 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
   if (formattedDate) {
     expirationInput.value = formattedDate;
     item.expiration_date = formattedDate;
+    
+    // Atualiza o toolingData global
+    const toolingIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
+    if (toolingIndex !== -1) {
+      toolingData[toolingIndex].expiration_date = formattedDate;
+    }
+    
     // Atualizar header do card em tempo real
     const cardForUpdate = getCardContainer(cardIndex);
     if (cardForUpdate) {
@@ -2902,9 +2950,22 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
         expirationDisplay.textContent = formatDate(formattedDate);
       }
     }
+    
+    // Atualiza a célula de expiração na linha da spreadsheet
+    syncSpreadsheetExpirationCell(itemId);
+    
+    // Atualiza os ícones de expiração (linha e card)
+    updateExpirationIconsForItem(itemId);
   } else {
     expirationInput.value = '';
     item.expiration_date = '';
+    
+    // Atualiza o toolingData global
+    const toolingIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
+    if (toolingIndex !== -1) {
+      toolingData[toolingIndex].expiration_date = '';
+    }
+    
     // Limpar header do card
     const cardForClear = getCardContainer(cardIndex);
     if (cardForClear) {
@@ -2913,6 +2974,12 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
         expirationDisplay.textContent = '';
       }
     }
+    
+    // Atualiza a célula de expiração na linha da spreadsheet
+    syncSpreadsheetExpirationCell(itemId);
+    
+    // Atualiza os ícones de expiração (linha e card)
+    updateExpirationIconsForItem(itemId);
   }
   
   // Salva automaticamente apenas se não for skipSave
@@ -2927,6 +2994,27 @@ function handleProducedChange(cardIndex) {
   if (card) {
     triggerDateReminder(card, 'date_remaining_tooling_life');
   }
+}
+
+function handleProductionDateChange(cardIndex) {
+  const card = getCardContainer(cardIndex);
+  if (!card) return;
+  
+  const itemId = card.getAttribute('data-item-id');
+  const productionDateInput = card.querySelector(`[data-field="date_remaining_tooling_life"]`);
+  
+  // Atualiza o toolingData global com o novo valor
+  const toolingIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
+  const dateValue = productionDateInput ? productionDateInput.value || '' : '';
+  if (toolingIndex !== -1 && productionDateInput) {
+    toolingData[toolingIndex].date_remaining_tooling_life = dateValue;
+  }
+  
+  // Sincroniza date_remaining_tooling_life com a linha da spreadsheet
+  syncSpreadsheetFromExpandedCard(itemId, 'date_remaining_tooling_life', dateValue);
+  
+  // Recalcula a data de expiração
+  calculateExpirationDate(cardIndex);
 }
 
 // Atualiza a barra de progresso no spreadsheet (linha e card expandido)
@@ -2976,8 +3064,28 @@ function updateSpreadsheetProgressBar(itemId) {
 }
 
 function handleForecastChange(cardIndex) {
-  calculateExpirationDate(cardIndex);
   const card = getCardContainer(cardIndex);
+  if (!card) return;
+  
+  const itemId = card.getAttribute('data-item-id');
+  const forecastInput = card.querySelector(`[data-field="annual_volume_forecast"]`);
+  const forecastDateInput = card.querySelector(`[data-field="date_annual_volume"]`);
+  
+  // Atualiza o toolingData global com o novo valor do forecast
+  const toolingIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
+  const forecastValue = forecastInput ? parseLocalizedNumber(forecastInput.value) || 0 : 0;
+  if (toolingIndex !== -1 && forecastInput) {
+    toolingData[toolingIndex].annual_volume_forecast = forecastValue;
+    if (forecastDateInput) {
+      toolingData[toolingIndex].date_annual_volume = forecastDateInput.value || '';
+    }
+  }
+  
+  // Sincroniza annual_volume_forecast com a linha da spreadsheet
+  syncSpreadsheetFromExpandedCard(itemId, 'annual_volume_forecast', forecastValue);
+  
+  calculateExpirationDate(cardIndex);
+  
   if (card) {
     triggerDateReminder(card, 'date_annual_volume');
   }
@@ -3000,6 +3108,9 @@ function handleStatusSelectChange(cardIndex, itemId, selectEl) {
     
     updateCardHeaderStatus(cardIndex, value);
     updateCardStatusAttribute(cardIndex, value);
+    
+    // Sincroniza status com a linha da spreadsheet
+    syncSpreadsheetFromExpandedCard(itemId, 'status', value);
   }
   autoSaveTooling(itemId, true);
 }
@@ -3056,6 +3167,9 @@ function handleStepsSelectChange(cardIndex, itemId, selectEl) {
   if (selectEl) {
     const value = (selectEl.value || '').trim();
     updateCardHeaderSteps(cardIndex, value);
+    
+    // Sincroniza steps com a linha da spreadsheet
+    syncSpreadsheetFromExpandedCard(itemId, 'steps', value);
     
     // Update step description label with description and responsible
     const descriptionLabel = document.getElementById(`stepDescription_${itemId}`);
@@ -3141,7 +3255,7 @@ async function handleAnalysisCompletedChange(itemId, isChecked) {
 }
 
 function updateExpirationIconsForItem(itemId) {
-  const item = toolingData.find(t => t.id === itemId);
+  const item = toolingData.find(t => String(t.id) === String(itemId));
   if (!item) return;
   
   const classification = classifyToolingExpirationState(item);
@@ -3212,6 +3326,19 @@ function handlePNChange(cardIndex, itemId, inputEl) {
         pnDisplay.textContent = value || 'N/A';
       }
     }
+    // Sincroniza pn com a linha da spreadsheet
+    syncSpreadsheetFromExpandedCard(itemId, 'pn', value);
+  }
+  autoSaveTooling(itemId);
+}
+
+// Handler genérico para campos de texto do card que sincroniza com a spreadsheet
+function handleCardTextFieldChange(itemId, inputEl) {
+  if (inputEl) {
+    const field = inputEl.dataset.field;
+    const value = (inputEl.value || '').trim();
+    // Sincroniza com a linha da spreadsheet
+    syncSpreadsheetFromExpandedCard(itemId, field, value);
   }
   autoSaveTooling(itemId);
 }
@@ -4695,10 +4822,16 @@ function buildCardPayloadFromDom(id) {
     return null;
   }
   
-  // Adicionar comentários do toolingData ao payload
+  // Adicionar comentários e expiration_date do toolingData ao payload
+  // (expiration_date é calculado e tem classe 'calculated', então é ignorado pelo collectCardDomValues)
   const item = toolingData.find(item => Number(item.id) === Number(id));
-  if (item && item.comments) {
-    rawValues.comments = item.comments;
+  if (item) {
+    if (item.comments) {
+      rawValues.comments = item.comments;
+    }
+    if (item.expiration_date !== undefined) {
+      rawValues.expiration_date = item.expiration_date;
+    }
   }
   
   const serialized = serializeCardValues(rawValues);
@@ -4724,6 +4857,14 @@ function primeCardSnapshots(items) {
       const values = collectCardDomValues(item.id);
       if (!values) {
         return;
+      }
+      // Adiciona expiration_date ao snapshot (não é coletado do DOM porque tem classe 'calculated')
+      if (item.expiration_date !== undefined) {
+        values.expiration_date = item.expiration_date;
+      }
+      // Adiciona comments ao snapshot
+      if (item.comments !== undefined) {
+        values.comments = item.comments;
       }
       cardSnapshotStore.set(getSnapshotKey(item.id), serializeCardValues(values));
     });
@@ -5206,27 +5347,74 @@ function initThousandsMaskBehavior() {
   applyInitialThousandsMask();
 }
 
+// Recalcula todas as expiration dates ao carregar os dados
+async function recalculateAllExpirationDates() {
+  if (!toolingData || toolingData.length === 0) return;
+  
+  const updates = [];
+  
+  for (const item of toolingData) {
+    const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
+    const produced = parseLocalizedNumber(item.produced) || 0;
+    const remaining = toolingLife - produced;
+    const forecast = parseLocalizedNumber(item.annual_volume_forecast) || 0;
+    const productionDate = item.date_remaining_tooling_life || '';
+    
+    const newExpirationDate = calculateExpirationFromFormula({
+      remaining,
+      forecast,
+      productionDate
+    });
+    
+    // Só atualiza se a data calculada for diferente da atual
+    const currentExpiration = item.expiration_date || '';
+    if (newExpirationDate !== currentExpiration) {
+      item.expiration_date = newExpirationDate || '';
+      updates.push({
+        id: item.id,
+        expiration_date: newExpirationDate || ''
+      });
+    }
+  }
+  
+  // Salva todas as atualizações no banco de dados em background
+  if (updates.length > 0) {
+    for (const update of updates) {
+      try {
+        await window.api.updateTooling(update.id, { expiration_date: update.expiration_date });
+      } catch (error) {
+        console.error('Error updating expiration_date for item', update.id, error);
+      }
+    }
+    console.log(`Recalculated ${updates.length} expiration dates on startup`);
+  }
+}
+
 function calculateExpirationFromFormula({
   remaining,
   forecast,
   productionDate
 }) {
-  const baseDate = productionDate ? new Date(productionDate) : new Date();
+  // Data base é a data de produção (obrigatória)
+  if (!productionDate) {
+    return null;
+  }
+  
+  const baseDate = new Date(productionDate);
   if (Number.isNaN(baseDate.getTime())) {
     return null;
   }
 
-  // Se remaining <= 0, já expirou - retorna a data base
-  if (remaining <= 0) {
-    return baseDate.toISOString().split('T')[0];
-  }
-
-  // Se não há demanda (forecast), a vida útil é indeterminada
+  // Fórmula: se(annual_volume=0; data_produced + (remaining/1*365); data_produced + (remaining/annual_volume*365))
+  // remaining pode ser negativo (já expirou) - o cálculo vai resultar em data passada
+  let totalDays;
   if (!forecast || forecast <= 0) {
-    return null;
+    // Se annual volume = 0, usa divisor 1
+    totalDays = Math.round((remaining / 1) * 365);
+  } else {
+    // Caso normal: remaining / annual_volume * 365
+    totalDays = Math.round((remaining / forecast) * 365);
   }
-
-  const totalDays = Math.round((remaining / forecast) * 365);
 
   if (Number.isNaN(totalDays)) {
     return null;
@@ -5451,6 +5639,9 @@ function buildCommentsListHTML(commentsJson, itemId, filterText = null) {
       return commentText.includes(searchTerm);
     });
   }
+
+  // Inverter ordem para mostrar comentários mais recentes primeiro (do topo para baixo)
+  filteredComments = filteredComments.reverse();
 
   if (filteredComments.length === 0) {
     const emptyMessage = filterText && filterText !== 'all' 
@@ -6401,38 +6592,35 @@ function renderSpreadsheetView() {
         </td>
         <td>
           <input type="text" class="spreadsheet-input" value="${escapeHtml(item.pn || '')}" 
-            data-field="pn" data-id="${item.id}" onchange="spreadsheetSave(this)">
+            data-field="pn" data-id="${item.id}" readonly tabindex="-1">
         </td>
         <td>
           <input type="text" class="spreadsheet-input" value="${escapeHtml(item.tool_description || '')}" 
-            data-field="tool_description" data-id="${item.id}" onchange="spreadsheetSave(this)">
+            data-field="tool_description" data-id="${item.id}" readonly tabindex="-1">
         </td>
         <td>
           <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
-            value="${toolingLifeDisplay}" data-field="tooling_life_qty" data-id="${item.id}" 
-            onchange="spreadsheetSave(this)" oninput="updateSpreadsheetProgressBar(${item.id})">
+            value="${toolingLifeDisplay}" data-field="tooling_life_qty" data-id="${item.id}" readonly tabindex="-1">
         </td>
         <td>
           <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
-            value="${producedDisplay}" data-field="produced" data-id="${item.id}" 
-            onchange="spreadsheetSave(this)" oninput="updateSpreadsheetProgressBar(${item.id})">
+            value="${producedDisplay}" data-field="produced" data-id="${item.id}" readonly tabindex="-1">
         </td>
         <td>
           <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
-            value="${forecastDisplay}" data-field="annual_volume_forecast" data-id="${item.id}" 
-            onchange="spreadsheetSave(this)">
+            value="${forecastDisplay}" data-field="annual_volume_forecast" data-id="${item.id}" readonly tabindex="-1">
         </td>
         <td class="spreadsheet-expiration">
           ${expirationIconHtml}
           <span class="expiration-text">${expirationDateDisplay}</span>
         </td>
         <td>
-          <select class="spreadsheet-select input-center" data-field="steps" data-id="${item.id}" onchange="spreadsheetSave(this)">
+          <select class="spreadsheet-select input-center" data-field="steps" data-id="${item.id}" disabled tabindex="-1">
             ${stepsOptionsHtml}
           </select>
         </td>
         <td>
-          <select class="spreadsheet-select ${statusClass}" data-field="status" data-id="${item.id}" onchange="spreadsheetSave(this)">
+          <select class="spreadsheet-select ${statusClass}" data-field="status" data-id="${item.id}" disabled tabindex="-1">
             ${statusOptionsHtml}
           </select>
         </td>
@@ -6491,14 +6679,15 @@ function renderSpreadsheetView() {
         id="newToolingVolume" placeholder="Volume">
     </td>
     <td></td>
-    <td class="new-row-action" colspan="2">
-      <button class="btn-spreadsheet-add" onclick="spreadsheetCreateTooling()" title="Create Tooling">
-        <i class="ph ph-check"></i> Create
+    <td></td>
+    <td></td>
+    <td></td>
+    <td></td>
+    <td class="col-expand">
+      <button class="spreadsheet-expand-btn spreadsheet-add-btn" onclick="spreadsheetCreateTooling()" title="Create Tooling">
+        <i class="ph ph-plus"></i>
       </button>
     </td>
-    <td></td>
-    <td></td>
-    ${emptyExpandCell}
   `;
   spreadsheetBody.appendChild(newRow);
   
@@ -7117,8 +7306,13 @@ async function loadCardAttachmentsForSpreadsheet(itemId, container) {
     
     list.innerHTML = attachments.map(att => `
       <div class="card-attachment-item">
-        <i class="ph ${getFileIcon(att.name)}"></i>
-        <span class="card-attachment-name" title="${escapeHtml(att.name)}">${escapeHtml(att.name)}</span>
+        <div class="card-attachment-info">
+          <i class="ph ${getFileIcon(att.name)}"></i>
+          <div class="card-attachment-details">
+            <span class="card-attachment-name" title="${escapeHtml(att.name)}">${escapeHtml(att.name)}</span>
+            <span class="card-attachment-meta">${formatFileSize(att.size)} • ${formatDate(att.date)}</span>
+          </div>
+        </div>
         <div class="card-attachment-actions">
           <button class="card-attachment-btn" onclick="openToolingAttachment('${escapeHtml(att.path)}')" title="Open">
             <i class="ph ph-folder-open"></i>
@@ -7175,6 +7369,98 @@ function syncSpreadsheetRowFromCard(itemId) {
       ${expirationIconHtml}
       <span class="expiration-text">${expirationDateDisplay}</span>
     `;
+  }
+}
+
+// Sincroniza apenas a célula de expiração na linha da spreadsheet
+function syncSpreadsheetExpirationCell(itemId) {
+  const row = document.querySelector(`tr[data-id="${itemId}"]`);
+  if (!row) return;
+  
+  const item = toolingData.find(t => String(t.id) === String(itemId));
+  if (!item) return;
+  
+  // Usa diretamente o expiration_date do item (já atualizado)
+  const expirationDateValue = item.expiration_date || '';
+  const hasExpirationDate = expirationDateValue && expirationDateValue !== '';
+  const expirationDateDisplay = hasExpirationDate ? formatDate(expirationDateValue) : '';
+  
+  // Calcula o estado para ícone
+  const expirationStatus = getExpirationStatus(expirationDateValue);
+  const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || 0;
+  const produced = Number(parseLocalizedNumber(item.produced)) || 0;
+  const percentUsed = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
+  const normalizedStatus = (item.status || '').toString().trim().toLowerCase();
+  const isObsolete = normalizedStatus === 'obsolete';
+  
+  let state = 'ok';
+  if (isObsolete) {
+    state = 'obsolete';
+  } else if (percentUsed >= 100 || expirationStatus.class === 'expired') {
+    state = 'expired';
+  } else if (expirationStatus.class === 'warning') {
+    state = 'warning';
+  }
+  
+  const isAnalysisCompleted = item.analysis_completed === 1;
+  const expirationIconHtml = hasExpirationDate ? getSpreadsheetExpirationIcon(state, isAnalysisCompleted) : '';
+  
+  const expirationCell = row.querySelector('.spreadsheet-expiration');
+  if (expirationCell) {
+    expirationCell.innerHTML = `
+      ${expirationIconHtml}
+      <span class="expiration-text">${expirationDateDisplay}</span>
+    `;
+  }
+}
+
+// Recalcula expiration_date a partir da spreadsheet e atualiza tudo
+async function recalculateExpirationForSpreadsheet(itemId) {
+  const item = toolingData.find(t => String(t.id) === String(itemId));
+  if (!item) return;
+  
+  // Calcula remaining
+  const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
+  const produced = parseLocalizedNumber(item.produced) || 0;
+  const remaining = toolingLife - produced;
+  const forecast = parseLocalizedNumber(item.annual_volume_forecast) || 0;
+  const productionDate = item.date_remaining_tooling_life || '';
+  
+  // Calcula a nova expiration_date
+  const formattedDate = calculateExpirationFromFormula({
+    remaining,
+    forecast,
+    productionDate
+  });
+  
+  // Atualiza o toolingData
+  item.expiration_date = formattedDate || '';
+  
+  // Atualiza a célula de expiração na spreadsheet
+  syncSpreadsheetExpirationCell(itemId);
+  
+  // Atualiza os ícones de expiração
+  updateExpirationIconsForItem(itemId);
+  
+  // Se o card expandido estiver aberto, atualiza o input de expiration_date
+  const detailRow = document.querySelector(`.spreadsheet-detail-row[data-detail-for="${itemId}"]`);
+  if (detailRow) {
+    const expirationInput = detailRow.querySelector(`[data-field="expiration_date"][data-id="${itemId}"]`);
+    if (expirationInput) {
+      expirationInput.value = formattedDate || '';
+    }
+    // Atualiza também o header do card dentro do detalhe
+    const cardHeader = detailRow.querySelector('[data-card-expiration]');
+    if (cardHeader) {
+      cardHeader.textContent = formattedDate ? formatDate(formattedDate) : '';
+    }
+  }
+  
+  // Salva no banco de dados (mesmo se vazio, para limpar valor anterior)
+  try {
+    await window.api.updateTooling(itemId, { expiration_date: formattedDate || '' });
+  } catch (error) {
+    console.error('Error saving expiration_date:', error);
   }
 }
 
@@ -7473,6 +7759,53 @@ async function spreadsheetSave(inputElement) {
     // Atualiza a barra de progresso se mudou tool_life_qty ou produced
     if (field === 'tooling_life_qty' || field === 'produced') {
       updateSpreadsheetProgressBar(id);
+      
+      // Recalcula o remaining e atualiza no toolingData e card expandido
+      const item = toolingData.find(t => String(t.id) === String(id));
+      if (item) {
+        const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
+        const produced = parseLocalizedNumber(item.produced) || 0;
+        const remaining = toolingLife - produced;
+        const percentValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
+        const percent = toolingLife > 0 ? percentValue.toFixed(1) : '0.0';
+        
+        // Atualiza toolingData
+        item.remaining_tooling_life_pcs = remaining;
+        item.percent_tooling_life = percent;
+        
+        // Sincroniza remaining e percent com o card expandido se estiver aberto
+        const detailRow = document.querySelector(`.spreadsheet-detail-row[data-detail-for="${id}"]`);
+        if (detailRow) {
+          const remainingInput = detailRow.querySelector(`[data-field="remaining_tooling_life_pcs"][data-id="${id}"]`);
+          if (remainingInput) {
+            remainingInput.value = formatIntegerWithSeparators(remaining, { preserveEmpty: true });
+          }
+          const percentInput = detailRow.querySelector(`[data-field="percent_tooling_life"][data-id="${id}"]`);
+          if (percentInput) {
+            percentInput.value = percent + '%';
+          }
+          // Atualiza barra de progresso interna do card
+          const lifecycleProgressFill = detailRow.querySelector('[data-lifecycle-progress-fill]');
+          if (lifecycleProgressFill) {
+            lifecycleProgressFill.style.width = percent + '%';
+          }
+          // Atualiza barra de progresso externa (header)
+          const externalProgressFill = detailRow.querySelector('[data-progress-fill]');
+          const externalProgressPercent = detailRow.querySelector('[data-progress-percent]');
+          if (externalProgressFill) {
+            externalProgressFill.style.width = percent + '%';
+          }
+          if (externalProgressPercent) {
+            externalProgressPercent.textContent = percent + '%';
+          }
+        }
+      }
+    }
+    
+    // Recalcula expiration_date quando campos relevantes mudam
+    const expirationFields = ['tooling_life_qty', 'produced', 'annual_volume_forecast', 'date_remaining_tooling_life'];
+    if (expirationFields.includes(field)) {
+      await recalculateExpirationForSpreadsheet(id);
     }
     
     // Feedback visual sutil
@@ -7713,7 +8046,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                     Prod. Date
                     <i class="ph ph-info tooltip-icon" title="Production Date: Update whenever Produced changes to keep the timeline accurate." role="button" tabindex="0" onclick="openProductionInfoModal(event)" onkeydown="handleProductionInfoIconKey(event)"></i>
                   </span>
-                  <input type="date" class="detail-input" value="${item.date_remaining_tooling_life || ''}" data-field="date_remaining_tooling_life" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                  <input type="date" class="detail-input" value="${item.date_remaining_tooling_life || ''}" data-field="date_remaining_tooling_life" data-id="${item.id}" onchange="handleProductionDateChange(${index})">
                 </div>
               </div>
               <div class="detail-item">
@@ -7733,7 +8066,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
               <div class="detail-item detail-pair">
                 <div class="detail-item">
                   <span class="detail-label">Annual Volume</span>
-                  <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${hasForecast ? forecastDisplay : ''}" data-field="annual_volume_forecast" data-id="${item.id}" onchange="handleForecastChange(${index})">
+                  <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${hasForecast ? forecastDisplay : ''}" data-field="annual_volume_forecast" data-id="${item.id}" onchange="handleForecastChange(${index})" oninput="handleForecastChange(${index})">
                 </div>
                 <div class="detail-item">
                   <span class="detail-label">Volume Date</span>
@@ -7765,11 +8098,11 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
               </div>
               <div class="detail-item detail-item-full">
                 <span class="detail-label">PN Description</span>
-                <input type="text" class="detail-input" value="${item.pn_description || ''}" data-field="pn_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                <input type="text" class="detail-input" value="${item.pn_description || ''}" data-field="pn_description" data-id="${item.id}" onchange="handleCardTextFieldChange(${item.id}, this)">
               </div>
               <div class="detail-item detail-item-full">
                 <span class="detail-label">Tooling Description</span>
-                <input type="text" class="detail-input" value="${item.tool_description || ''}" data-field="tool_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                <input type="text" class="detail-input" value="${item.tool_description || ''}" data-field="tool_description" data-id="${item.id}" onchange="handleCardTextFieldChange(${item.id}, this)">
               </div>
               <div class="detail-item">
                 <span class="detail-label">Status</span>
@@ -8222,7 +8555,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                         Prod. Date
                         <i class="ph ph-info tooltip-icon" title="Production Date: Update whenever Produced changes to keep the timeline accurate." role="button" tabindex="0" onclick="openProductionInfoModal(event)" onkeydown="handleProductionInfoIconKey(event)"></i>
                       </span>
-                      <input type="date" class="detail-input" value="${item.date_remaining_tooling_life || ''}" data-field="date_remaining_tooling_life" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                      <input type="date" class="detail-input" value="${item.date_remaining_tooling_life || ''}" data-field="date_remaining_tooling_life" data-id="${item.id}" onchange="handleProductionDateChange(${index})">
                     </div>
                   </div>
                   <div class="detail-item">
@@ -8242,7 +8575,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                   <div class="detail-item detail-pair">
                     <div class="detail-item">
                       <span class="detail-label">Annual Volume</span>
-                      <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${hasForecast ? forecastDisplay : ''}" data-field="annual_volume_forecast" data-id="${item.id}" onchange="handleForecastChange(${index})">
+                      <input type="text" class="detail-input" inputmode="numeric" data-mask="thousands" value="${hasForecast ? forecastDisplay : ''}" data-field="annual_volume_forecast" data-id="${item.id}" onchange="handleForecastChange(${index})" oninput="handleForecastChange(${index})">
                     </div>
                     <div class="detail-item">
                       <span class="detail-label">Volume Date</span>
@@ -8274,11 +8607,11 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                   </div>
                   <div class="detail-item detail-item-full">
                     <span class="detail-label">PN Description</span>
-                    <input type="text" class="detail-input" value="${item.pn_description || ''}" data-field="pn_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                    <input type="text" class="detail-input" value="${item.pn_description || ''}" data-field="pn_description" data-id="${item.id}" onchange="handleCardTextFieldChange(${item.id}, this)">
                   </div>
                   <div class="detail-item detail-item-full">
                     <span class="detail-label">Tooling Description</span>
-                    <input type="text" class="detail-input" value="${item.tool_description || ''}" data-field="tool_description" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
+                    <input type="text" class="detail-input" value="${item.tool_description || ''}" data-field="tool_description" data-id="${item.id}" onchange="handleCardTextFieldChange(${item.id}, this)">
                   </div>
                   <div class="detail-item">
                     <span class="detail-label">Status</span>
@@ -9091,7 +9424,7 @@ async function handleClearAllStepHistoryConfirmation() {
     console.log('[ClearAllSteps] Calling API...');
     const result = await window.api.clearAllStepHistory();
     console.log('[ClearAllSteps] Result:', result);
-    showToast('All steps and step history cleared successfully', 'success');
+    showToast('All step checkboxes cleared successfully (steps preserved)', 'success');
     
     // Reload tooling data to reflect the changes
     if (selectedSupplier) {
@@ -9279,6 +9612,10 @@ async function saveTooling(id) {
       if (prepared.payload.comments !== undefined) {
         refreshedSnapshot.comments = prepared.payload.comments;
       }
+      // Adiciona expiration_date ao snapshot (não é coletado do DOM porque tem classe 'calculated')
+      if (prepared.payload.expiration_date !== undefined) {
+        refreshedSnapshot.expiration_date = prepared.payload.expiration_date;
+      }
       cardSnapshotStore.set(snapshotKey, serializeCardValues(refreshedSnapshot));
     } else {
       cardSnapshotStore.set(snapshotKey, prepared.serialized);
@@ -9317,6 +9654,10 @@ async function saveToolingQuietly(id) {
     if (refreshedSnapshot) {
       if (prepared.payload.comments !== undefined) {
         refreshedSnapshot.comments = prepared.payload.comments;
+      }
+      // Adiciona expiration_date ao snapshot (não é coletado do DOM porque tem classe 'calculated')
+      if (prepared.payload.expiration_date !== undefined) {
+        refreshedSnapshot.expiration_date = prepared.payload.expiration_date;
       }
       cardSnapshotStore.set(snapshotKey, serializeCardValues(refreshedSnapshot));
     } else {
@@ -10080,6 +10421,42 @@ function clearSupplierSearch() {
   supplierSearchDebouncedHandler?.cancel?.();
   
   filterSuppliersAndTooling('');
+}
+
+// Status bar search functions
+function toggleStatusSearch() {
+  const wrapper = document.getElementById('statusSearchInputWrapper');
+  const input = document.getElementById('statusSupplierSearchInput');
+  const btn = document.getElementById('statusSearchBtn');
+  
+  if (!wrapper) return;
+  
+  const isActive = wrapper.classList.contains('active');
+  
+  if (isActive) {
+    wrapper.classList.remove('active');
+    input.value = '';
+    filterSuppliersAndTooling('');
+  } else {
+    wrapper.classList.add('active');
+    setTimeout(() => input.focus(), 100);
+  }
+}
+
+function clearStatusSearch() {
+  const input = document.getElementById('statusSupplierSearchInput');
+  const wrapper = document.getElementById('statusSearchInputWrapper');
+  
+  if (input) {
+    input.value = '';
+  }
+  
+  supplierSearchDebouncedHandler?.cancel?.();
+  filterSuppliersAndTooling('');
+  
+  if (wrapper) {
+    wrapper.classList.remove('active');
+  }
 }
 
 // ===== TODOS MANAGEMENT =====

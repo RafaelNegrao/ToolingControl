@@ -68,13 +68,6 @@
                 <i class="ph ph-caret-left" id="sidebarToggleIcon"></i>
               </button>
             </div>
-            <div class="supplier-search-bar">
-              <i class="ph ph-magnifying-glass"></i>
-              <input type="text" id="supplierSearchInput" placeholder="Type to search...">
-              <button class="btn-clear-supplier-search" id="clearSupplierSearch" onclick="clearSupplierSearch()" style="display: none;">
-                <i class="ph ph-x"></i>
-              </button>
-            </div>
             <div class="steps-filter-container">
               <select id="stepsFilter" class="steps-filter-select" onchange="filterToolingByStep()">
                 <option value="">All Steps</option>
@@ -380,9 +373,6 @@
         <div class="floating-actions">
           <button class="floating-clear-filter-btn" id="floatingClearFilterBtn" onclick="clearColumnFilters()" title="Clear all filters" style="display: none;">
             <i class="ph ph-funnel-x"></i>
-          </button>
-          <button class="floating-add-btn" id="floatingAddBtn" onclick="openAddToolingModal()" title="New Tooling">
-            <i class="ph ph-plus"></i>
           </button>
         </div>
         
@@ -996,23 +986,43 @@
 
     <!-- Status Bar -->
     <footer class="status-bar">
-      <div class="status-item">
-        <i class="ph ph-database"></i>
-        <span class="status-label">Total:</span>
-        <span class="status-value" id="statusTotal">0</span>
+      <div class="status-bar-left">
+        <div class="status-item">
+          <i class="ph ph-database"></i>
+          <span class="status-label">Total:</span>
+          <span class="status-value" id="statusTotal">0</span>
+        </div>
+        <div class="status-item">
+          <i class="ph ph-warning-circle"></i>
+          <span class="status-label">Expired:</span>
+          <span class="status-value" id="statusExpired">0</span>
+        </div>
+        <div class="status-item">
+          <i class="ph ph-clock"></i>
+          <span class="status-label">Expiring:</span>
+          <span class="status-value" id="statusExpiring">0</span>
+        </div>
       </div>
-      <div class="status-item">
-        <i class="ph ph-warning-circle"></i>
-        <span class="status-label">Expired:</span>
-        <span class="status-value" id="statusExpired">0</span>
+      <div class="status-bar-center">
+        <div class="status-item status-search">
+          <button class="status-search-btn" id="statusSearchBtn" onclick="toggleStatusSearch()" title="Search suppliers">
+            <i class="ph ph-magnifying-glass"></i>
+          </button>
+          <button class="status-add-btn" id="statusAddBtn" onclick="openAddToolingModal()" title="New Tooling">
+            <i class="ph ph-plus"></i>
+          </button>
+          <div class="status-search-input-wrapper" id="statusSearchInputWrapper">
+            <input type="text" id="statusSupplierSearchInput" placeholder="Search suppliers..." />
+            <button class="status-search-clear" id="statusSearchClear" onclick="clearStatusSearch()">
+              <i class="ph ph-x"></i>
+            </button>
+          </div>
+        </div>
       </div>
-      <div class="status-item">
-        <i class="ph ph-clock"></i>
-        <span class="status-label">Expiring in 2 years:</span>
-        <span class="status-value" id="statusExpiring">0</span>
-      </div>
-      <div class="status-item status-version">
-        <span class="status-label" id="appVersion"></span>
+      <div class="status-bar-right">
+        <div class="status-item status-version">
+          <span class="status-label" id="appVersion"></span>
+        </div>
       </div>
     </footer>
 

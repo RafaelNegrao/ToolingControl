@@ -1210,13 +1210,13 @@ function clearAllStepHistory() {
         const historyDeleted = this ? this.changes : 0;
         console.log(`[StepHistory] Cleared ${historyDeleted} entries from step_history`);
         
-        // Then, set all steps fields to empty and clear analysis_completed in ferramental table
-        db.run(`UPDATE ferramental SET steps = '', analysis_completed = 0, last_update = datetime('now')`, function(updateErr) {
+        // Clear only analysis_completed (unchecking steps checkboxes), keeping the steps field intact
+        db.run(`UPDATE ferramental SET analysis_completed = 0, last_update = datetime('now')`, function(updateErr) {
           if (updateErr) {
-            console.error('[StepHistory] Error clearing steps field:', updateErr);
+            console.error('[StepHistory] Error clearing analysis_completed:', updateErr);
             reject(updateErr);
           } else {
-            console.log(`[StepHistory] Cleared steps field and analysis_completed from ${this.changes} tooling records`);
+            console.log(`[StepHistory] Cleared analysis_completed from ${this.changes} tooling records (steps field preserved)`);
             resolve({ success: true, historyDeleted, toolingsUpdated: this.changes });
           }
         });
@@ -2003,13 +2003,13 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
           const row = worksheet.getRow(rowNum);
           const expirationCell = row.getCell(10); // Coluna J (Expiration Date)
           
-          // Fórmula: Segue a mesma lógica do programa
-          // 1. Se Production Date vazio ou dados incompletos -> não mostra nada
-          // 2. Se remaining (Tooling Life - Produced) <= 0 -> retorna Production Date (já expirou)
-          // 3. Se Forecast <= 0 -> não mostra nada (vida útil indeterminada)
-          // 4. Caso contrário: Production Date + ROUND((remaining / forecast) * 365, 0)
+          // Fórmula: se(annual_volume=0; prod_date + (remaining/1*365); prod_date + (remaining/annual_volume*365))
+          // Remaining = Tooling Life (E) - Produced (F)
+          // Se Production Date (G) vazio -> não mostra nada
+          // Se annual_volume (H) = 0 ou vazio -> usa divisor 1
+          // Remaining pode ser negativo (resulta em data passada)
           expirationCell.value = {
-            formula: `IF(OR(G${rowNum}="",E${rowNum}="",F${rowNum}=""),"",IF((E${rowNum}-F${rowNum})<=0,G${rowNum},IF(H${rowNum}<=0,"",G${rowNum}+ROUND((E${rowNum}-F${rowNum})/H${rowNum}*365,0))))`,
+            formula: `IF(OR(G${rowNum}="",E${rowNum}="",F${rowNum}=""),"",IF(OR(H${rowNum}="",H${rowNum}=0),G${rowNum}+ROUND((E${rowNum}-F${rowNum})/1*365,0),G${rowNum}+ROUND((E${rowNum}-F${rowNum})/H${rowNum}*365,0)))`,
             date1904: false
           };
           expirationCell.numFmt = 'dd/mm/yyyy';
