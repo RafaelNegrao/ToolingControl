@@ -5328,6 +5328,88 @@ select.detail-input::-ms-expand {
   margin-top: 6px;
 }
 
+/* Developer Settings Switch */
+.settings-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid #f1f1f1;
+}
+
+.settings-switch-row:last-child {
+  border-bottom: none;
+}
+
+.settings-switch-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-switch-label {
+  font-size: 14px;
+  font-weight: 500;
+  color: #2d2d2d;
+}
+
+.settings-switch-description {
+  font-size: 12px;
+  color: #888;
+}
+
+.settings-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+}
+
+.settings-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.settings-switch-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: 0.3s;
+  border-radius: 24px;
+}
+
+.settings-switch-slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.3s;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.settings-switch input:checked + .settings-switch-slider {
+  background-color: #c8102e;
+}
+
+.settings-switch input:checked + .settings-switch-slider:before {
+  transform: translateX(20px);
+}
+
+.settings-switch input:focus + .settings-switch-slider {
+  box-shadow: 0 0 0 2px rgba(200, 16, 46, 0.2);
+}
+
 @media (max-width: 520px) {
   .settings-inline-form {
     flex-direction: column;
@@ -5856,6 +5938,7 @@ select.detail-input::-ms-expand {
 }
 
 .modal-card-comments .modal-header {
+  position: relative;
   background: white;
   color: #2d2d2d;
   padding: 12px 16px;
@@ -6619,18 +6702,11 @@ select.detail-input::-ms-expand {
 .spreadsheet-table tbody tr {
   border-bottom: 1px solid #e8e8e8;
   transition: background 0.15s ease;
+  background: #fff;
 }
 
 .spreadsheet-table tbody tr:hover {
   background: #f8f9fa;
-}
-
-.spreadsheet-table tbody tr:nth-child(even) {
-  background: #fafafa;
-}
-
-.spreadsheet-table tbody tr:nth-child(even):hover {
-  background: #f0f0f0;
 }
 
 .spreadsheet-table td {
@@ -7122,16 +7198,12 @@ select.detail-input::-ms-expand {
   z-index: 3;
 }
 
-.spreadsheet-table tbody tr:nth-child(even) .col-expand {
-  background: #fafafa;
+.spreadsheet-table tbody tr .col-expand {
+  background: #fff;
 }
 
 .spreadsheet-table tbody tr:hover .col-expand {
   background: #f8f9fa;
-}
-
-.spreadsheet-table tbody tr:nth-child(even):hover .col-expand {
-  background: #f0f0f0;
 }
 
 /* Botão de expandir */

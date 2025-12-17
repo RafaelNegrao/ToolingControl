@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('api', {
   getToolingByReplacementId: (replacementId) =>
     ipcRenderer.invoke('get-tooling-by-replacement-id', replacementId),
   getAllToolingIds: () => ipcRenderer.invoke('get-all-tooling-ids'),
+  getIdsWithIncomingLinks: (targetIds) => ipcRenderer.invoke('get-ids-with-incoming-links', targetIds),
   getUniqueResponsibles: () => ipcRenderer.invoke('get-unique-responsibles'),
   getAnalytics: () => ipcRenderer.invoke('get-analytics'),
   getStepsSummary: () => ipcRenderer.invoke('get-steps-summary'),
@@ -57,6 +58,10 @@ contextBridge.exposeInMainWorld('api', {
   minimizeWindow: () => ipcRenderer.send('minimize-window'),
   maximizeWindow: () => ipcRenderer.send('maximize-window'),
   closeWindow: () => ipcRenderer.send('close-window'),
+  
+  // DevTools
+  openDevTools: () => ipcRenderer.send('open-devtools'),
+  closeDevTools: () => ipcRenderer.send('close-devtools'),
   
   // Notificações
   onDataUpdated: (callback) => ipcRenderer.on('data-updated', callback)

@@ -1649,6 +1649,36 @@ ipcMain.handle('get-all-tooling-ids', async () => {
   });
 });
 
+// Busca IDs que são apontados por outros itens (têm incoming links)
+ipcMain.handle('get-ids-with-incoming-links', async (event, targetIds) => {
+  return new Promise((resolve, reject) => {
+    if (!Array.isArray(targetIds) || targetIds.length === 0) {
+      resolve([]);
+      return;
+    }
+    
+    // Cria placeholders para a query
+    const placeholders = targetIds.map(() => '?').join(',');
+    
+    db.all(
+      `SELECT DISTINCT replacement_tooling_id FROM ferramental 
+       WHERE replacement_tooling_id IN (${placeholders})
+       AND replacement_tooling_id IS NOT NULL 
+       AND replacement_tooling_id != ''`,
+      targetIds,
+      (err, rows) => {
+        if (err) {
+          reject(err);
+        } else {
+          // Retorna array de IDs que são apontados por outros
+          const idsWithLinks = rows.map(row => String(row.replacement_tooling_id));
+          resolve(idsWithLinks);
+        }
+      }
+    );
+  });
+});
+
 ipcMain.handle('get-unique-responsibles', async () => {
   return new Promise((resolve, reject) => {
     db.all(
@@ -2940,6 +2970,19 @@ ipcMain.on('close-window', () => {
   }
 });
 
+// DevTools control
+ipcMain.on('open-devtools', () => {
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.openDevTools();
+  }
+});
+
+ipcMain.on('close-devtools', () => {
+  if (mainWindow && mainWindow.webContents) {
+    mainWindow.webContents.closeDevTools();
+  }
+});
+
 // Export Annual Volume for Supplier (PN unique, Supplier, Annual Volume, Annual Volume Date)
 ipcMain.handle('export-forecast-supplier', async () => {
   return new Promise((resolve, reject) => {
@@ -3469,7 +3512,8 @@ ipcMain.handle('import-forecast-manager', async () => {
     title: 'Import Full Database (Manager)',
     buttonLabel: 'Import',
     properties: ['openFile'],
-    filters: [{ name: 'Excel Files', extensions: ['xlsx'] }]
+    filters: [{ name: 'Excel Files', extensions: ['xlsx','xlsb'] }]
+
   });
 
   if (dialogResult.canceled || !dialogResult.filePaths || dialogResult.filePaths.length === 0) {

@@ -967,6 +967,21 @@
                   </button>
                 </div>
               </section>
+
+              <section class="settings-card settings-card--developer">
+                <h3>Developer Options</h3>
+                <p class="settings-description">Ferramentas para desenvolvimento e debug da aplicação.</p>
+                <div class="settings-switch-row">
+                  <div class="settings-switch-info">
+                    <span class="settings-switch-label">DevTools Console</span>
+                    <span class="settings-switch-description">Abre o console de desenvolvedor para debug</span>
+                  </div>
+                  <label class="settings-switch">
+                    <input type="checkbox" id="devToolsSwitch" onchange="toggleDevTools(this.checked)">
+                    <span class="settings-switch-slider"></span>
+                  </label>
+                </div>
+              </section>
               </div>
               <button class="carousel-nav-btn carousel-nav-next" id="carouselNextBtn" onclick="navigateSettingsCarousel(1)" aria-label="Next card">
                 <i class="ph ph-caret-right"></i>
@@ -978,6 +993,7 @@
               <span class="carousel-dot" data-index="2" onclick="goToSettingsCarouselSlide(2)"></span>
               <span class="carousel-dot" data-index="3" onclick="goToSettingsCarouselSlide(3)"></span>
               <span class="carousel-dot" data-index="4" onclick="goToSettingsCarouselSlide(4)"></span>
+              <span class="carousel-dot" data-index="5" onclick="goToSettingsCarouselSlide(5)"></span>
             </div>
           </div>
         </div>

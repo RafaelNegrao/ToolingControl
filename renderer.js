@@ -796,6 +796,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initStepsInfoModal();
   initSettingsCarouselScrollListener();
   initThousandsMaskBehavior();
+  initDevToolsSwitch();
 
   if (attachmentsCounterBadge) {
     attachmentsCounterBadge.textContent = '0';
@@ -1008,6 +1009,15 @@ document.addEventListener('DOMContentLoaded', async () => {
          target.matches('textarea[data-id][data-field]') || 
          target.matches('select[data-id][data-field]')) &&
         !target.classList.contains('calculated')) {
+      
+      // IMPORTANTE: Ignora campos da spreadsheet (linha fechada)
+      // pois eles são salvos pela função spreadsheetSave
+      const isSpreadsheetField = target.classList.contains('spreadsheet-input') || 
+                                  target.classList.contains('spreadsheet-select');
+      if (isSpreadsheetField) {
+        return; // Não chama autoSaveTooling para campos da spreadsheet
+      }
+      
       const id = target.getAttribute('data-id');
       if (id) {
         autoSaveTooling(parseInt(id), true); // true = salvamento imediato
@@ -2639,6 +2649,9 @@ async function deleteCardAttachmentFile(supplierName, fileName, itemId) {
 }
 
 // Carrega ferramentais por fornecedor
+// Armazena IDs que têm incoming links de outros suppliers
+let externalIncomingLinks = [];
+
 async function loadToolingBySupplier(supplier) {
   try {
     // Verificar se há busca ativa no input antes de carregar
@@ -2669,6 +2682,14 @@ async function loadToolingBySupplier(supplier) {
     }
     
     toolingData = data;
+    
+    // Busca IDs que têm incoming links de outros suppliers (são apontados por outros)
+    const allIds = data.map(item => String(item.id));
+    try {
+      externalIncomingLinks = await window.api.getIdsWithIncomingLinks(allIds);
+    } catch (e) {
+      externalIncomingLinks = [];
+    }
     
     // Recalcula todas as expiration dates ao carregar
     await recalculateAllExpirationDates();
@@ -4636,11 +4657,21 @@ function ensureSpreadsheetRowVisible(row) {
   if (!row) return;
   
   setTimeout(() => {
-    row.scrollIntoView({ 
-      behavior: 'smooth', 
-      block: 'center', 
-      inline: 'nearest' 
-    });
+    // Encontra a linha principal (não a detail row)
+    let mainRow = row;
+    if (row.classList.contains('spreadsheet-detail-row')) {
+      mainRow = row.previousElementSibling;
+    }
+    
+    if (mainRow) {
+      // Calcula a posição ideal considerando o header fixo
+      const headerHeight = document.querySelector('.spreadsheet-table thead')?.offsetHeight || 50;
+      const container = document.querySelector('.spreadsheet-container');
+      if (container) {
+        const rowTop = mainRow.offsetTop - headerHeight - 10;
+        container.scrollTo({ top: rowTop, behavior: 'smooth' });
+      }
+    }
   }, 200);
 }
 
@@ -5012,12 +5043,13 @@ function normalizeExpirationDate(rawValue, itemId) {
   return null;
 }
 
-function computeLocalChainMembership(data) {
+function computeLocalChainMembership(data, externalIncomingLinks = []) {
   const membership = new Map();
   if (!Array.isArray(data) || data.length === 0) {
     return membership;
   }
 
+  // Cria lookup de incoming links locais (dentro do mesmo supplier)
   const incomingLookup = new Map();
   data.forEach((item) => {
     const targetId = sanitizeReplacementId(item?.replacement_tooling_id);
@@ -5025,6 +5057,13 @@ function computeLocalChainMembership(data) {
       incomingLookup.set(targetId, true);
     }
   });
+  
+  // Adiciona incoming links externos (de outros suppliers)
+  if (Array.isArray(externalIncomingLinks)) {
+    externalIncomingLinks.forEach(id => {
+      incomingLookup.set(String(id), true);
+    });
+  }
 
   data.forEach((item) => {
     const itemId = String(item?.id || '').trim();
@@ -5400,21 +5439,19 @@ function calculateExpirationFromFormula({
     return null;
   }
   
+  // Se não houver forecast (annual volume), não calcula
+  if (!forecast || forecast <= 0) {
+    return null;
+  }
+  
   const baseDate = new Date(productionDate);
   if (Number.isNaN(baseDate.getTime())) {
     return null;
   }
 
-  // Fórmula: se(annual_volume=0; data_produced + (remaining/1*365); data_produced + (remaining/annual_volume*365))
+  // Fórmula: data_produced + (remaining/annual_volume*365)
   // remaining pode ser negativo (já expirou) - o cálculo vai resultar em data passada
-  let totalDays;
-  if (!forecast || forecast <= 0) {
-    // Se annual volume = 0, usa divisor 1
-    totalDays = Math.round((remaining / 1) * 365);
-  } else {
-    // Caso normal: remaining / annual_volume * 365
-    totalDays = Math.round((remaining / forecast) * 365);
-  }
+  const totalDays = Math.round((remaining / forecast) * 365);
 
   if (Number.isNaN(totalDays)) {
     return null;
@@ -6388,9 +6425,8 @@ async function displayTooling(data) {
   const renderToken = currentToolingRenderToken;
   const supplierContext = selectedSupplier || currentSupplier || '';
   
-  // NÃO computar chain membership aqui - vai travar com muitos cards!
-  // Criar Map vazio, será preenchido em background
-  const chainMembership = computeLocalChainMembership(sortedData);
+  // Computa chain membership incluindo incoming links de outros suppliers
+  const chainMembership = computeLocalChainMembership(sortedData, externalIncomingLinks);
   
   // Limpa loading e começa render
   toolingList.innerHTML = '';
@@ -6523,8 +6559,9 @@ function renderSpreadsheetView() {
   // Aplica ordenação
   filteredData = applySortToData(filteredData);
   
-  // Computa chain membership para ícones
-  const chainMembership = computeLocalChainMembership(filteredData);
+  // Computa chain membership usando TODOS os dados (não apenas filtrados)
+  // e inclui incoming links de outros suppliers
+  const chainMembership = computeLocalChainMembership(toolingData, externalIncomingLinks);
   
   // Gera as linhas da planilha
   const rows = filteredData.map(item => {
@@ -6592,35 +6629,35 @@ function renderSpreadsheetView() {
         </td>
         <td>
           <input type="text" class="spreadsheet-input" value="${escapeHtml(item.pn || '')}" 
-            data-field="pn" data-id="${item.id}" readonly tabindex="-1">
+            data-field="pn" data-id="${item.id}">
         </td>
         <td>
           <input type="text" class="spreadsheet-input" value="${escapeHtml(item.tool_description || '')}" 
-            data-field="tool_description" data-id="${item.id}" readonly tabindex="-1">
+            data-field="tool_description" data-id="${item.id}">
         </td>
         <td>
           <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
-            value="${toolingLifeDisplay}" data-field="tooling_life_qty" data-id="${item.id}" readonly tabindex="-1">
+            value="${toolingLifeDisplay}" data-field="tooling_life_qty" data-id="${item.id}">
         </td>
         <td>
           <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
-            value="${producedDisplay}" data-field="produced" data-id="${item.id}" readonly tabindex="-1">
+            value="${producedDisplay}" data-field="produced" data-id="${item.id}">
         </td>
         <td>
           <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
-            value="${forecastDisplay}" data-field="annual_volume_forecast" data-id="${item.id}" readonly tabindex="-1">
+            value="${forecastDisplay}" data-field="annual_volume_forecast" data-id="${item.id}">
         </td>
         <td class="spreadsheet-expiration">
           ${expirationIconHtml}
           <span class="expiration-text">${expirationDateDisplay}</span>
         </td>
         <td>
-          <select class="spreadsheet-select input-center" data-field="steps" data-id="${item.id}" disabled tabindex="-1">
+          <select class="spreadsheet-select input-center" data-field="steps" data-id="${item.id}">
             ${stepsOptionsHtml}
           </select>
         </td>
         <td>
-          <select class="spreadsheet-select ${statusClass}" data-field="status" data-id="${item.id}" disabled tabindex="-1">
+          <select class="spreadsheet-select ${statusClass}" data-field="status" data-id="${item.id}">
             ${statusOptionsHtml}
           </select>
         </td>
@@ -6697,12 +6734,47 @@ function renderSpreadsheetView() {
     applyInitialThousandsMask(spreadsheetContainer);
   }
   
+  // Adiciona event listeners para salvar alterações dos campos da spreadsheet
+  attachSpreadsheetFieldListeners();
+  
   // Atualiza indicadores visuais de filtros e ordenação
   updateFilterButtonIndicators();
   updateSortButtonIndicators();
   
   // Adiciona listeners para os tooltips do ID
   initIdTooltips();
+}
+
+// Adiciona event listeners aos campos editáveis da spreadsheet
+function attachSpreadsheetFieldListeners() {
+  const spreadsheetBody = document.getElementById('spreadsheetBody');
+  if (!spreadsheetBody) return;
+  
+  // Inputs de texto e numéricos
+  const inputs = spreadsheetBody.querySelectorAll('input.spreadsheet-input[data-field][data-id]:not(.spreadsheet-new-input)');
+  inputs.forEach(input => {
+    // Salva ao sair do campo (blur)
+    input.addEventListener('blur', async () => {
+      await spreadsheetSave(input);
+    });
+    
+    // Salva ao pressionar Enter
+    input.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        await spreadsheetSave(input);
+        input.blur();
+      }
+    });
+  });
+  
+  // Selects (salvam imediatamente ao mudar)
+  const selects = spreadsheetBody.querySelectorAll('select.spreadsheet-select[data-field][data-id]');
+  selects.forEach(select => {
+    select.addEventListener('change', async () => {
+      await spreadsheetSave(select);
+    });
+  });
 }
 
 // Inicializa tooltips do ID
@@ -7244,7 +7316,19 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
             }
             cardSnapshotStore.set(snapshotKey, serializeCardValues(values));
           }
-        }, 0);
+          
+          // Scroll para mostrar a linha no topo com o card expandido visível
+          const detailRow = row.nextElementSibling;
+          if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
+            // Calcula a posição ideal considerando o header fixo
+            const headerHeight = document.querySelector('.spreadsheet-table thead')?.offsetHeight || 50;
+            const container = document.querySelector('.spreadsheet-container');
+            if (container) {
+              const rowTop = row.offsetTop - headerHeight - 10;
+              container.scrollTo({ top: rowTop, behavior: 'smooth' });
+            }
+          }
+        }, 50);
       }
     }
   }
@@ -10520,6 +10604,41 @@ async function deleteTodo(todoId, toolingId) {
 }
 
 // Function removed - todo badge no longer displayed on card header
+
+// ===== DEVELOPER OPTIONS =====
+
+const DEVTOOLS_ENABLED_KEY = 'devToolsEnabled';
+
+function toggleDevTools(enabled) {
+  localStorage.setItem(DEVTOOLS_ENABLED_KEY, enabled ? 'true' : 'false');
+  
+  if (enabled) {
+    // Abre o DevTools
+    if (window.api && window.api.openDevTools) {
+      window.api.openDevTools();
+    }
+    showNotification('DevTools opened', 'success');
+  } else {
+    // Fecha o DevTools
+    if (window.api && window.api.closeDevTools) {
+      window.api.closeDevTools();
+    }
+    showNotification('DevTools closed', 'success');
+  }
+}
+
+function initDevToolsSwitch() {
+  const devToolsSwitch = document.getElementById('devToolsSwitch');
+  if (devToolsSwitch) {
+    const enabled = localStorage.getItem(DEVTOOLS_ENABLED_KEY) === 'true';
+    devToolsSwitch.checked = enabled;
+    
+    // Se estiver habilitado, abre o DevTools ao iniciar
+    if (enabled && window.api && window.api.openDevTools) {
+      window.api.openDevTools();
+    }
+  }
+}
 
 // ===== SETTINGS CAROUSEL NAVIGATION =====
 
