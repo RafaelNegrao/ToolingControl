@@ -200,11 +200,27 @@ function getExpirationDiffDays(expirationDate) {
   if (!expirationDate) {
     return null;
   }
-  const expDate = new Date(expirationDate);
+  
+  // Normaliza a string de data para formato ISO (YYYY-MM-DD)
+  let normalizedDate = String(expirationDate).trim();
+  
+  // Se estiver no formato DD/MM/YYYY, converte para YYYY-MM-DD
+  const ddmmyyyyMatch = normalizedDate.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (ddmmyyyyMatch) {
+    const [, day, month, year] = ddmmyyyyMatch;
+    normalizedDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  
+  const expDate = new Date(normalizedDate);
   if (Number.isNaN(expDate.getTime())) {
     return null;
   }
+  
+  // Normaliza ambas as datas para meia-noite para comparação precisa
   const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  expDate.setHours(0, 0, 0, 0);
+  
   return Math.ceil((expDate - now) / MS_PER_DAY);
 }
 
@@ -1488,6 +1504,8 @@ ipcMain.handle('get-suppliers-with-stats', async () => {
           return;
         }
 
+        // Agrupa itens por supplier - NÃO faz contagem aqui
+        // A contagem será feita no frontend usando ExpirationMetrics.fromItems()
         const supplierMap = new Map();
 
         rows.forEach(item => {
@@ -1499,31 +1517,11 @@ ipcMain.handle('get-suppliers-with-stats', async () => {
           if (!supplierMap.has(supplierName)) {
             supplierMap.set(supplierName, {
               supplier: supplierName,
-              total: 0,
-              expired: 0,
-              warning_1year: 0,
-              warning_2years: 0,
-              ok_5years: 0,
-              ok_plus: 0
+              items: []
             });
           }
 
-          const metrics = supplierMap.get(supplierName);
-          metrics.total += 1;
-
-          const classification = classifyToolingExpirationState(item);
-
-          if (classification.state === 'expired') {
-            metrics.expired += 1;
-          } else if (classification.state === 'warning') {
-            metrics.warning_1year += 1;
-          } else if (classification.state === 'ok' && typeof classification.diffDays === 'number') {
-            if (classification.diffDays > 730 && classification.diffDays <= 1825) {
-              metrics.ok_5years += 1;
-            } else if (classification.diffDays > 1825) {
-              metrics.ok_plus += 1;
-            }
-          }
+          supplierMap.get(supplierName).items.push(item);
         });
 
         const result = Array.from(supplierMap.values()).sort((a, b) =>
@@ -3166,7 +3164,7 @@ ipcMain.handle('import-forecast-supplier', async () => {
     if (!worksheet) {
       return { success: false, error: 'No worksheet found in file' };
     }
-
+ 
     // Validate header row - new format with 4 columns (PN, Supplier, Annual Volume, Annual Volume Date)
     const headerRow = worksheet.getRow(1);
     const firstHeader = headerRow.getCell(1).value?.toString().trim();

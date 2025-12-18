@@ -6950,6 +6950,10 @@ select.detail-input::-ms-expand {
   color: #6b7280;
 }
 
+.expiration-icon.analysis-completed {
+  color: #3b82f6;
+}
+
 .expiration-text {
   font-size: 13px;
   color: #333;
@@ -7632,4 +7636,148 @@ select.detail-input::-ms-expand {
   background: #fff;
   border-radius: 8px;
   border: 1px solid #e8e8e8;
+}
+
+/* ========================================
+   Usage Forecast Tab Styles
+   ======================================== */
+
+.usage-forecast-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 0;
+}
+
+.usage-forecast-chart-wrapper {
+  position: relative;
+  height: 280px;
+  width: 100%;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e8e8e8;
+  padding: 16px;
+}
+
+.usage-forecast-chart-wrapper canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.usage-forecast-info {
+  min-height: 60px;
+}
+
+.usage-forecast-loading,
+.usage-forecast-empty,
+.usage-forecast-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 40px 20px;
+  color: #888;
+  text-align: center;
+  background: #fafafa;
+  border-radius: 8px;
+  border: 1px solid #e8e8e8;
+}
+
+.usage-forecast-loading i,
+.usage-forecast-empty i,
+.usage-forecast-error i {
+  font-size: 32px;
+  color: #ccc;
+}
+
+.usage-forecast-loading i {
+  animation: spin 1s linear infinite;
+}
+
+.usage-forecast-empty p,
+.usage-forecast-error p {
+  font-size: 12px;
+  color: #aaa;
+  margin: 0;
+}
+
+.usage-forecast-error i {
+  color: #c8102e;
+}
+
+.usage-forecast-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.forecast-stat {
+  background: #f8f8f8;
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid #e8e8e8;
+  transition: all 0.2s ease;
+}
+
+.forecast-stat:hover {
+  background: #fff;
+  border-color: #c8102e;
+  box-shadow: 0 2px 8px rgba(200, 16, 46, 0.08);
+}
+
+.forecast-stat-label {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 500;
+}
+
+.forecast-stat-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.forecast-stat-value.expired {
+  color: #c8102e;
+}
+
+.forecast-stat-value.warning {
+  color: #ff9800;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .usage-forecast-chart-wrapper {
+    height: 220px;
+    padding: 12px;
+  }
+  
+  .usage-forecast-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  
+  .forecast-stat {
+    padding: 12px;
+  }
+  
+  .forecast-stat-value {
+    font-size: 14px;
+  }
+}
+
+/* Spreadsheet container adjustments for usage forecast */
+.spreadsheet-card-container .usage-forecast-container {
+  background: #fff;
+  border-radius: 8px;
+}
+
+.spreadsheet-card-container .usage-forecast-chart-wrapper {
+  border: none;
+  background: #fafafa;
 }

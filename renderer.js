@@ -126,30 +126,43 @@ let uppercaseInputHandlerInitialized = false;
 // Classe utilitária para calcular métricas de expiração
 class ExpirationMetrics {
   /**
-   * Calcula métricas de expiração de um supplier
-   * @param {Object} supplier - Objeto do supplier com expired, warning_1year (que já conta até 2 anos)
-   * @returns {Object} - { expired, expiringWithin2Years }
+   * Calcula métricas de expiração a partir de uma lista de itens de tooling
+   * Esta é a ÚNICA função para calcular métricas - usada em TODOS os lugares
+   * @param {Array} items - Array de itens de tooling
+   * @returns {Object} - { total, expired, expiring }
    */
-  static calculate(supplier) {
-    const expired = parseInt(supplier.expired) || 0;
-    // warning_1year agora contém todos os itens que vencem até 2 anos
-    const expiringWithin2Years = parseInt(supplier.warning_1year) || 0;
+  static fromItems(items) {
+    if (!Array.isArray(items)) {
+      return { total: 0, expired: 0, expiring: 0 };
+    }
     
-    return {
-      expired,
-      expiringWithin2Years,
-      total: expired + expiringWithin2Years
-    };
+    return items.reduce((acc, item) => {
+      // Total sempre conta todos os itens
+      acc.total += 1;
+      
+      // Ignora itens com análise concluída apenas para expired e expiring
+      if (item.analysis_completed === 1) {
+        return acc;
+      }
+      
+      const classification = classifyToolingExpirationState(item);
+      if (classification.state === 'expired') {
+        acc.expired += 1;
+      } else if (classification.state === 'warning') {
+        acc.expiring += 1;
+      }
+      return acc;
+    }, { total: 0, expired: 0, expiring: 0 });
   }
   
   /**
    * Verifica se um supplier tem itens críticos (expired ou expiring)
-   * @param {Object} supplier - Objeto do supplier
+   * @param {Object} supplier - Objeto do supplier com items[]
    * @returns {boolean}
    */
   static hasCriticalItems(supplier) {
-    const metrics = this.calculate(supplier);
-    return metrics.total > 0;
+    const metrics = this.fromItems(supplier.items || []);
+    return (metrics.expired + metrics.expiring) > 0;
   }
 }
 
@@ -212,26 +225,6 @@ function classifyToolingExpirationState(item) {
   return { state: 'ok', label: expirationStatus.label, expirationDate: expirationDateValue };
 }
 
-function computeSupplierMetricsFromItems(items) {
-  return items.reduce((acc, item) => {
-    // Total sempre conta todos os itens
-    acc.total += 1;
-    
-    // Ignora itens com análise concluída apenas para expired e expiring
-    if (item.analysis_completed === 1) {
-      return acc;
-    }
-    
-    const classification = classifyToolingExpirationState(item);
-    if (classification.state === 'expired') {
-      acc.expired += 1;
-    } else if (classification.state === 'warning') {
-      acc.expiring += 1;
-    }
-    return acc;
-  }, { total: 0, expired: 0, expiring: 0 });
-}
-
 function updateSupplierCardMetricsFromItems(supplierName, items) {
   if (!supplierName || !Array.isArray(items)) {
     return;
@@ -244,7 +237,7 @@ function updateSupplierCardMetricsFromItems(supplierName, items) {
     return;
   }
 
-  const metrics = computeSupplierMetricsFromItems(items);
+  const metrics = ExpirationMetrics.fromItems(items);
   const totalEl = targetCard.querySelector('[data-metric="total"]');
   const expiredEl = targetCard.querySelector('[data-metric="expired"]');
   const expiringEl = targetCard.querySelector('[data-metric="expiring"]');
@@ -259,6 +252,31 @@ function updateSupplierCardMetricsFromItems(supplierName, items) {
   if (expiringEl) {
     expiringEl.textContent = metrics.expiring;
     expiringEl.classList.toggle('critical', metrics.expiring > 0);
+  }
+}
+
+/**
+ * Atualiza métricas do card do supplier buscando dados frescos do banco
+ * Usar esta função para atualizações em tempo real onde toolingData pode estar filtrado
+ */
+async function refreshSupplierCardMetricsFromDB(supplierName) {
+  if (!supplierName) return;
+  
+  try {
+    // Busca dados frescos diretamente do banco
+    const items = await window.api.getToolingBySupplier(supplierName);
+    
+    // Atualiza suppliersData também para manter consistência
+    if (Array.isArray(suppliersData)) {
+      const supplierEntry = suppliersData.find(s => s.supplier === supplierName);
+      if (supplierEntry) {
+        supplierEntry.items = items;
+      }
+    }
+    
+    updateSupplierCardMetricsFromItems(supplierName, items);
+  } catch (e) {
+    console.error('Erro ao atualizar métricas do supplier:', e);
   }
 }
 
@@ -956,8 +974,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Listener para o switch de filtro de expiração
   if (expirationFilterSwitch) {
-    expirationFilterSwitch.addEventListener('change', (e) => {
-      toggleExpirationFilter(e.target.checked);
+    expirationFilterSwitch.addEventListener('change', async (e) => {
+      await toggleExpirationFilter(e.target.checked);
       // Atualizar visual do botão de filtro
       const filterBtn = document.getElementById('expirationFilterBtn');
       if (filterBtn) {
@@ -1250,20 +1268,30 @@ function applyExpirationFilter() {
   }
 }
 
-function toggleExpirationFilter(enabled) {
+async function toggleExpirationFilter(enabled) {
   expirationFilterEnabled = enabled;
   const badge = document.getElementById('filterActiveBadge');
   if (badge) {
     badge.style.display = enabled ? 'flex' : 'none';
   }
+  
+  // Recarrega suppliers do banco para atualizar contagens (considera análise concluída)
+  try {
+    suppliersData = await window.api.getSuppliersWithStats();
+  } catch (e) {
+    console.error('Erro ao recarregar suppliers:', e);
+  }
+  
   applyExpirationFilter();
+  
   // Recarrega os cards do supplier selecionado para aplicar o filtro
+  // A função displayTooling vai recalcular as métricas com os dados originais
   if (selectedSupplier) {
-    loadToolingBySupplier(selectedSupplier);
+    await loadToolingBySupplier(selectedSupplier);
   }
 }
 
-function clearExpirationFilter() {
+async function clearExpirationFilter() {
   const filterSwitch = document.getElementById('expirationFilterSwitch');
   const filterBtn = document.getElementById('expirationFilterBtn');
   if (filterSwitch) {
@@ -1272,7 +1300,7 @@ function clearExpirationFilter() {
   if (filterBtn) {
     filterBtn.classList.remove('active');
   }
-  toggleExpirationFilter(false);
+  await toggleExpirationFilter(false);
 }
 
 function openExpirationFilterOverlay() {
@@ -1881,8 +1909,8 @@ function displaySuppliers(suppliers) {
     const supplierNameHtml = escapeHtml(supplierNameRaw);
     const supplierKey = encodeURIComponent(supplierNameRaw.trim().toLowerCase());
     const isActive = selectedSupplier === supplierNameRaw;
-    const total = parseInt(supplier.total) || 0;
-    const metrics = ExpirationMetrics.calculate(supplier);
+    // Usa APENAS ExpirationMetrics.fromItems() para calcular métricas
+    const metrics = ExpirationMetrics.fromItems(supplier.items || []);
     
     // Verificar se este supplier deve ser escondido pelo filtro de steps
     const isHiddenByStepsFilter = stepsFilteredSuppliers !== null && !stepsFilteredSuppliers.includes(supplierNameRaw);
@@ -1901,7 +1929,7 @@ function displaySuppliers(suppliers) {
       <div class="supplier-info">
         <div class="supplier-info-row">
           <span class="info-label">Total Tooling:</span>
-          <span class="info-value" data-metric="total">${total}</span>
+          <span class="info-value" data-metric="total">${metrics.total}</span>
         </div>
         <div class="supplier-info-row">
           <span class="info-label">Expired:</span>
@@ -1909,15 +1937,15 @@ function displaySuppliers(suppliers) {
         </div>
         <div class="supplier-info-row">
           <span class="info-label">Expiring within 2 years:</span>
-          <span class="info-value ${metrics.expiringWithin2Years > 0 ? 'critical' : ''}" data-metric="expiring">${metrics.expiringWithin2Years}</span>
+          <span class="info-value ${metrics.expiring > 0 ? 'critical' : ''}" data-metric="expiring">${metrics.expiring}</span>
         </div>
       </div>
       <div class="compact-tooltip">
         <div class="tooltip-name">${supplierNameHtml}</div>
         <div class="tooltip-stats">
-          <div class="tooltip-stat"><i class="ph ph-wrench"></i> Total: <span>${total}</span></div>
+          <div class="tooltip-stat"><i class="ph ph-wrench"></i> Total: <span>${metrics.total}</span></div>
           <div class="tooltip-stat"><i class="ph ph-warning-circle"></i> Expired: <span>${metrics.expired}</span></div>
-          <div class="tooltip-stat"><i class="ph ph-clock-countdown"></i> Expiring 2y: <span>${metrics.expiringWithin2Years}</span></div>
+          <div class="tooltip-stat"><i class="ph ph-clock-countdown"></i> Expiring 2y: <span>${metrics.expiring}</span></div>
         </div>
       </div>
     </div>
@@ -2699,8 +2727,8 @@ async function loadToolingBySupplier(supplier) {
     columnSort = { column: null, direction: null };
     
     // Renderizar em chunks para não travar a UI
+    // A função displayTooling já atualiza as métricas do supplier card internamente
     await displayToolingInChunks(toolingData);
-    updateSupplierCardMetricsFromItems(supplier, toolingData);
   } catch (error) {
     showNotification('Erro ao carregar ferramentais', 'error');
     hideSkeletonLoading();
@@ -2785,10 +2813,8 @@ async function searchTooling(term) {
       });
     }
     
+    // A função displayTooling já atualiza as métricas do supplier card internamente
     await displayTooling(filteredResults);
-    if (selectedSupplier) {
-      updateSupplierCardMetricsFromItems(selectedSupplier, filteredResults);
-    }
     updateSearchIndicators();
   } catch (error) {
   }
@@ -2798,8 +2824,28 @@ async function searchTooling(term) {
 function getExpirationStatus(expirationDate) {
   if (!expirationDate) return { class: 'ok', label: '' };
   
+  // Normaliza a string de data para formato ISO (YYYY-MM-DD)
+  let normalizedDate = String(expirationDate).trim();
+  
+  // Se estiver no formato DD/MM/YYYY, converte para YYYY-MM-DD
+  const ddmmyyyyMatch = normalizedDate.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (ddmmyyyyMatch) {
+    const [, day, month, year] = ddmmyyyyMatch;
+    normalizedDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+  }
+  
+  const expDate = new Date(normalizedDate);
+  
+  // Verifica se a data é válida
+  if (Number.isNaN(expDate.getTime())) {
+    return { class: 'ok', label: '' };
+  }
+  
+  // Normaliza ambas as datas para meia-noite para comparação precisa
   const now = new Date();
-  const expDate = new Date(expirationDate);
+  now.setHours(0, 0, 0, 0);
+  expDate.setHours(0, 0, 0, 0);
+  
   const diffTime = expDate - now;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   
@@ -3262,9 +3308,9 @@ async function handleAnalysisCompletedChange(itemId, isChecked) {
       // Atualiza o ícone de expiração em todos os lugares
       updateExpirationIconsForItem(itemId);
       
-      // Atualiza métricas do card do supplier em tempo real
+      // Atualiza métricas do card do supplier em tempo real (busca dados frescos do banco)
       if (selectedSupplier) {
-        updateSupplierCardMetricsFromItems(selectedSupplier, toolingData);
+        refreshSupplierCardMetricsFromDB(selectedSupplier);
       }
     }
     
@@ -3302,36 +3348,16 @@ function updateExpirationIconsForItem(itemId) {
   cardContainers.forEach(container => {
     const expirationInput = container.querySelector('input[data-field="expiration_date"]');
     if (expirationInput) {
-      const inputContainer = expirationInput.closest('.input-with-icon') || expirationInput.parentElement;
-      const iconElement = inputContainer?.querySelector('.input-icon');
-      
-      if (isAnalysisCompleted && (classification.state === 'expired' || classification.state === 'warning')) {
-        // Remove ícone de alerta se análise foi concluída
-        if (iconElement) {
-          iconElement.remove();
+      const inputContainer = expirationInput.closest('.input-with-icon');
+      if (inputContainer) {
+        // Remove ícone antigo
+        const oldIcon = inputContainer.querySelector('.input-icon');
+        if (oldIcon) {
+          oldIcon.remove();
         }
-        expirationInput.classList.remove('with-icon');
-      } else {
-        // Recria ícone se necessário
-        if (classification.state === 'expired' || classification.state === 'warning') {
-          const iconClass = classification.state === 'expired' ? 'ph-fill ph-warning-circle' : 'ph-fill ph-warning';
-          const iconColor = classification.state === 'expired' ? '#ef4444' : '#f59e0b';
-          
-          if (!iconElement) {
-            const newIcon = document.createElement('i');
-            newIcon.className = `${iconClass} input-icon`;
-            newIcon.style.color = iconColor;
-            
-            if (!expirationInput.classList.contains('with-icon')) {
-              const wrapper = document.createElement('div');
-              wrapper.className = 'input-with-icon';
-              expirationInput.parentElement.insertBefore(wrapper, expirationInput);
-              wrapper.appendChild(newIcon);
-              wrapper.appendChild(expirationInput);
-              expirationInput.classList.add('with-icon');
-            }
-          }
-        }
+        // Adiciona novo ícone usando a mesma função do card
+        const newIconHtml = getCardExpirationIcon(classification.state, isAnalysisCompleted);
+        inputContainer.insertAdjacentHTML('afterbegin', newIconHtml);
       }
     }
   });
@@ -6236,9 +6262,8 @@ async function deleteToolingItem(id) {
     await loadAnalytics();
     await refreshReplacementIdOptions(true);
     if (selectedSupplier) {
+      // loadToolingBySupplier já atualiza as métricas via displayTooling
       await loadToolingBySupplier(selectedSupplier);
-      // Atualiza métricas do card do supplier em tempo real
-      updateSupplierCardMetricsFromItems(selectedSupplier, toolingData);
     } else {
       displayTooling([]);
     }
@@ -6302,7 +6327,7 @@ async function filterToolingByStep() {
       if (filteredTooling.length > 0) {
         suppliersWithStep.push(supplierName);
         // Calcular métricas apenas dos itens filtrados
-        const metrics = computeSupplierMetricsFromItems(filteredTooling);
+        const metrics = ExpirationMetrics.fromItems(filteredTooling);
         supplierMetrics.set(supplierName, metrics);
       }
     }
@@ -6377,6 +6402,10 @@ async function displayTooling(data) {
   let filteredData = data;
   if (expirationFilterEnabled) {
     filteredData = data.filter(item => {
+      // Ignora itens com análise concluída
+      if (item.analysis_completed === 1) {
+        return false;
+      }
       const classification = classifyToolingExpirationState(item);
       return classification.state === 'expired' || classification.state === 'warning';
     });
@@ -6407,6 +6436,12 @@ async function displayTooling(data) {
 
   cardSnapshotStore.clear();
   toolingData = sortedData;
+  
+  // Atualiza métricas do supplier card com os dados ORIGINAIS (não filtrados)
+  // para manter o Total correto e recalcular expired/expiring ignorando análise concluída
+  if (selectedSupplier) {
+    updateSupplierCardMetricsFromItems(selectedSupplier, data);
+  }
   
   // Se estiver no modo planilha, renderiza planilha ao invés de cards
   if (currentViewMode === 'spreadsheet') {
@@ -7657,9 +7692,9 @@ async function spreadsheetCreateTooling() {
 
 // Retorna o ícone HTML para o estado de expiração na planilha
 function getSpreadsheetExpirationIcon(state, isAnalysisCompleted = false) {
-  // Se a análise foi concluída, não mostra ícone de alerta
+  // Se a análise foi concluída, mostra ícone diferenciado (clipboard com check)
   if (isAnalysisCompleted && (state === 'expired' || state === 'warning')) {
-    return '<i class="ph ph-check-circle expiration-icon ok" title="Analysis Completed"></i>';
+    return '<i class="ph ph-fill ph-clipboard-text expiration-icon analysis-completed" title="Analysis Completed"></i>';
   }
   
   switch (state) {
@@ -7672,6 +7707,26 @@ function getSpreadsheetExpirationIcon(state, isAnalysisCompleted = false) {
       return '<i class="ph ph-fill ph-archive-box expiration-icon obsolete" title="Obsolete"></i>';
     default:
       return '<i class="ph ph-check-circle expiration-icon ok" title="OK"></i>';
+  }
+}
+
+// Ícone de expiração para dentro do input do card (com classe input-icon)
+function getCardExpirationIcon(state, isAnalysisCompleted = false) {
+  // Se a análise foi concluída, mostra ícone diferenciado (clipboard com check)
+  if (isAnalysisCompleted && (state === 'expired' || state === 'warning')) {
+    return '<i class="ph ph-fill ph-clipboard-text expiration-icon analysis-completed input-icon" title="Analysis Completed"></i>';
+  }
+  
+  switch (state) {
+    case 'expired':
+      return '<i class="ph ph-fill ph-warning-circle expiration-icon expired input-icon" title="Expired"></i>';
+    case 'warning':
+      return '<i class="ph ph-fill ph-warning expiration-icon warning input-icon" title="Expiring Soon"></i>';
+    case 'obsolete':
+    case 'obsolete-replaced':
+      return '<i class="ph ph-fill ph-archive-box expiration-icon obsolete input-icon" title="Obsolete"></i>';
+    default:
+      return '<i class="ph ph-check-circle expiration-icon ok input-icon" title="OK"></i>';
   }
 }
 
@@ -8028,22 +8083,10 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
   
   const classification = classifyToolingExpirationState(item);
   let expirationDateValue = resolveToolingExpirationDate(item);
-  
-  // Define o ícone baseado no estado de expiração (só mostra se expired ou warning E não estiver concluído)
-  let expirationIconClass = '';
-  let expirationIconColor = '';
-  let hasExpirationIcon = false;
   const isAnalysisCompleted = item.analysis_completed === 1;
   
-  if (classification.state === 'expired' && !isAnalysisCompleted) {
-    expirationIconClass = 'ph-fill ph-warning-circle';
-    expirationIconColor = '#ef4444';
-    hasExpirationIcon = true;
-  } else if (classification.state === 'warning' && !isAnalysisCompleted) {
-    expirationIconClass = 'ph-fill ph-warning';
-    expirationIconColor = '#f59e0b';
-    hasExpirationIcon = true;
-  }
+  // Usa a função de ícone para dentro do input do card
+  const expirationIconHtml = getCardExpirationIcon(classification.state, isAnalysisCompleted);
 
   const expirationInputValue = expirationDateValue || '';
   const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
@@ -8162,14 +8205,10 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   Expiration (Calculated)
                   <i class="ph ph-info tooltip-icon" title="Formula: today's date + (\\"Remaining\\" ÷ \\"Annual Volume\\") years." role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
                 </span>
-                ${hasExpirationIcon ? `
                 <div class="input-with-icon">
-                  <i class="${expirationIconClass} input-icon" style="color: ${expirationIconColor}"></i>
+                  ${expirationIconHtml}
                   <input type="date" class="detail-input calculated with-icon" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
                 </div>
-                ` : `
-                <input type="date" class="detail-input calculated" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
-                `}
               </div>
             </div>
             
@@ -9761,9 +9800,9 @@ async function saveToolingQuietly(id) {
       // Atualiza o display do Last Update em tempo real
       updateLastUpdateDisplay(id, now);
       
-      // Atualiza métricas do card do supplier em tempo real
+      // Atualiza métricas do card do supplier em tempo real (busca dados frescos do banco)
       if (selectedSupplier) {
-        updateSupplierCardMetricsFromItems(selectedSupplier, toolingData);
+        refreshSupplierCardMetricsFromDB(selectedSupplier);
       }
       
       // Sincroniza a linha da spreadsheet com os dados atualizados
@@ -9883,9 +9922,10 @@ async function loadAnalytics() {
     
     if (Array.isArray(suppliersData) && suppliersData.length > 0) {
       const summary = suppliersData.reduce((acc, supplier) => {
-        const metrics = ExpirationMetrics.calculate(supplier);
+        // Usa APENAS ExpirationMetrics.fromItems() para calcular métricas
+        const metrics = ExpirationMetrics.fromItems(supplier.items || []);
         acc.expired += metrics.expired;
-        acc.expiring += metrics.expiringWithin2Years;
+        acc.expiring += metrics.expiring;
         return acc;
       }, { expired: 0, expiring: 0 });
       
@@ -9922,19 +9962,19 @@ function displayTopSuppliers(suppliers) {
   if (!tableBody || !suppliers) return;
   
   const sortedSuppliers = [...suppliers]
-    .sort((a, b) => (parseInt(b.total) || 0) - (parseInt(a.total) || 0))
+    .sort((a, b) => ((b.items || []).length) - ((a.items || []).length))
     .slice(0, 15);
   
   tableBody.innerHTML = sortedSuppliers.map(supplier => {
-    const total = parseInt(supplier.total) || 0;
-    const metrics = ExpirationMetrics.calculate(supplier);
+    // Usa APENAS ExpirationMetrics.fromItems() para calcular métricas
+    const metrics = ExpirationMetrics.fromItems(supplier.items || []);
     
     return `
       <tr>
         <td>${escapeHtml(supplier.supplier)}</td>
-        <td><span class="table-number">${total}</span></td>
+        <td><span class="table-number">${metrics.total}</span></td>
         <td><span class="table-number table-number--expired">${metrics.expired}</span></td>
-        <td><span class="table-number table-number--warning">${metrics.expiringWithin2Years}</span></td>
+        <td><span class="table-number table-number--warning">${metrics.expiring}</span></td>
       </tr>
     `;
   }).join('');
@@ -10099,12 +10139,12 @@ function syncStatusBarWithSuppliers() {
   }
 
   const summary = suppliersData.reduce((acc, supplier) => {
-    const total = parseInt(supplier.total, 10) || 0;
-    const metrics = ExpirationMetrics.calculate(supplier);
+    // Usa APENAS ExpirationMetrics.fromItems() para calcular métricas
+    const metrics = ExpirationMetrics.fromItems(supplier.items || []);
 
-    acc.total += total;
+    acc.total += metrics.total;
     acc.expired += metrics.expired;
-    acc.expiring += metrics.expiringWithin2Years;
+    acc.expiring += metrics.expiring;
     return acc;
   }, { total: 0, expired: 0, expiring: 0 });
 
