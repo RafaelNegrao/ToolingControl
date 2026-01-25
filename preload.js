@@ -22,6 +22,8 @@ contextBridge.exposeInMainWorld('api', {
   // Exportação de dados
   exportSupplierData: (supplierName, filteredIds = null) => ipcRenderer.invoke('export-supplier-data', supplierName, filteredIds),
   importSupplierData: (supplierName) => ipcRenderer.invoke('import-supplier-data', supplierName),
+  exportEmptyTemplate: () => ipcRenderer.invoke('export-empty-template'),
+  importNewSupplier: () => ipcRenderer.invoke('import-new-supplier'),
   exportForecastSupplier: () => ipcRenderer.invoke('export-forecast-supplier'),
   importForecastSupplier: () => ipcRenderer.invoke('import-forecast-supplier'),
   exportForecastManager: () => ipcRenderer.invoke('export-forecast-manager'),

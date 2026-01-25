@@ -264,6 +264,17 @@
               <i class="ph ph-package"></i>
               <h3>No supplier selected</h3>
               <p>Select a supplier on the left to view the tooling.</p>
+              <p class="empty-state-hint">New supplier? Export the template and import it here.</p>
+              <div class="empty-state-actions">
+                <button class="btn btn-template" onclick="exportEmptyTemplate()" title="Export empty template for new supplier">
+                  <i class="ph ph-download-simple"></i>
+                  Export Template
+                </button>
+                <button class="btn btn-template" onclick="importNewSupplier()" title="Import new supplier from template">
+                  <i class="ph ph-upload-simple"></i>
+                  Import Template
+                </button>
+              </div>
             </div>
             <div class="tooling-list" id="toolingList" style="display: none;">
               <!-- Lista de ferramentais será preenchida dinamicamente -->
@@ -663,14 +674,16 @@
               <i class="ph ph-info"></i>
             </div>
             <h3>How the expiration is calculated</h3>
-            <p>The expiration field projects how many years the tooling can keep running based on production data.</p>
+            <p>The expiration field projects how long the tooling can keep running based on production data.</p>
             <ul class="info-modal-list">
               <li><strong>Remaining</strong> = Tooling Life (Qty) − Produced.</li>
-              <li><strong>Years available</strong> = Remaining ÷ Annual Forecast.</li>
-              <li>We convert the fractional year into days and add everything to today's date.</li>
+              <li><strong>Days available</strong> = (Remaining ÷ Annual Volume) × 365.</li>
+              <li>If Annual Volume is 0 or empty, we use: Remaining × 365 days.</li>
+              <li>We add the calculated days to the <strong>Production Date</strong>.</li>
             </ul>
             <div class="info-modal-highlight">
-              Example: if Remaining = 4,000 and Annual Forecast = 2,000, we have 2 years available. Two years after today becomes the Expiration date.
+              <strong>Formula:</strong> Production Date + ((Remaining ÷ Annual Volume) × 365) days<br><br>
+              Example: if Remaining = 4,000, Annual Volume = 2,000, and Production Date = 01/01/2024, we have (4000÷2000)×365 = 730 days. Adding 730 days to 01/01/2024 gives Expiration = 01/01/2026.
             </div>
             <div class="modal-actions">
               <button class="btn-secondary" type="button" data-expiration-info-close>Close</button>
@@ -886,26 +899,26 @@
                     </div>
                     <span class="settings-version-chip" id="appVersionSettings">v0.1.1</span>
                   </div>
-                  <p class="settings-description">Controle centralizado para ciclo de vida e documentação de ferramentais dos fornecedores.</p>
+                  <p class="settings-description">Centralized control for tooling lifecycle and documentation from suppliers.</p>
                   <div class="settings-meta-grid">
                     <div class="settings-meta">
-                      <span class="meta-label">Ambiente</span>
+                      <span class="meta-label">Environment</span>
                       <span class="meta-value">Desktop</span>
                     </div>
                     <div class="settings-meta">
-                      <span class="meta-label">Banco de dados</span>
+                      <span class="meta-label">Database</span>
                       <span class="meta-value">SQLite</span>
                     </div>
                     <div class="settings-meta">
-                      <span class="meta-label">Atualização</span>
-                      <span class="meta-value">Sob demanda</span>
+                      <span class="meta-label">Update</span>
+                      <span class="meta-value">On demand</span>
                     </div>
                   </div>
                 </section>
 
                 <section class="settings-card">
                   <h3>Data</h3>
-                  <p class="settings-description">Recarregue os dados sempre que houver um novo arquivo de referência.</p>
+                  <p class="settings-description">Reload data whenever there is a new reference file.</p>
                   <button class="btn-primary" id="reloadData">
                     <i class="ph ph-arrow-clockwise"></i>
                     Reload Data
@@ -914,7 +927,7 @@
 
               <section class="settings-card settings-card--tech">
                 <h3>Tech Stack</h3>
-                <p class="settings-description">Tecnologias principais que alimentam esta versão.</p>
+                <p class="settings-description">Main technologies powering this version.</p>
                 <div class="tech-list">
                   <div class="tech-item">
                     <div class="tech-icon">
@@ -922,7 +935,7 @@
                     </div>
                     <div>
                       <p class="tech-name">Electron 28</p>
-                      <p class="tech-detail">Shell desktop multiplataforma</p>
+                      <p class="tech-detail">Cross-platform desktop shell</p>
                     </div>
                   </div>
                   <div class="tech-item">
@@ -931,7 +944,7 @@
                     </div>
                     <div>
                       <p class="tech-name">Node.js</p>
-                      <p class="tech-detail">Runtime para integrações e scripts</p>
+                      <p class="tech-detail">Runtime for integrations and scripts</p>
                     </div>
                   </div>
                   <div class="tech-item">
@@ -940,7 +953,7 @@
                     </div>
                     <div>
                       <p class="tech-name">SQLite</p>
-                      <p class="tech-detail">Armazenamento local dos ferramentais</p>
+                      <p class="tech-detail">Local tooling storage</p>
                     </div>
                   </div>
                   <div class="tech-item">
@@ -949,14 +962,14 @@
                     </div>
                     <div>
                       <p class="tech-name">Phosphor Icons</p>
-                      <p class="tech-detail">Sistema de ícones para o app</p>
+                      <p class="tech-detail">Icon system for the app</p>
                     </div>
                   </div>
                 </div>
               </section>
 
               <section class="settings-card settings-card--wide" id="statusSettings">
-                <h3>Available Statuses</h3>
+                <h3>Available Status</h3>
                 <p class="settings-description">Manage the options displayed in the Tooling Status field.</p>
                 <ul class="status-options-list" id="statusOptionsList"></ul>
                 <div class="settings-inline-form">
@@ -970,16 +983,43 @@
 
               <section class="settings-card settings-card--developer">
                 <h3>Developer Options</h3>
-                <p class="settings-description">Ferramentas para desenvolvimento e debug da aplicação.</p>
+                <p class="settings-description">Tools for application development and debugging.</p>
                 <div class="settings-switch-row">
                   <div class="settings-switch-info">
                     <span class="settings-switch-label">DevTools Console</span>
-                    <span class="settings-switch-description">Abre o console de desenvolvedor para debug</span>
+                    <span class="settings-switch-description">Opens developer console for debugging</span>
                   </div>
                   <label class="settings-switch">
                     <input type="checkbox" id="devToolsSwitch" onchange="toggleDevTools(this.checked)">
                     <span class="settings-switch-slider"></span>
                   </label>
+                </div>
+              </section>
+
+              <section class="settings-card settings-card--credits">
+                <h3>Credits</h3>
+                <p class="settings-description">Development and intellectual authorship of the application.</p>
+                <div class="credits-content">
+                  <div class="credit-item">
+                    <div class="credit-icon">
+                      <i class="ph ph-code"></i>
+                    </div>
+                    <div class="credit-info">
+                      <p class="credit-label">Developed by</p>
+                      <p class="credit-name">Rafael Negrão de Souza</p>
+                      <p class="credit-role">Supply Continuity intern AN62H</p>
+                    </div>
+                  </div>
+                  <div class="credit-item">
+                    <div class="credit-icon">
+                      <i class="ph ph-lightbulb"></i>
+                    </div>
+                    <div class="credit-info">
+                      <p class="credit-label">Intelectual author</p>
+                      <p class="credit-name">Denis Sposito Mechi</p>
+                      <p class="credit-role">Supply continuity specialist IB105</p>
+                    </div>
+                  </div>
                 </div>
               </section>
               </div>
@@ -994,6 +1034,7 @@
               <span class="carousel-dot" data-index="3" onclick="goToSettingsCarouselSlide(3)"></span>
               <span class="carousel-dot" data-index="4" onclick="goToSettingsCarouselSlide(4)"></span>
               <span class="carousel-dot" data-index="5" onclick="goToSettingsCarouselSlide(5)"></span>
+              <span class="carousel-dot" data-index="6" onclick="goToSettingsCarouselSlide(6)"></span>
             </div>
           </div>
         </div>
@@ -1024,15 +1065,15 @@
           <button class="status-search-btn" id="statusSearchBtn" onclick="toggleStatusSearch()" title="Search suppliers">
             <i class="ph ph-magnifying-glass"></i>
           </button>
-          <button class="status-add-btn" id="statusAddBtn" onclick="openAddToolingModal()" title="New Tooling">
-            <i class="ph ph-plus"></i>
-          </button>
           <div class="status-search-input-wrapper" id="statusSearchInputWrapper">
             <input type="text" id="statusSupplierSearchInput" placeholder="Search suppliers..." />
             <button class="status-search-clear" id="statusSearchClear" onclick="clearStatusSearch()">
               <i class="ph ph-x"></i>
             </button>
           </div>
+          <button class="status-add-btn" id="statusAddBtn" onclick="openAddToolingModal()" title="New Tooling">
+            <i class="ph ph-plus"></i>
+          </button>
         </div>
       </div>
       <div class="status-bar-right">

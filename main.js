@@ -48,6 +48,15 @@ const CHANGE_TRACKING_IGNORED_FIELDS = new Set([
   'percent_tooling_life',
   'last_update'
 ]);
+
+// Campos que não devem atualizar last_update quando modificados sozinhos ou em conjunto
+const SILENT_UPDATE_FIELDS = new Set([
+  'expiration_date',
+  'remaining_tooling_life_pcs',
+  'percent_tooling_life',
+  'analysis_completed'
+]);
+
 const CHANGE_NUMBER_FORMATTER = new Intl.NumberFormat('pt-BR', {
   minimumFractionDigits: 0,
   maximumFractionDigits: 2
@@ -1418,7 +1427,12 @@ function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
 
       const validValues = validFields.map(key => data[key]);
       const setClause = validFields.map(field => `${field.trim()} = ?`).join(', ');
-      const query = `UPDATE ferramental SET ${setClause}, last_update = datetime('now') WHERE id = ?`;
+      
+      // Verifica se todos os campos são "silenciosos" (não devem atualizar last_update)
+      const hasUserEditableFields = validFields.some(field => !SILENT_UPDATE_FIELDS.has(field));
+      const query = hasUserEditableFields
+        ? `UPDATE ferramental SET ${setClause}, last_update = datetime('now') WHERE id = ?`
+        : `UPDATE ferramental SET ${setClause} WHERE id = ?`;
 
       db.run(
         query,
@@ -1456,7 +1470,8 @@ function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
               success: true,
               changes: this.changes,
               comments: data.comments ?? existingRecord?.comments ?? null,
-              skipped: false
+              skipped: false,
+              lastUpdateModified: hasUserEditableFields
             });
           }
         }
@@ -2477,6 +2492,436 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
     skipped,
     message: `Updated ${updated} item(s), created ${created} new item(s). Skipped ${skipped}.`
   };
+});
+
+// ===== EXPORTAR TEMPLATE VAZIO =====
+ipcMain.handle('export-empty-template', async () => {
+  try {
+    const workbook = new ExcelJS.Workbook();
+    
+    // Criar aba de dados
+    const worksheet = workbook.addWorksheet('Tooling Data');
+
+    // Definir colunas com larguras
+    worksheet.columns = [
+      { header: 'ID', key: 'id', width: 6 },
+      { header: 'PN *', key: 'pn', width: 15 },
+      { header: 'PN Description *', key: 'pn_description', width: 25 },
+      { header: 'Tooling Description *', key: 'tool_description', width: 25 },
+      { header: 'Tooling Life (quantity) *', key: 'tooling_life_qty', width: 12 },
+      { header: 'Produced (quantity) *', key: 'produced', width: 12 },
+      { header: 'Production Date', key: 'production_date', width: 14 },
+      { header: 'Annual Volume', key: 'forecast', width: 12 },
+      { header: 'Annual Volume Date', key: 'forecast_date', width: 14 },
+      { header: 'Expiration Date', key: 'expiration_date', width: 14 },
+      { header: "Supplier's Comments", key: 'supplier_comments', width: 50 }
+    ];
+
+    // Fixar primeira linha (cabeçalho)
+    worksheet.views = [
+      { state: 'frozen', xSplit: 0, ySplit: 1, topLeftCell: 'A2', activeCell: 'A2' }
+    ];
+
+    // Aplicar estilo no cabeçalho
+    const headerRow = worksheet.getRow(1);
+    headerRow.eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFC8102E' }
+      };
+      cell.font = {
+        color: { argb: 'FFFFFFFF' },
+        bold: true
+      };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
+    headerRow.commit();
+
+    // Centralizar colunas numéricas
+    ['A', 'E', 'F', 'G', 'H', 'I', 'J'].forEach(columnKey => {
+      const column = worksheet.getColumn(columnKey);
+      column.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+
+    const numericColumnIndexes = [5, 6, 8];
+    const dateColumnIndexes = [7, 9, 10];
+
+    // Adicionar 100 linhas vazias
+    for (let i = 0; i < 100; i++) {
+      worksheet.addRow({
+        id: '',
+        pn: '',
+        pn_description: '',
+        tool_description: '',
+        tooling_life_qty: '',
+        produced: '',
+        production_date: '',
+        forecast: '',
+        forecast_date: '',
+        expiration_date: '',
+        supplier_comments: ''
+      });
+    }
+
+    // Adicionar fórmula de Expiration Date para todas as linhas
+    for (let rowNum = 2; rowNum <= 101; rowNum++) {
+      const row = worksheet.getRow(rowNum);
+      const expirationCell = row.getCell(10);
+      
+      expirationCell.value = {
+        formula: `IF(OR(G${rowNum}="",E${rowNum}="",F${rowNum}=""),"",IF(OR(H${rowNum}="",H${rowNum}=0),G${rowNum}+ROUND((E${rowNum}-F${rowNum})/1*365,0),G${rowNum}+ROUND((E${rowNum}-F${rowNum})/H${rowNum}*365,0)))`,
+        date1904: false
+      };
+      expirationCell.numFmt = 'dd/mm/yyyy';
+    }
+
+    // Proteger planilha com senha
+    await worksheet.protect('30625629', {
+      selectLockedCells: true,
+      selectUnlockedCells: true,
+      formatCells: false,
+      formatColumns: false,
+      formatRows: false,
+      insertRows: false,
+      insertColumns: false,
+      deleteRows: false,
+      deleteColumns: false,
+      sort: false,
+      autoFilter: false,
+      pivotTables: false
+    });
+
+    // Desbloquear colunas B a I e K para edição (todas as linhas são novas)
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      
+      // Desbloquear coluna B (PN) - para novas linhas
+      const pnCell = row.getCell(2);
+      pnCell.protection = { locked: false };
+      
+      // Desbloquear colunas C até I e K
+      for (let colIndex = 3; colIndex <= 11; colIndex++) {
+        if (colIndex === 10) continue; // Pular coluna J (Expiration Date)
+        const cell = row.getCell(colIndex);
+        cell.protection = { locked: false };
+      }
+
+      // Aplicar restrições numéricas
+      numericColumnIndexes.forEach(colIndex => {
+        const cell = row.getCell(colIndex);
+        cell.numFmt = '#,##0';
+        cell.dataValidation = {
+          type: 'decimal',
+          operator: 'between',
+          allowBlank: true,
+          formulae: [-9999999999, 9999999999],
+          showErrorMessage: true,
+          errorTitle: 'Valor inválido',
+          error: 'Use apenas números nestes campos.'
+        };
+      });
+
+      // Aplicar restrições de data
+      dateColumnIndexes.forEach(colIndex => {
+        const cell = row.getCell(colIndex);
+        cell.numFmt = 'dd/mm/yyyy';
+        cell.dataValidation = {
+          type: 'date',
+          operator: 'between',
+          allowBlank: true,
+          formulae: ['DATE(2000,1,1)', 'DATE(2100,12,31)'],
+          showErrorMessage: true,
+          errorTitle: 'Data inválida',
+          error: 'Use apenas datas nestes campos.'
+        };
+      });
+    });
+
+    // Criar aba Info & Instructions com Supplier Name editável
+    const supplierSheet = workbook.addWorksheet(SUPPLIER_INFO_SHEET_NAME);
+    
+    supplierSheet.views = [
+      { showGridLines: false }
+    ];
+    
+    supplierSheet.columns = [
+      { header: 'Field', key: 'field', width: 28 },
+      { header: 'Value', key: 'value', width: 55 }
+    ];
+
+    // Adicionar linha de Supplier Name VAZIA para preenchimento
+    const supplierNameRow = supplierSheet.addRow({ field: 'Supplier Name', value: '' });
+    supplierSheet.addRow({ field: SUPPLIER_INFO_TIMESTAMP_LABEL, value: '' });
+    
+    // Adicionar instruções
+    supplierSheet.addRow({ field: '', value: '' });
+    const instrRow = supplierSheet.addRow({ field: 'INSTRUÇÕES', value: '' });
+    instrRow.getCell(1).font = { bold: true, size: 12 };
+    supplierSheet.addRow({ field: '', value: '' });
+    
+    const importantRow = supplierSheet.addRow({ field: '⚠️ IMPORTANTE:', value: '' });
+    importantRow.getCell(1).font = { bold: true, color: { argb: 'FFFF0000' } };
+    supplierSheet.addRow({ field: '', value: 'Preencha o "Supplier Name" acima antes de importar!' });
+    supplierSheet.addRow({ field: '', value: '' });
+    
+    const addNewRow = supplierSheet.addRow({ field: 'Como Adicionar Novo Ferramental:', value: '' });
+    addNewRow.getCell(1).font = { bold: true };
+    supplierSheet.addRow({ field: '', value: 'Os itens com * são obrigatórios para adição de novo ferramental' });
+    supplierSheet.addRow({ field: '', value: 'Adicione todos os dados necessários e deixe o ID vazio.' });
+    supplierSheet.addRow({ field: '', value: 'O sistema atribuirá o ID automaticamente ao importar.' });
+    supplierSheet.addRow({ field: '', value: '' });
+    const reqFieldsRow = supplierSheet.addRow({ field: 'Campos Obrigatórios:', value: '' });
+    reqFieldsRow.getCell(1).font = { bold: true };
+    supplierSheet.addRow({ field: '→ PN', value: 'Part Number do ferramental' });
+    supplierSheet.addRow({ field: '→ PN Description', value: 'Descrição do Part Number' });
+    supplierSheet.addRow({ field: '→ Tooling Description', value: 'Descrição do ferramental' });
+    supplierSheet.addRow({ field: '→ Tooling Life', value: 'Vida útil do ferramental (quantidade)' });
+    supplierSheet.addRow({ field: '→ Produced', value: 'Quantidade já produzida' });
+    supplierSheet.addRow({ field: '', value: '' });
+    const optFieldsRow = supplierSheet.addRow({ field: 'Campos Opcionais:', value: '' });
+    optFieldsRow.getCell(1).font = { bold: true };
+    supplierSheet.addRow({ field: '→ Production Date', value: 'Data em que a quantidade "Produced" foi medida' });
+    supplierSheet.addRow({ field: '→ Annual Volume', value: 'Volume anual previsto' });
+    supplierSheet.addRow({ field: '→ Annual Volume Date', value: 'Data em que o "Annual Volume" foi calculado' });
+    supplierSheet.addRow({ field: "→ Supplier's Comments", value: 'Comentários adicionais (carimbados com data/hora ao importar)' });
+
+    const supplierHeaderRow = supplierSheet.getRow(1);
+    supplierHeaderRow.eachCell(cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFC8102E' }
+      };
+      cell.font = { color: { argb: 'FFFFFFFF' }, bold: true };
+      cell.alignment = { horizontal: 'center', vertical: 'middle' };
+    });
+    supplierHeaderRow.commit();
+
+    // Proteger aba Info mas permitir edição do Supplier Name (linha 2, coluna 2)
+    await supplierSheet.protect('30625629', {
+      selectLockedCells: true,
+      selectUnlockedCells: true,
+      formatCells: false,
+      formatColumns: false,
+      formatRows: false,
+      insertRows: false,
+      insertColumns: false,
+      deleteRows: false,
+      deleteColumns: false,
+      sort: false,
+      autoFilter: false,
+      pivotTables: false
+    });
+
+    // Desbloquear célula do Supplier Name para edição
+    const supplierValueCell = supplierSheet.getRow(2).getCell(2);
+    supplierValueCell.protection = { locked: false };
+    // Destacar célula editável
+    supplierValueCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFF9C4' } // Amarelo claro
+    };
+    supplierValueCell.border = {
+      top: { style: 'medium', color: { argb: 'FFC8102E' } },
+      bottom: { style: 'medium', color: { argb: 'FFC8102E' } },
+      left: { style: 'medium', color: { argb: 'FFC8102E' } },
+      right: { style: 'medium', color: { argb: 'FFC8102E' } }
+    };
+
+    // Criar aba de verificação oculta
+    const verificationSheet = workbook.addWorksheet(VERIFICATION_SHEET_NAME);
+    verificationSheet.state = 'veryHidden';
+    verificationSheet.getCell('A1').value = 'key';
+    verificationSheet.getCell('B1').value = VERIFICATION_KEY_VALUE;
+
+    // Auto-fit colunas da aba Tooling Data
+    worksheet.columns.forEach((column, index) => {
+      const headerLength = column.header ? column.header.toString().length : 0;
+      // Largura baseada no header + padding
+      const calculatedWidth = headerLength + 4;
+      column.width = Math.min(Math.max(calculatedWidth, 10), 50);
+    });
+
+    // Auto-fit colunas da aba Info & Instructions
+    supplierSheet.columns.forEach(column => {
+      let maxLength = 0;
+      column.eachCell({ includeEmpty: false }, cell => {
+        const cellLength = cell.value ? cell.value.toString().length : 0;
+        if (cellLength > maxLength) {
+          maxLength = cellLength;
+        }
+      });
+      column.width = Math.min(Math.max(maxLength + 2, 10), 50);
+    });
+
+    // Escolher onde salvar o arquivo
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Export Empty Template',
+      defaultPath: 'Tooling-Template-New-Supplier.xlsx',
+      filters: [
+        { name: 'Excel Files', extensions: ['xlsx'] }
+      ]
+    });
+
+    if (result.canceled) {
+      return { success: false, cancelled: true, message: 'Export cancelled' };
+    }
+
+    await workbook.xlsx.writeFile(result.filePath);
+
+    return { 
+      success: true, 
+      message: 'Template exported successfully',
+      filePath: result.filePath 
+    };
+  } catch (error) {
+    return { success: false, message: error.message || 'Error exporting template' };
+  }
+});
+
+// ===== IMPORTAR NOVO SUPPLIER =====
+ipcMain.handle('import-new-supplier', async () => {
+  const dialogResult = await dialog.showOpenDialog(mainWindow, {
+    title: 'Import New Supplier',
+    buttonLabel: 'Import',
+    properties: ['openFile'],
+    filters: [{ name: 'Excel Files', extensions: ['xlsx'] }]
+  });
+
+  if (dialogResult.canceled || !dialogResult.filePaths || dialogResult.filePaths.length === 0) {
+    return { success: false, cancelled: true, message: 'Import cancelled' };
+  }
+
+  const filePath = dialogResult.filePaths[0];
+  const workbook = new ExcelJS.Workbook();
+
+  try {
+    await workbook.xlsx.readFile(filePath);
+
+    validateVerificationSheet(workbook);
+    
+    const supplierInfoSheet = workbook.getWorksheet(SUPPLIER_INFO_SHEET_NAME);
+    if (!supplierInfoSheet) {
+      throw new Error('Aba "Info & Instructions" não encontrada. Use o template oficial.');
+    }
+
+    const supplierName = extractSupplierNameFromInfoSheet(supplierInfoSheet);
+    if (!supplierName || supplierName.trim() === '') {
+      return {
+        success: false,
+        message: 'Supplier name is empty. Please fill in the "Supplier Name" field in the Info & Instructions tab.'
+      };
+    }
+
+    // Verificar se o supplier já existe no banco de dados
+    const existingSupplier = await new Promise((resolve, reject) => {
+      db.get(
+        `SELECT COUNT(*) as count FROM ferramental WHERE LOWER(TRIM(supplier)) = LOWER(TRIM(?))`,
+        [supplierName],
+        (err, row) => {
+          if (err) reject(err);
+          else resolve(row);
+        }
+      );
+    });
+
+    if (existingSupplier && existingSupplier.count > 0) {
+      return {
+        success: false,
+        supplierExists: true,
+        message: `Supplier "${supplierName}" already exists in the database.`
+      };
+    }
+
+    const worksheet = workbook.getWorksheet('Tooling Data') || workbook.worksheets[0];
+
+    if (!worksheet) {
+      throw new Error('Could not locate "Tooling Data" worksheet in the provided file.');
+    }
+
+    ensureToolingHeaderOrder(worksheet);
+
+    let created = 0;
+    let skipped = 0;
+    const todayStr = formatDateToBR(new Date());
+
+    for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+      const row = worksheet.getRow(rowNumber);
+
+      const pn = cellValueToString(row.getCell(2).value);
+      const pnDescription = cellValueToString(row.getCell(3).value);
+      const toolDescription = cellValueToString(row.getCell(4).value);
+      const toolingLifeQty = parseNumericCell(row.getCell(5).value);
+      const producedQty = parseNumericCell(row.getCell(6).value);
+      const productionDateISO = formatDateToISO(parseExcelDate(row.getCell(7).value));
+      const forecastQty = parseNumericCell(row.getCell(8).value);
+      const forecastDateISO = formatDateToISO(parseExcelDate(row.getCell(9).value));
+      const supplierCommentRaw = cellValueToString(row.getCell(11).value);
+      const supplierComment = supplierCommentRaw?.trim() || '';
+
+      // Se não há PN, pular linha (linha vazia)
+      if (!pn || pn.trim() === '') {
+        skipped += 1;
+        continue;
+      }
+
+      // Criar novo registro
+      const mergedComments = buildUpdatedComments('', supplierComment, todayStr, toolingLifeQty, true);
+      
+      await dbRun(
+        `INSERT INTO ferramental (
+          supplier, pn, pn_description, tool_description, tooling_life_qty, produced,
+          date_remaining_tooling_life, annual_volume_forecast,
+          date_annual_volume, comments, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          supplierName,
+          pn || '',
+          pnDescription || '',
+          toolDescription || '',
+          toolingLifeQty,
+          producedQty,
+          productionDateISO,
+          forecastQty,
+          forecastDateISO,
+          mergedComments,
+          'ACTIVE'
+        ]
+      );
+
+      created += 1;
+    }
+
+    if (created === 0) {
+      return {
+        success: false,
+        message: 'No tooling data found in the spreadsheet. Please add at least one item with PN.'
+      };
+    }
+
+    // Atualizar timestamp
+    const timestampStr = getCurrentTimestampBR();
+    updateSupplierInfoTimestamp(workbook, timestampStr);
+    await setSupplierImportTimestamp(supplierName, timestampStr);
+    
+    const verificationSheet = workbook.getWorksheet(VERIFICATION_SHEET_NAME);
+    if (verificationSheet) {
+      verificationSheet.state = 'veryHidden';
+    }
+    await workbook.xlsx.writeFile(filePath);
+
+    return {
+      success: true,
+      supplierName,
+      created,
+      skipped,
+      message: `Supplier "${supplierName}" created successfully with ${created} tooling item(s).`
+    };
+  } catch (error) {
+    return { success: false, message: error.message || 'Error importing supplier' };
+  }
 });
 
 // ===== GERENCIAMENTO DE ANEXOS =====

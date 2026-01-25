@@ -1893,6 +1893,63 @@ async function importSupplierData() {
   }
 }
 
+// Exportar template vazio para novo supplier
+async function exportEmptyTemplate() {
+  try {
+    showToast('Exporting empty template...', 'info');
+    
+    const result = await window.api.exportEmptyTemplate();
+    
+    if (result.success) {
+      showToast('Template exported successfully! Fill in the Supplier Name and tooling data.', 'success');
+    } else if (result.cancelled) {
+      showToast('Export cancelled', 'info');
+    } else {
+      showToast(result.message || 'Export failed', 'error');
+    }
+  } catch (error) {
+    showToast('Error exporting template. Please try again.', 'error');
+  }
+}
+
+// Importar novo supplier a partir de template
+async function importNewSupplier() {
+  try {
+    showToast('Importing new supplier...', 'info');
+    
+    const result = await window.api.importNewSupplier();
+    
+    if (!result || !result.success) {
+      if (result && result.cancelled) {
+        showToast('Import cancelled', 'info');
+        return;
+      }
+      if (result && result.supplierExists) {
+        showToast(`Supplier already exists! Use the supplier panel to update existing data.`, 'error');
+        return;
+      }
+      const errorMsg = result?.message || 'Error importing supplier. Please try again.';
+      showToast(errorMsg, 'error');
+      return;
+    }
+
+    const created = result.created ?? 0;
+    const supplierName = result.supplierName || 'New Supplier';
+    showToast(`Supplier "${supplierName}" created with ${created} item(s)!`, 'success');
+
+    // Recarregar lista de suppliers e selecionar o novo
+    await loadSuppliers();
+    
+    // Selecionar o novo supplier automaticamente
+    if (supplierName) {
+      selectSupplier(null, supplierName);
+    }
+  } catch (error) {
+    const fallbackMessage = error?.message || 'Error importing supplier. Please try again.';
+    showToast(fallbackMessage, 'error');
+  }
+}
+
 // Exibe cards de fornecedores no sidebar
 function displaySuppliers(suppliers) {
   const supplierList = document.getElementById('supplierList');
@@ -3898,44 +3955,102 @@ async function buildReplacementTimeline(startId) {
   }
 
   const visited = new Set();
-  const backward = [];
+  const allRecords = new Map();
 
-  // Busca ancestrais
-  let parentLookupId = startNormalized;
-  while (parentLookupId) {
-    const parentRecord = await fetchParentReplacementRecord(parentLookupId);
+  // Primeiro, buscar o item de origem
+  const startRecord = await fetchToolingRecordById(startNormalized);
+  if (!startRecord) {
+    return [];
+  }
+  allRecords.set(startNormalized, startRecord);
+  visited.add(startNormalized);
+
+  // Buscar todos os ancestrais (quem aponta para este item, recursivamente)
+  async function findAllAncestors(itemId) {
+    const parentRecord = await fetchParentReplacementRecord(itemId);
     if (!parentRecord) {
-      break;
+      return;
     }
     const parentId = sanitizeReplacementId(parentRecord.id);
     if (!parentId || visited.has(parentId)) {
-      break;
+      return;
     }
-    backward.push(parentRecord);
     visited.add(parentId);
-    parentLookupId = parentId;
+    allRecords.set(parentId, parentRecord);
+    // Continuar buscando ancestrais do pai
+    await findAllAncestors(parentId);
   }
 
-  backward.reverse();
+  // Buscar todos os descendentes (para onde este item aponta, recursivamente)
+  async function findAllDescendants(itemId) {
+    const record = allRecords.get(itemId) || await fetchToolingRecordById(itemId);
+    if (!record) {
+      return;
+    }
+    const nextId = sanitizeReplacementId(record.replacement_tooling_id);
+    if (!nextId || visited.has(nextId)) {
+      return;
+    }
+    const nextRecord = await fetchToolingRecordById(nextId);
+    if (!nextRecord) {
+      return;
+    }
+    visited.add(nextId);
+    allRecords.set(nextId, nextRecord);
+    // Continuar buscando descendentes
+    await findAllDescendants(nextId);
+  }
 
-  // Busca descendentes (inclui o item de origem)
-  const forward = [];
-  let currentId = startNormalized;
-  while (currentId && !visited.has(currentId)) {
-    const record = await fetchToolingRecordById(currentId);
+  // Executar buscas
+  await findAllAncestors(startNormalized);
+  await findAllDescendants(startNormalized);
+
+  // Agora ordenar a cadeia: encontrar a raiz (quem não é apontado por ninguém)
+  // e seguir os links até o final
+  const idsInChain = Array.from(allRecords.keys());
+  
+  // Encontrar a raiz: o item cujo ID não aparece como replacement_tooling_id de nenhum outro
+  const targetIds = new Set();
+  for (const record of allRecords.values()) {
+    const targetId = sanitizeReplacementId(record.replacement_tooling_id);
+    if (targetId) {
+      targetIds.add(targetId);
+    }
+  }
+  
+  let rootId = null;
+  for (const id of idsInChain) {
+    if (!targetIds.has(id)) {
+      rootId = id;
+      break;
+    }
+  }
+
+  // Se não encontrou raiz, usar o primeiro item encontrado
+  if (!rootId && idsInChain.length > 0) {
+    rootId = idsInChain[0];
+  }
+
+  // Montar a cadeia ordenada a partir da raiz
+  const orderedChain = [];
+  const chainVisited = new Set();
+  let currentId = rootId;
+  
+  while (currentId && !chainVisited.has(currentId)) {
+    const record = allRecords.get(currentId);
     if (!record) {
       break;
     }
-    forward.push(record);
-    visited.add(currentId);
+    orderedChain.push(record);
+    chainVisited.add(currentId);
     const nextId = sanitizeReplacementId(record.replacement_tooling_id);
-    if (!nextId || visited.has(nextId)) {
+    if (!nextId || !allRecords.has(nextId)) {
       break;
     }
     currentId = nextId;
   }
 
-  return [...backward, ...forward];
+  return orderedChain;
 }
 
 async function fetchToolingRecordById(recordId) {
@@ -7230,13 +7345,23 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
       // Remove a linha de detalhes
       const detailRow = expandedRow.nextElementSibling;
       if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
-        // Salva antes de fechar e sincroniza a linha
+        // Salva antes de fechar (se houver mudanças) e sincroniza a linha
         const prevItemId = expandedRow.getAttribute('data-id');
         if (prevItemId) {
-          Promise.resolve().then(() => {
-            saveToolingQuietly(prevItemId);
-            syncSpreadsheetRowFromCard(prevItemId);
-          });
+          // Verifica se há mudanças ANTES de remover o DOM
+          const prepared = buildCardPayloadFromDom(prevItemId);
+          if (prepared && prepared.hasChanges) {
+            Promise.resolve().then(() => {
+              saveToolingQuietly(prevItemId);
+              syncSpreadsheetRowFromCard(prevItemId);
+            });
+          } else {
+            // Apenas limpa o snapshot sem salvar
+            const snapshotKey = getSnapshotKey(prevItemId);
+            if (snapshotKey) {
+              cardSnapshotStore.delete(snapshotKey);
+            }
+          }
         }
         detailRow.remove();
       }
@@ -7251,11 +7376,20 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
     // Remove a linha de detalhes
     const detailRow = row.nextElementSibling;
     if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
-      // Salva antes de fechar e sincroniza a linha
-      Promise.resolve().then(() => {
-        saveToolingQuietly(itemId);
-        syncSpreadsheetRowFromCard(itemId);
-      });
+      // Verifica se há mudanças ANTES de remover o DOM
+      const prepared = buildCardPayloadFromDom(itemId);
+      if (prepared && prepared.hasChanges) {
+        Promise.resolve().then(() => {
+          saveToolingQuietly(itemId);
+          syncSpreadsheetRowFromCard(itemId);
+        });
+      } else {
+        // Apenas limpa o snapshot sem salvar
+        const snapshotKey = getSnapshotKey(itemId);
+        if (snapshotKey) {
+          cardSnapshotStore.delete(snapshotKey);
+        }
+      }
       detailRow.remove();
     }
   } else {
@@ -7348,6 +7482,10 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
             // Adiciona comentários do item ao snapshot
             if (item.comments) {
               values.comments = item.comments;
+            }
+            // Adiciona expiration_date ao snapshot (não é coletado do DOM porque tem classe 'calculated')
+            if (item.expiration_date !== undefined) {
+              values.expiration_date = item.expiration_date;
             }
             cardSnapshotStore.set(snapshotKey, serializeCardValues(values));
           }
@@ -8203,7 +8341,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
               <div class="detail-item detail-item-full">
                 <span class="detail-label">
                   Expiration (Calculated)
-                  <i class="ph ph-info tooltip-icon" title="Formula: today's date + (\\"Remaining\\" ÷ \\"Annual Volume\\") years." role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
+                  <i class="ph ph-info tooltip-icon" title="Formula: Production Date + ((Remaining ÷ Annual Volume) × 365) days" role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
                 </span>
                 <div class="input-with-icon">
                   ${expirationIconHtml}
@@ -8708,7 +8846,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                   <div class="detail-item detail-item-full">
                     <span class="detail-label">
                       Expiration (Calculated)
-                      <i class="ph ph-info tooltip-icon" title="Formula: today's date + (\"Remaining\" ÷ \"Annual Volume\") years." role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
+                      <i class="ph ph-info tooltip-icon" title="Formula: Production Date + ((Remaining ÷ Annual Volume) × 365) days" role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
                     </span>
                     ${hasExpirationIcon ? `
                     <div class="input-with-icon">
@@ -9789,16 +9927,20 @@ async function saveToolingQuietly(id) {
 
     const index = toolingData.findIndex(item => Number(item.id) === Number(id));
     if (index !== -1) {
-      // Atualiza o last_update com a data atual
-      const now = new Date().toISOString();
-      toolingData[index] = { ...toolingData[index], ...prepared.payload, last_update: now };
+      // Só atualiza o last_update se o backend confirmou que houve modificação real
+      if (updateResult?.lastUpdateModified) {
+        const now = new Date().toISOString();
+        toolingData[index] = { ...toolingData[index], ...prepared.payload, last_update: now };
+        
+        // Atualiza o display do Last Update em tempo real
+        updateLastUpdateDisplay(id, now);
+      } else {
+        toolingData[index] = { ...toolingData[index], ...prepared.payload };
+      }
       
       if (updateResult?.comments) {
         updateCommentsDisplay(id);
       }
-      
-      // Atualiza o display do Last Update em tempo real
-      updateLastUpdateDisplay(id, now);
       
       // Atualiza métricas do card do supplier em tempo real (busca dados frescos do banco)
       if (selectedSupplier) {
