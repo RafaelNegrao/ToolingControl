@@ -10450,13 +10450,16 @@ async function displayStepsSummary() {
         { name: 'Junho', cal: 5 }
       ];
 
-      // Definição dos grupos de steps e seus meses ativos
-      const stepGroups = [
-        { label: '1 e 2', months: [8] },                   // Setembro
-        { label: '3 e 4', months: [9, 10, 11, 0] },        // Outubro a Janeiro
-        { label: '5 e 6', months: [11, 0, 1, 2] },         // Dezembro a Março
-        { label: '7', months: [3, 4, 5] }              // Abril a Junho
-      ];
+      // Definição dos meses ativos por step (1..7) — uma linha por step
+      const stepMonthMap = {
+        '1': [8],                   // Setembro
+        '2': [8],                   // Setembro
+        '3': [9, 10, 11, 0],        // Outubro a Janeiro
+        '4': [9, 10, 11, 0],        // Outubro a Janeiro
+        '5': [11, 0, 1, 2],         // Dezembro a Março
+        '6': [11, 0, 1, 2],         // Dezembro a Março
+        '7': [3, 4, 5]              // Abril a Junho
+      };
 
       // Calcula progresso do dia no mês atual para a linha indicadora
       const today = new Date();
@@ -10473,25 +10476,38 @@ async function displayStepsSummary() {
         return `<th class="matrix-month-header">${m.name}</th>`;
       }).join('');
 
-      // Linhas da tabela — agrupa células ativas contíguas em colspan
-      const bodyRows = stepGroups.map(group => {
+      // Linhas da tabela — uma linha para cada step (1..7), agrupa células ativas contíguas em colspan
+      const bodyRows = allSteps.map(step => {
+        const months = stepMonthMap[step] || [];
+        const stepObj = stepsArray.find(s => s.steps === step) || {};
+        // build supplier cards for bar (name | count cards)
+          const supplierBarHtml = (stepObj.suppliers || []).map(s =>
+           `<div class="suppliers-bar-item" data-supplier="${escapeHtml(s.supplier)}">
+              ${escapeHtml(s.supplier)}
+            </div>`
+          ).join('');
+
         let cells = '';
         let i = 0;
         while (i < matrixMonths.length) {
-          const isActive = group.months.includes(matrixMonths[i].cal);
+          const isActive = months.includes(matrixMonths[i].cal);
           if (isActive) {
             let span = 1;
-            while (i + span < matrixMonths.length && group.months.includes(matrixMonths[i + span].cal)) {
+            while (i + span < matrixMonths.length && months.includes(matrixMonths[i + span].cal)) {
               span++;
             }
-            cells += `<td class="matrix-cell matrix-cell--active" colspan="${span}"></td>`;
+            // attach data-step and data-suppliers (pipe-separated) to the bar for later listeners
+            const suppliersDataAttr = escapeHtml((stepObj.suppliers || []).map(s => s.supplier).join('|'));
+            cells += `<td class="matrix-cell matrix-cell--active" colspan="${span}">
+                        <div class="suppliers-bar" data-step="${escapeHtml(step)}" data-suppliers="${suppliersDataAttr}">${supplierBarHtml}</div>
+                      </td>`;
             i += span;
           } else {
             cells += `<td class="matrix-cell"></td>`;
             i++;
           }
         }
-        return `<tr><td class="matrix-step-label">${group.label}</td>${cells}</tr>`;
+        return `<tr><td class="matrix-step-label">${escapeHtml(step)}</td>${cells}</tr>`;
       }).join('');
 
       timelineContainer.innerHTML = `
@@ -10520,19 +10536,37 @@ async function displayStepsSummary() {
       } catch (e) {
         // fail silently
       }
+
+      // --- Hook: adiciona listeners nas barras de fornecedores ---
+      try {
+        const bars = timelineContainer.querySelectorAll('.suppliers-bar');
+        bars.forEach(bar => {
+          const step = bar.getAttribute('data-step');
+          const suppliersAttr = bar.getAttribute('data-suppliers') || '';
+          const suppliersList = suppliersAttr ? suppliersAttr.split('|').map(s => s) : [];
+
+          // Hover immediate: destacar barra e aumentar card de step correspondente
+          bar.addEventListener('mouseenter', (e) => {
+            // highlight corresponding step column only (do not add hover class to bar itself)
+            const stepCol = document.querySelector(`.step-column[data-step="${step}"]`);
+            if (stepCol) stepCol.classList.add('step-column--hovered');
+
+            // no tooltip or bar hover effects when moving over supplier items
+          });
+
+          bar.addEventListener('mouseleave', (e) => {
+            // clear only step column highlight
+            const stepCol = document.querySelector(`.step-column[data-step="${step}"]`);
+            if (stepCol) stepCol.classList.remove('step-column--hovered');
+          });
+        });
+      } catch (e) {
+        // ignore
+      }
     }
 
-    // Renderiza 7 colunas
+    // Renderiza 7 colunas (mantém somente área responsável e stats)
     container.innerHTML = stepsArray.map(item => {
-      // Supplier cards HTML
-      const supplierCardsHtml = item.suppliers.length > 0
-        ? item.suppliers.map(s => `
-          <div class="step-supplier-card">
-            <span class="step-supplier-name">${escapeHtml(s.supplier)}</span>
-          </div>
-        `).join('')
-        : '<div class="step-no-suppliers">Nenhum fornecedor</div>';
-
       return `
         <div class="step-column" data-step="${item.steps}">
           <div class="step-column-header">
@@ -10561,21 +10595,19 @@ async function displayStepsSummary() {
               <span class="step-stat-label">do Total</span>
             </div>
           </div>
-          <div class="step-column-suppliers">
-            <div class="step-suppliers-list">
-              ${supplierCardsHtml}
-            </div>
-          </div>
         </div>
       `;
     }).join('');
 
-    // Hover: destaca a linha correspondente na matriz de meses
+    // Hover: destaca a linha correspondente na matriz de meses (uma linha por step)
     const stepToGroupRow = {
-      '1': 0, '2': 0,
-      '3': 1, '4': 1,
-      '5': 2, '6': 2,
-      '7': 3
+      '1': 0,
+      '2': 1,
+      '3': 2,
+      '4': 3,
+      '5': 4,
+      '6': 5,
+      '7': 6
     };
 
     container.querySelectorAll('.step-column').forEach(col => {
@@ -10597,6 +10629,55 @@ async function displayStepsSummary() {
   } catch (error) {
     container.innerHTML = '<div class="no-steps-message"><i class="ph ph-warning"></i> Erro ao carregar dados das etapas</div>';
   }
+}
+
+// Mostra um tooltip com a lista de fornecedores para a barra (posicionado acima da barra)
+function showSuppliersTooltip(barEl, suppliersList) {
+  // remove tooltip anterior
+  const prev = document.querySelector('.suppliers-tooltip');
+  if (prev) prev.remove();
+
+  if (!Array.isArray(suppliersList) || suppliersList.length === 0) return;
+
+  const tooltip = document.createElement('div');
+  tooltip.className = 'suppliers-tooltip';
+
+  const title = document.createElement('div');
+  title.className = 'suppliers-tooltip-title';
+  title.textContent = 'Suppliers';
+  tooltip.appendChild(title);
+
+  const list = document.createElement('div');
+  list.className = 'suppliers-tooltip-list';
+  suppliersList.forEach(name => {
+    const item = document.createElement('div');
+    item.className = 'suppliers-tooltip-item';
+    item.textContent = name;
+    list.appendChild(item);
+  });
+  tooltip.appendChild(list);
+
+  document.body.appendChild(tooltip);
+
+  // position
+  const rect = barEl.getBoundingClientRect();
+  // temporarily make visible to measure
+  tooltip.style.opacity = '0';
+  requestAnimationFrame(() => {
+    const ttRect = tooltip.getBoundingClientRect();
+    let left = rect.left + (rect.width / 2) - (ttRect.width / 2);
+    left = Math.max(8, Math.min(left, window.innerWidth - ttRect.width - 8));
+    let top = rect.top - ttRect.height - 8;
+    if (top < 8) top = rect.bottom + 8; // fallback below
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `${top}px`;
+    tooltip.style.opacity = '1';
+  });
+
+  // remove on scroll or resize to avoid orphaned tooltips
+  function removeTooltip() { const t = document.querySelector('.suppliers-tooltip'); if (t) t.remove(); window.removeEventListener('scroll', removeTooltip); window.removeEventListener('resize', removeTooltip); }
+  window.addEventListener('scroll', removeTooltip, { passive: true });
+  window.addEventListener('resize', removeTooltip);
 }
 
 function syncStatusBarWithSuppliers() {

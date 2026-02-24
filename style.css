@@ -4899,6 +4899,8 @@ select.detail-input::-ms-expand {
   min-height: 0;
   overflow: hidden;
   width: 100%;
+  flex: 1;
+  /* permite que a seção de analytics cresça e ocupe espaço disponível */
 }
 
 .analytics-section-title {
@@ -5136,7 +5138,10 @@ select.detail-input::-ms-expand {
   gap: 0;
   padding: 0;
   margin-bottom: 0;
-  flex-shrink: 0;
+  flex: 1;
+  /* expande verticalmente dentro do timeline-card */
+  min-height: 0;
+  overflow: auto;
 }
 
 .timeline-card {
@@ -5146,6 +5151,11 @@ select.detail-input::-ms-expand {
   padding: 14px 18px;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
   margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  /* ocupa o espaço vertical disponível */
+  min-height: 0;
 }
 
 .steps-matrix-table {
@@ -5212,6 +5222,65 @@ select.detail-input::-ms-expand {
   border-radius: 12px;
 }
 
+/* container inside active cell for supplier bars*/
+.suppliers-bar {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  overflow-x: auto;
+  padding: 2px 6px;
+  white-space: nowrap;
+  border-radius: 6px;
+}
+
+.suppliers-bar {
+  /* hide native scrollbars by default */
+  scrollbar-width: none;
+  /* Firefox */
+  -ms-overflow-style: none;
+  /* IE 10+ */
+}
+
+.suppliers-bar::-webkit-scrollbar {
+  height: 0;
+  /* hide on webkit by default */
+}
+
+.suppliers-bar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.suppliers-bar::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 4px;
+}
+
+/* show scrollbars only on hover */
+.suppliers-bar:hover {
+  scrollbar-width: thin;
+}
+
+.suppliers-bar:hover::-webkit-scrollbar {
+  height: 4px;
+}
+
+.suppliers-bar:hover::-webkit-scrollbar-thumb {
+  background: #ddd;
+}
+
+.suppliers-bar-item {
+  display: inline-block;
+  flex-shrink: 0;
+  padding: 2px 6px;
+  margin-right: 4px;
+  background: #ffffffcc;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 10px;
+  color: #333;
+  line-height: 1;
+}
+
 .matrix-month--current {
   position: relative;
   overflow: visible;
@@ -5232,9 +5301,20 @@ select.detail-input::-ms-expand {
 }
 
 /* Hover highlight row */
-.steps-matrix-table tbody tr.matrix-row--highlight .matrix-cell--active {
+.steps-matrix-table tbody tr.matrix-row--highlight .matrix-cell--active,
+.matrix-cell.matrix-cell--active:hover {
   background: #c8102e;
-  transform: scaleY(1.15);
+  box-shadow: 0 2px 6px rgba(200, 16, 46, 0.3);
+  /* manter tamanho; alterar apenas cor */
+}
+
+/* Quando a linha estiver destacada, não altere o visual dos cartões internos (.suppliers-bar-item)
+   para preservar o contraste e legibilidade; apenas a célula (container) muda de cor. */
+.steps-matrix-table tbody tr.matrix-row--highlight .matrix-cell--active .suppliers-bar-item {
+  /* manter o estilo original dos itens da barra */
+  background: #ffffffcc;
+  color: #333;
+  border-color: #ccc;
 }
 
 .steps-matrix-table tbody tr.matrix-row--highlight .matrix-step-label {
@@ -5257,7 +5337,8 @@ select.detail-input::-ms-expand {
   border-radius: 10px;
   display: grid;
   grid-template-rows: subgrid;
-  grid-row: span 6;
+  grid-row: span 5;
+  /* reduzido: último bloco (fornecedores) removido na view analytics */
   gap: 10px;
   padding: 14px;
   transition: all 0.2s ease;
@@ -5265,8 +5346,62 @@ select.detail-input::-ms-expand {
   min-width: 0;
 }
 
+/* Aumenta levemente o card do step quando a barra correspondente é hoverada */
+.step-column.step-column--hovered,
 .step-column:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+  transform: scale(1.02);
+  z-index: 5;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+  border-color: #c8102e;
+}
+
+/* Hover styling for suppliers-bar has been disabled to keep cards static */
+/* .suppliers-bar.suppliers-bar--hover {
+  background: transparent;
+  box-shadow: none;
+  border: none;
+}
+
+.suppliers-bar.suppliers-bar--hover .suppliers-bar-item {
+  background: #c8102e;
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.18);
+} */
+
+/* ensure individual supplier items never change on hover */
+.suppliers-bar-item {
+  transition: none;
+}
+
+/* Tooltip para lista de suppliers */
+.suppliers-tooltip {
+  position: absolute;
+  background: #222;
+  color: #fff;
+  padding: 8px 12px;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  font-size: 13px;
+  z-index: 2000;
+  max-width: 320px;
+}
+
+.suppliers-tooltip-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.suppliers-tooltip-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.suppliers-tooltip-item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
 }
 
 .step-column-header {
@@ -5354,74 +5489,7 @@ select.detail-input::-ms-expand {
   font-weight: 600;
 }
 
-.step-column-suppliers {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  overflow: hidden;
-  min-height: 0;
-}
-
-
-
-.step-suppliers-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
-  padding-right: 2px;
-}
-
-.step-suppliers-list::-webkit-scrollbar {
-  width: 4px;
-}
-
-.step-suppliers-list::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.step-suppliers-list::-webkit-scrollbar-thumb {
-  background: #ddd;
-  border-radius: 4px;
-}
-
-.step-supplier-card {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 6px;
-  padding: 6px 8px;
-  background: #f8f9fa;
-  border-radius: 6px;
-  border: 1px solid #eee;
-  transition: all 0.15s ease;
-}
-
-.step-supplier-card:hover {
-  background: #f0f0f0;
-  border-color: #ddd;
-}
-
-.step-supplier-name {
-  font-size: 11px;
-  font-weight: 600;
-  color: #444;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}
-
-
-.step-no-suppliers {
-  font-size: 11px;
-  color: #bbb;
-  text-align: center;
-  padding: 12px 4px;
-  font-style: italic;
-}
+/* Removido: estilos antigos da lista de cards de fornecedores (não utilizados) */
 
 /* Status Legend */
 .status-legend {
