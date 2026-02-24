@@ -1170,7 +1170,9 @@ textarea {
 }
 
 .btn-template i {
-  font-size: 16px;
+  font-size: 18px; /* slightly larger icon */
+  line-height: 1; /* ensure icon doesn't affect button height */
+  vertical-align: middle;
 }
 
 .btn-template:hover i {
