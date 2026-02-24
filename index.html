@@ -1,929 +1,993 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <meta charset="UTF-8">
-    <title>Tooling Control App</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="https://unpkg.com/@phosphor-icons/web"></script>
-  </head>
-  <body>
-    <!-- Custom Title Bar -->
-    <div class="custom-titlebar">
-      <div class="titlebar-drag-region">
-      </div>
-      <div class="titlebar-controls">
-        <button class="titlebar-button" id="minimizeBtn" title="Minimize">
-          <i class="ph ph-minus"></i>
-        </button>
-        <button class="titlebar-button" id="maximizeBtn" title="Maximize">
-          <i class="ph ph-square"></i>
-        </button>
-        <button class="titlebar-button close-button" id="closeBtn" title="Close">
-          <i class="ph ph-x"></i>
-        </button>
-      </div>
+
+<head>
+  <meta charset="UTF-8">
+  <title>Tooling Control App</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="https://unpkg.com/@phosphor-icons/web"></script>
+</head>
+
+<body>
+  <!-- Custom Title Bar -->
+  <div class="custom-titlebar">
+    <div class="titlebar-drag-region">
     </div>
+    <div class="titlebar-controls">
+      <button class="titlebar-button" id="minimizeBtn" title="Minimize">
+        <i class="ph ph-minus"></i>
+      </button>
+      <button class="titlebar-button" id="maximizeBtn" title="Maximize">
+        <i class="ph ph-square"></i>
+      </button>
+      <button class="titlebar-button close-button" id="closeBtn" title="Close">
+        <i class="ph ph-x"></i>
+      </button>
+    </div>
+  </div>
 
-    <!-- Header with Logo and Tabs -->
-    <header class="app-header">
-      <nav class="app-tabs">
-        <button class="tab-button active" data-tab="tooling">
-          <i class="ph ph-wrench"></i>
-          <span>Tooling</span>
-        </button>
-        <button class="tab-button" data-tab="analytics">
-          <i class="ph ph-chart-bar"></i>
-          <span>Analytics</span>
-        </button>
-        <button class="tab-button" data-tab="settings">
-          <i class="ph ph-gear"></i>
-          <span>Settings</span>
-        </button>
-      </nav>
-      <div class="app-brand">
+  <!-- Header with Logo and Tabs -->
+  <header class="app-header">
+    <nav class="app-tabs">
+      <button class="tab-button active" data-tab="tooling">
         <i class="ph ph-wrench"></i>
-        <span>Tooling Control App</span>
-      </div>
-    </header>
+        <span>Tooling</span>
+      </button>
+      <button class="tab-button" data-tab="analytics">
+        <i class="ph ph-chart-bar"></i>
+        <span>Analytics</span>
+      </button>
+      <button class="tab-button" data-tab="settings">
+        <i class="ph ph-gear"></i>
+        <span>Settings</span>
+      </button>
+    </nav>
+    <div class="app-brand">
+      <i class="ph ph-wrench"></i>
+      <span>Tooling Control App</span>
+    </div>
+  </header>
 
-    <!-- Layout Principal -->
-    <div class="app-container">
-      <!-- Sidebar - Tooling tab only -->
-      <aside class="sidebar" id="sidebar">
-        <div class="sidebar-content">
-          <div class="filter-section">
-            <div class="filter-header">
-              <i class="ph ph-factory"></i>
-              <span>Suppliers</span>
-              <button class="filter-active-badge" id="filterActiveBadge" style="display: none;" type="button" title="Clear filter" onclick="clearExpirationFilter()">
-                <i class="ph ph-x"></i>
-              </button>
-              <button class="supplier-filter-btn" id="expirationFilterBtn" type="button" title="Filter expired/expiring tooling">
-                <i class="ph ph-funnel"></i>
-              </button>
-              <button class="supplier-menu-btn" id="supplierMenuBtn" type="button" title="Export/Import options">
-                <i class="ph ph-dots-three-vertical"></i>
-              </button>
-              <button class="sidebar-toggle-btn" id="sidebarToggleBtn" onclick="toggleSidebar()" title="Toggle sidebar">
-                <i class="ph ph-caret-left" id="sidebarToggleIcon"></i>
-              </button>
-            </div>
-            <div class="steps-filter-container">
-              <select id="stepsFilter" class="steps-filter-select" onchange="filterToolingByStep()">
-                <option value="">All Steps</option>
-                <option value="1">1 - Control Data Update</option>
-                <option value="2">2 - Critical Tooling Identification</option>
-                <option value="3">3 - Supplier Validation Request</option>
-                <option value="4">4 - Critical Tooling Reassessment</option>
-                <option value="5">5 - On-Site Technical Analysis</option>
-                <option value="6">6 - Technical Confirmation</option>
-                <option value="7">7 - Supply Continuity Strategy</option>
-              </select>
-            </div>
-            <div class="supplier-list scrollable" id="supplierList">
-              <!-- Cards de fornecedores serão inseridos aqui -->
+  <!-- Layout Principal -->
+  <div class="app-container">
+    <!-- Sidebar - Tooling tab only -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-content">
+        <div class="filter-section">
+          <div class="filter-header">
+            <i class="ph ph-factory"></i>
+            <span>Suppliers</span>
+            <button class="filter-active-badge" id="filterActiveBadge" style="display: none;" type="button"
+              title="Clear filter" onclick="clearExpirationFilter()">
+              <i class="ph ph-x"></i>
+            </button>
+            <button class="supplier-filter-btn" id="expirationFilterBtn" type="button"
+              title="Filter expired/expiring tooling">
+              <i class="ph ph-funnel"></i>
+            </button>
+            <button class="supplier-menu-btn" id="supplierMenuBtn" type="button" title="Export/Import options">
+              <i class="ph ph-dots-three-vertical"></i>
+            </button>
+            <button class="sidebar-toggle-btn" id="sidebarToggleBtn" onclick="toggleSidebar()" title="Toggle sidebar">
+              <i class="ph ph-caret-left" id="sidebarToggleIcon"></i>
+            </button>
+          </div>
+          <div class="steps-filter-container">
+            <select id="stepsFilter" class="steps-filter-select" onchange="filterToolingByStep()">
+              <option value="">All Steps</option>
+              <option value="1">1 - Control Data Update</option>
+              <option value="2">2 - Critical Tooling Identification</option>
+              <option value="3">3 - Supplier Validation Request</option>
+              <option value="4">4 - Critical Tooling Reassessment</option>
+              <option value="5">5 - On-Site Technical Analysis</option>
+              <option value="6">6 - Technical Confirmation</option>
+              <option value="7">7 - Supply Continuity Strategy</option>
+            </select>
+          </div>
+          <div class="supplier-list scrollable" id="supplierList">
+            <!-- Cards de fornecedores serão inseridos aqui -->
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Conteúdo Principal -->
+    <main class="main-content">
+      <!-- Tab Tooling -->
+      <div class="tab-content active" id="tab-tooling">
+        <!-- Attachments Section -->
+        <div class="attachments-container" id="attachmentsContainer" style="display: none;">
+          <div class="attachments-section" id="attachmentsDropzone">
+            <div class="attachments-header">
+              <div class="attachments-title">
+                <div class="attachments-title-content">
+                  <div class="attachments-supplier-name-wrap">
+                    <span class="attachments-supplier-name" id="currentSupplierName">Selected supplier</span>
+                    <button class="attachments-rename-btn" id="renameSupplierBtn" type="button"
+                      title="Renomear fornecedor"
+                      onclick="event.stopPropagation(); promptRenameSupplier(document.getElementById('currentSupplierName').textContent)"
+                      disabled>
+                      <i class="ph ph-pencil-simple"></i>
+                    </button>
+                  </div>
+                  <button class="attachments-upload-trigger" id="attachmentsUploadTrigger" type="button"
+                    onclick="uploadAttachment()" disabled>
+                    <i class="ph ph-upload-simple"></i>
+                    <span id="attachmentsMessageLabel">Click or drop attachments here.</span>
+                  </button>
+                </div>
+              </div>
+              <div class="attachments-header-actions">
+                <!-- View mode switch removed - spreadsheet only with expandable rows -->
+                <button class="supplier-data-btn" id="toggleSelectModeBtn" type="button" title="Select items for export"
+                  onclick="toggleSelectionMode()" disabled>
+                  <i class="ph ph-check-square"></i>
+                </button>
+                <div class="selection-actions" id="selectionActions" style="display: none;">
+                  <button class="selection-action-btn" type="button" title="Select all" onclick="selectAllTooling()">
+                    <i class="ph ph-check-square"></i>
+                  </button>
+                  <button class="selection-action-btn" type="button" title="Deselect all"
+                    onclick="deselectAllTooling()">
+                    <i class="ph ph-square"></i>
+                  </button>
+                  <span class="selection-counter" id="selectionCounter">0 items selected</span>
+                  <button class="selection-export-btn" type="button" title="Export selected"
+                    onclick="exportSelectedItems()">
+                    <i class="ph ph-export"></i>
+                    <span>Export</span>
+                  </button>
+                </div>
+                <button class="supplier-data-btn" id="exportSupplierBtn" type="button" title="Export supplier data"
+                  onclick="exportSupplierData()" disabled>
+                  <i class="ph ph-export"></i>
+                </button>
+                <button class="supplier-data-btn" id="importSupplierBtn" type="button" title="Import supplier data"
+                  onclick="importSupplierData()" disabled>
+                  <i class="ph ph-download"></i>
+                </button>
+                <button class="supplier-data-btn" id="supplierCommentBtn" type="button" title="Supplier comments"
+                  onclick="openSupplierComments()" disabled>
+                  <i class="ph ph-chat-circle-text"></i>
+                </button>
+                <button class="attachments-counter" id="attachmentsCountBtn" type="button" title="View attachments"
+                  onclick="openAttachmentsModal()">
+                  <i class="ph ph-files"></i>
+                  <span class="attachments-counter-badge" id="attachmentsCountLabel">0</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      </aside>
 
-      <!-- Conteúdo Principal -->
-      <main class="main-content">
-        <!-- Tab Tooling -->
-        <div class="tab-content active" id="tab-tooling">
-          <!-- Attachments Section -->
-          <div class="attachments-container" id="attachmentsContainer" style="display: none;">
-              <div class="attachments-section" id="attachmentsDropzone">
-              <div class="attachments-header">
-                <div class="attachments-title">
-                  <div class="attachments-title-content">
-                    <span class="attachments-supplier-name" id="currentSupplierName">Selected supplier</span>
-                    <button class="attachments-upload-trigger" id="attachmentsUploadTrigger" type="button" onclick="uploadAttachment()" disabled>
-                      <i class="ph ph-upload-simple"></i>
-                      <span id="attachmentsMessageLabel">Click or drop attachments here.</span>
-                    </button>
-                  </div>
-                </div>
-                <div class="attachments-header-actions">
-                  <!-- View mode switch removed - spreadsheet only with expandable rows -->
-                  <button class="supplier-data-btn" id="toggleSelectModeBtn" type="button" title="Select items for export" onclick="toggleSelectionMode()" disabled>
-                    <i class="ph ph-check-square"></i>
-                  </button>
-                  <div class="selection-actions" id="selectionActions" style="display: none;">
-                    <button class="selection-action-btn" type="button" title="Select all" onclick="selectAllTooling()">
-                      <i class="ph ph-check-square"></i>
-                    </button>
-                    <button class="selection-action-btn" type="button" title="Deselect all" onclick="deselectAllTooling()">
-                      <i class="ph ph-square"></i>
-                    </button>
-                    <span class="selection-counter" id="selectionCounter">0 items selected</span>
-                    <button class="selection-export-btn" type="button" title="Export selected" onclick="exportSelectedItems()">
-                      <i class="ph ph-export"></i>
-                      <span>Export</span>
-                    </button>
-                  </div>
-                  <button class="supplier-data-btn" id="exportSupplierBtn" type="button" title="Export supplier data" onclick="exportSupplierData()" disabled>
-                    <i class="ph ph-export"></i>
-                  </button>
-                  <button class="supplier-data-btn" id="importSupplierBtn" type="button" title="Import supplier data" onclick="importSupplierData()" disabled>
-                    <i class="ph ph-download"></i>
-                  </button>
-                  <button class="supplier-data-btn" id="supplierCommentBtn" type="button" title="Supplier comments" onclick="openSupplierComments()" disabled>
-                    <i class="ph ph-chat-circle-text"></i>
-                  </button>
-                  <button class="attachments-counter" id="attachmentsCountBtn" type="button" title="View attachments" onclick="openAttachmentsModal()">
-                    <i class="ph ph-files"></i>
-                    <span class="attachments-counter-badge" id="attachmentsCountLabel">0</span>
-                  </button>
-                </div>
-              </div>
+        <!-- Attachments modal -->
+        <div class="modal-overlay" id="attachmentsModalOverlay">
+          <div class="modal-card modal-card-large">
+            <div class="modal-icon">
+              <i class="ph ph-paperclip"></i>
+            </div>
+            <h3>Attachments for <span class="modal-highlight" id="attachmentsModalSupplier">Supplier</span></h3>
+            <div class="attachments-modal-content" id="attachmentsModalContent">
+              <div class="attachments-modal-empty" id="attachmentsModalEmpty">No files attached yet.</div>
+              <div class="attachments-modal-list scrollable" id="attachmentsModalList"></div>
+            </div>
+            <div class="modal-actions">
+              <button class="btn-secondary" type="button" onclick="openAttachmentsFolder()"
+                title="Open attachments folder">
+                <i class="ph ph-folder-open"></i> Open Folder
+              </button>
+              <button class="btn-secondary" type="button" onclick="closeAttachmentsModal()">Close</button>
             </div>
           </div>
+        </div>
 
-          <!-- Attachments modal -->
-          <div class="modal-overlay" id="attachmentsModalOverlay">
-            <div class="modal-card modal-card-large">
+        <!-- Replacement timeline overlay -->
+        <div class="modal-overlay replacement-timeline-overlay" id="replacementTimelineOverlay">
+          <div class="replacement-graph-container" id="replacementGraphContainer">
+            <div class="replacement-graph-header">
+              <div>
+                <p class="replacement-graph-eyebrow">Replacement chain</p>
+                <h3 id="replacementTimelineTitle">Linked tooling</h3>
+              </div>
+              <button class="replacement-close-btn" type="button" onclick="closeReplacementTimelineOverlay()"
+                title="Close">
+                <i class="ph ph-x"></i>
+              </button>
+            </div>
+            <div class="replacement-graph-viewport" id="replacementGraphViewport">
+              <div class="timeline-loading" id="replacementTimelineLoading">Loading chain…</div>
+              <div class="timeline-empty" id="replacementTimelineEmpty">No linked tooling found.</div>
+              <canvas class="replacement-grid-canvas" id="replacementGridCanvas"></canvas>
+              <canvas class="replacement-connections-canvas" id="replacementConnectionsCanvas"></canvas>
+              <div class="replacement-graph-nodes" id="replacementTimelineList"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Replacement picker overlay -->
+        <div class="modal-overlay replacement-picker-overlay" id="replacementPickerOverlay">
+          <div class="replacement-picker-card">
+            <div class="replacement-picker-header">
+              <div>
+                <p class="replacement-picker-eyebrow" data-replacement-overlay-title>Select replacement tooling</p>
+                <h3 class="replacement-picker-title" data-replacement-overlay-subtitle>Card</h3>
+              </div>
+              <button class="replacement-close-btn" type="button" onclick="closeReplacementPickerOverlay()"
+                title="Close">
+                <i class="ph ph-x"></i>
+              </button>
+            </div>
+            <div class="replacement-picker-search">
+              <i class="ph ph-magnifying-glass"></i>
+              <input type="text" placeholder="Search by ID, PN, supplier..." data-replacement-overlay-search />
+            </div>
+            <div class="replacement-picker-body scrollable" data-replacement-overlay-list>
+              <!-- Options injected dynamically -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Supplier Comments Modal -->
+        <div class="modal-overlay" id="supplierCommentsModal">
+          <div class="modal-card modal-card-comments">
+            <div class="modal-header">
               <div class="modal-icon">
-                <i class="ph ph-paperclip"></i>
+                <i class="ph ph-note-pencil"></i>
               </div>
-              <h3>Attachments for <span class="modal-highlight" id="attachmentsModalSupplier">Supplier</span></h3>
-              <div class="attachments-modal-content" id="attachmentsModalContent">
-                <div class="attachments-modal-empty" id="attachmentsModalEmpty">No files attached yet.</div>
-                <div class="attachments-modal-list scrollable" id="attachmentsModalList"></div>
-              </div>
-              <div class="modal-actions">
-                <button class="btn-secondary" type="button" onclick="openAttachmentsFolder()" title="Open attachments folder">
-                  <i class="ph ph-folder-open"></i> Open Folder
-                </button>
-                <button class="btn-secondary" type="button" onclick="closeAttachmentsModal()">Close</button>
-              </div>
+              <h3 class="modal-title">Ações</h3>
+              <p class="modal-subtitle" id="supplierCommentsSubtitle">Loading...</p>
+              <button class="modal-close-btn" type="button" onclick="closeSupplierCommentsModal()" title="Close">
+                <i class="ph ph-x"></i>
+              </button>
             </div>
-          </div>
+            <div class="modal-body simple-comments">
+              <div class="comments-modal-grid">
+                <!-- Left column: messages and new message input -->
+                <div class="comments-column">
+                  <div class="comments-list scrollable" id="commentsList">
+                    <!-- Mensagens serão renderizadas aqui -->
+                  </div>
 
-          <!-- Replacement timeline overlay -->
-          <div class="modal-overlay replacement-timeline-overlay" id="replacementTimelineOverlay">
-            <div class="replacement-graph-container" id="replacementGraphContainer">
-              <div class="replacement-graph-header">
-                <div>
-                  <p class="replacement-graph-eyebrow">Replacement chain</p>
-                  <h3 id="replacementTimelineTitle">Linked tooling</h3>
+                  <div class="new-message-wrap">
+                    <textarea id="newSupplierMessage" class="message-input"
+                      placeholder="Adicionar ação a ser tomada..."></textarea>
+                    <div class="new-message-meta">
+                      <label for="newSupplierDate">Data (você deve inserir):</label>
+                      <input type="date" id="newSupplierDate" class="comments-input" />
+                    </div>
+                    <div class="new-message-actions">
+                      <button class="btn btn-secondary" type="button"
+                        onclick="closeSupplierCommentsModal()">Fechar</button>
+                      <button class="btn btn-primary" id="addSupplierMessageBtn" type="button"
+                        onclick="addSupplierMessage()">+ Adicionar</button>
+                    </div>
+                  </div>
                 </div>
-                <button class="replacement-close-btn" type="button" onclick="closeReplacementTimelineOverlay()" title="Close">
-                  <i class="ph ph-x"></i>
-                </button>
-              </div>
-              <div class="replacement-graph-viewport" id="replacementGraphViewport">
-                <div class="timeline-loading" id="replacementTimelineLoading">Loading chain…</div>
-                <div class="timeline-empty" id="replacementTimelineEmpty">No linked tooling found.</div>
-                <canvas class="replacement-grid-canvas" id="replacementGridCanvas"></canvas>
-                <canvas class="replacement-connections-canvas" id="replacementConnectionsCanvas"></canvas>
-                <div class="replacement-graph-nodes" id="replacementTimelineList"></div>
-              </div>
-            </div>
-          </div>
 
-          <!-- Replacement picker overlay -->
-          <div class="modal-overlay replacement-picker-overlay" id="replacementPickerOverlay">
-            <div class="replacement-picker-card">
-              <div class="replacement-picker-header">
-                <div>
-                  <p class="replacement-picker-eyebrow" data-replacement-overlay-title>Select replacement tooling</p>
-                  <h3 class="replacement-picker-title" data-replacement-overlay-subtitle>Card</h3>
-                </div>
-                <button class="replacement-close-btn" type="button" onclick="closeReplacementPickerOverlay()" title="Close">
-                  <i class="ph ph-x"></i>
-                </button>
-              </div>
-              <div class="replacement-picker-search">
-                <i class="ph ph-magnifying-glass"></i>
-                <input type="text" placeholder="Search by ID, PN, supplier..." data-replacement-overlay-search />
-              </div>
-              <div class="replacement-picker-body scrollable" data-replacement-overlay-list>
-                <!-- Options injected dynamically -->
-              </div>
-            </div>
-          </div>
-
-          <!-- Supplier Comments Modal -->
-          <div class="modal-overlay" id="supplierCommentsModal">
-            <div class="modal-card modal-card-comments">
-              <div class="modal-header">
-                <div class="modal-icon">
-                  <i class="ph ph-note-pencil"></i>
-                </div>
-                <h3 class="modal-title">Comments</h3>
-                <p class="modal-subtitle" id="supplierCommentsSubtitle">Loading...</p>
-                <button class="modal-close-btn" type="button" onclick="closeSupplierCommentsModal()" title="Close">
-                  <i class="ph ph-x"></i>
-                </button>
-              </div>
-              <div class="modal-body simple-comments">
-                <div class="comment-field-group">
-                  <label for="supplierNotesText">Notes & Observations</label>
-                  <textarea class="comments-textarea" id="supplierNotesText" placeholder="Write your notes here..."></textarea>
-                </div>
-                
-                <div class="comment-field-group">
-                  <label for="supplierContactText">Supplier Contact</label>
-                  <textarea class="comments-textarea" id="supplierContactText" placeholder="Name, email, phone..."></textarea>
-                </div>
-                
-                <div class="comment-fields-grid">
+                <!-- Right column: responsáveis -->
+                <aside class="responsibles-column">
+                  <h4 class="responsibles-title">Responsáveis</h4>
+                  <div class="comment-field-group">
+                    <label for="supplierContactText">Supplier Contact</label>
+                    <textarea class="comments-textarea" id="supplierContactText"
+                      placeholder="Name, email, phone..."></textarea>
+                  </div>
                   <div class="comment-field-group">
                     <label for="supplyContinuityText">Supply Continuity</label>
-                    <input type="text" class="comments-input" id="supplyContinuityText" placeholder="Supply Continuity name...">
+                    <input type="text" class="comments-input" id="supplyContinuityText"
+                      placeholder="Supply Continuity name...">
                   </div>
-                  
                   <div class="comment-field-group">
                     <label for="sqieText">SQIE</label>
                     <input type="text" class="comments-input" id="sqieText" placeholder="SQIE name...">
                   </div>
-                  
                   <div class="comment-field-group">
                     <label for="plannerText">Planner</label>
                     <input type="text" class="comments-input" id="plannerText" placeholder="Planner name...">
                   </div>
-                  
                   <div class="comment-field-group">
                     <label for="sourcingText">Sourcing</label>
                     <input type="text" class="comments-input" id="sourcingText" placeholder="Sourcing name...">
                   </div>
-                </div>
-              </div>
-              <div class="modal-footer">
-                <button class="btn btn-secondary" onclick="closeSupplierCommentsModal()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveSupplierComments()">
-                  <i class="ph ph-check"></i> Save
-                </button>
+                </aside>
               </div>
             </div>
-          </div>
-          
-          <div class="content-body scrollable">
-            <div class="empty-state" id="emptyState">
-              <i class="ph ph-package"></i>
-              <h3>No supplier selected</h3>
-              <p>Select a supplier on the left to view the tooling.</p>
-              <p class="empty-state-hint">New supplier? Export the template and import it here.</p>
-              <div class="empty-state-actions">
-                <button class="btn btn-template" onclick="exportEmptyTemplate()" title="Export empty template for new supplier">
-                  <i class="ph ph-download-simple"></i>
-                  Export Template
-                </button>
-                <button class="btn btn-template" onclick="importNewSupplier()" title="Import new supplier from template">
-                  <i class="ph ph-upload-simple"></i>
-                  Import Template
-                </button>
-              </div>
-            </div>
-            <div class="tooling-list" id="toolingList" style="display: none;">
-              <!-- Lista de ferramentais será preenchida dinamicamente -->
-            </div>
-            <div class="spreadsheet-container" id="spreadsheetContainer" style="display: none;">
-              <table class="spreadsheet-table" id="spreadsheetTable">
-                <thead>
-                  <tr>
-                    <th class="col-checkbox" id="spreadsheetCheckboxHeader" style="display: none;">
-                      <div class="spreadsheet-checkbox-all" onclick="toggleSpreadsheetSelectAll()" title="Select all / Deselect all">
-                        <i class="ph ph-square" id="spreadsheetSelectAllIcon"></i>
-                      </div>
-                    </th>
-                    <th class="col-id" data-filterable="id">
-                      <div class="th-content">
-                        <span>ID</span>
-                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'id')" title="Filter">
-                          <i class="ph ph-funnel"></i>
-                        </button>
-                      </div>
-                    </th>
-                    <th class="col-pn" data-filterable="pn">
-                      <div class="th-content">
-                        <span>PN</span>
-                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'pn')" title="Filter">
-                          <i class="ph ph-funnel"></i>
-                        </button>
-                      </div>
-                    </th>
-                    <th class="col-tool-desc" data-filterable="tool_description">
-                      <div class="th-content">
-                        <span>Tooling Description</span>
-                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'tool_description')" title="Filter">
-                          <i class="ph ph-funnel"></i>
-                        </button>
-                      </div>
-                    </th>
-                    <th class="col-life" data-filterable="tooling_life_qty">
-                      <div class="th-content">
-                        <span>Tooling Life</span>
-                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'tooling_life_qty')" title="Filter">
-                          <i class="ph ph-funnel"></i>
-                        </button>
-                      </div>
-                    </th>
-                    <th class="col-produced" data-filterable="produced">
-                      <div class="th-content">
-                        <span>Produced</span>
-                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'produced')" title="Filter">
-                          <i class="ph ph-funnel"></i>
-                        </button>
-                      </div>
-                    </th>
-                    <th class="col-volume" data-filterable="annual_volume_forecast">
-                      <div class="th-content">
-                        <span>Annual Volume</span>
-                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'annual_volume_forecast')" title="Filter">
-                          <i class="ph ph-funnel"></i>
-                        </button>
-                      </div>
-                    </th>
-                    <th class="col-exp-date" data-sortable="expiration">
-                      <div class="th-content">
-                        <span>Expiration</span>
-                        <button class="column-sort-btn" onclick="toggleColumnSort(event, 'expiration')" title="Sort">
-                          <i class="ph ph-arrows-down-up"></i>
-                        </button>
-                      </div>
-                    </th>
-                    <th class="col-steps" data-filterable="steps">
-                      <div class="th-content">
-                        <span>Steps</span>
-                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'steps')" title="Filter">
-                          <i class="ph ph-funnel"></i>
-                        </button>
-                      </div>
-                    </th>
-                    <th class="col-status" data-filterable="status">
-                      <div class="th-content">
-                        <span>Status</span>
-                        <button class="column-filter-btn" onclick="openColumnFilter(event, 'status')" title="Filter">
-                          <i class="ph ph-funnel"></i>
-                        </button>
-                      </div>
-                    </th>
-                    <th class="col-progress" data-sortable="progress">
-                      <div class="th-content">
-                        <span>Tool. Life</span>
-                        <button class="column-sort-btn" onclick="toggleColumnSort(event, 'progress')" title="Sort">
-                          <i class="ph ph-arrows-down-up"></i>
-                        </button>
-                      </div>
-                    </th>
-                    <th class="col-icons">Info</th>
-                    <th class="col-expand"></th>
-                  </tr>
-                </thead>
-                <tbody id="spreadsheetBody">
-                  <!-- Linhas serão preenchidas dinamicamente -->
-                </tbody>
-              </table>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="closeSupplierCommentsModal()">Cancelar</button>
+              <button class="btn btn-primary" onclick="saveSupplierComments()">
+                <i class="ph ph-check"></i> Salvar
+              </button>
             </div>
           </div>
         </div>
-        
-        <!-- Floating buttons -->
-        <div class="floating-actions">
-          <button class="floating-clear-filter-btn" id="floatingClearFilterBtn" onclick="clearColumnFilters()" title="Clear all filters" style="display: none;">
-            <i class="ph ph-funnel-x"></i>
-          </button>
-        </div>
-        
-        <!-- Search overlay -->
-        <div class="search-overlay" id="searchOverlay">
-          <div class="search-overlay-content">
-            <div class="search-overlay-header">
-              <i class="ph ph-magnifying-glass"></i>
-              <input type="text" id="searchInput" placeholder="Type to search..." autofocus>
-              <button class="btn-close-search" id="searchActionBtn" onclick="handleSearchAction()">
+
+        <!-- Rename Supplier Modal -->
+        <div class="modal-overlay" id="renameSupplierModal">
+          <div class="modal-card modal-card-small modal-card-rename">
+            <div class="modal-header">
+              <div class="modal-icon">
+                <i class="ph ph-pencil-simple"></i>
+              </div>
+              <h3 class="modal-title">Renomear fornecedor</h3>
+              <p class="modal-subtitle" id="renameSupplierSubtitle">Fornecedor</p>
+              <button class="modal-close-btn" type="button" onclick="closeRenameSupplierModal()" title="Close">
                 <i class="ph ph-x"></i>
               </button>
             </div>
-          </div>
-        </div>
-
-        <!-- Delete confirmation modal -->
-        <div class="modal-overlay" id="deleteConfirmOverlay">
-          <div class="delete-modal">
-            <div class="delete-modal-icon">
-              <i class="ph ph-trash"></i>
-            </div>
-            <div class="delete-modal-content">
-              <h3 class="delete-modal-title">Delete Tooling</h3>
-              <p class="delete-modal-description">You are about to delete <strong id="deleteItemDescription"></strong>. This action cannot be undone.</p>
-              <div class="delete-modal-code-box">
-                <span class="delete-code-label">Enter confirmation code</span>
-                <span class="delete-code-value" id="deleteConfirmCode"></span>
+            <div class="modal-body rename-supplier-body">
+              <label for="renameSupplierInput">Novo nome</label>
+              <input type="text" class="comments-input" id="renameSupplierInput" placeholder="Digite o novo nome" />
+              <div class="rename-supplier-error" id="renameSupplierError">O nome do fornecedor não pode ficar vazio.
               </div>
-              <input type="text" id="deleteConfirmInput" class="delete-modal-input" maxlength="3" placeholder="000" autocomplete="off"/>
             </div>
-            <div class="delete-modal-actions">
-              <button class="delete-btn-cancel" type="button" onclick="cancelDeleteTooling()">
-                <i class="ph ph-x"></i>
-                <span>Cancel</span>
-              </button>
-              <button class="delete-btn-confirm" type="button" onclick="handleDeleteConfirmation()">
-                <i class="ph ph-trash"></i>
-                <span>Delete</span>
+            <div class="modal-footer">
+              <button class="btn btn-secondary" onclick="closeRenameSupplierModal()">Cancelar</button>
+              <button class="btn btn-primary" onclick="confirmRenameSupplier()">
+                <i class="ph ph-check"></i> Salvar
               </button>
             </div>
           </div>
         </div>
 
-        <!-- Comment delete modal -->
-        <div class="modal-overlay" id="commentDeleteOverlay">
-          <div class="comment-delete-modal">
-            <div class="comment-delete-icon">
-              <i class="ph ph-chats-circle"></i>
-            </div>
-            <div class="comment-delete-content">
-              <div class="comment-delete-header">
-                <h3>Delete Comment</h3>
-                <p>This comment will be removed permanently from the tooling record below.</p>
-                <div class="comment-delete-context" id="commentDeleteContext">Tooling —</div>
-              </div>
-              <div class="comment-delete-preview">
-                <div class="comment-delete-preview-meta">
-                  <i class="ph ph-clock"></i>
-                  <span id="commentDeleteDate">--/--/----</span>
-                </div>
-                <p class="comment-delete-preview-text" id="commentDeleteText">Select a comment to preview its content.</p>
-              </div>
-            </div>
-            <div class="comment-delete-actions">
-              <button type="button" class="comment-delete-btn cancel" onclick="closeCommentDeleteModal()">
-                <i class="ph ph-arrow-counter-clockwise"></i>
-                <span>Keep comment</span>
-              </button>
-              <button type="button" class="comment-delete-btn confirm" id="commentDeleteConfirmBtn" onclick="confirmCommentDelete()">
-                <i class="ph ph-trash"></i>
-                <span>Delete comment</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Clear step history modal -->
-        <div class="modal-overlay" id="clearStepHistoryOverlay">
-          <div class="delete-modal">
-            <div class="delete-modal-icon clear-step-icon">
-              <i class="ph ph-path"></i>
-            </div>
-            <div class="delete-modal-content">
-              <h3 class="delete-modal-title">Clear Step History</h3>
-              <p class="delete-modal-description">You are about to clear all step tracking history for <strong id="clearStepItemDescription"></strong>. This action cannot be undone.</p>
-            </div>
-            <div class="delete-modal-actions">
-              <button class="delete-btn-cancel" type="button" onclick="cancelClearStepHistory()">
-                <i class="ph ph-x"></i>
-                <span>Cancel</span>
-              </button>
-              <button class="delete-btn-confirm" type="button" onclick="confirmClearStepHistory()">
-                <i class="ph ph-trash"></i>
-                <span>Clear History</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Clear ALL step history modal -->
-        <div class="modal-overlay" id="clearAllStepHistoryOverlay">
-          <div class="delete-modal">
-            <div class="delete-modal-icon clear-step-icon">
-              <i class="ph ph-path"></i>
-            </div>
-            <div class="delete-modal-content">
-              <h3 class="delete-modal-title">Clear All Step History</h3>
-              <p class="delete-modal-description">You are about to clear <strong>ALL step tracking history</strong> from the entire database. This action cannot be undone.</p>
-              <div class="delete-modal-code-box">
-                <span class="delete-code-label">Enter confirmation code</span>
-                <span class="delete-code-value" id="clearAllStepsConfirmCode"></span>
-              </div>
-              <input type="text" id="clearAllStepsConfirmInput" class="delete-modal-input" maxlength="3" placeholder="000" autocomplete="off"/>
-            </div>
-            <div class="delete-modal-actions">
-              <button class="delete-btn-cancel" type="button" onclick="cancelClearAllStepHistory()">
-                <i class="ph ph-x"></i>
-                <span>Cancel</span>
-              </button>
-              <button class="delete-btn-confirm" type="button" onclick="handleClearAllStepHistoryConfirmation()">
-                <i class="ph ph-trash"></i>
-                <span>Clear All</span>
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <!-- New tooling modal -->
-        <div class="modal-overlay" id="addToolingOverlay">
-          <div class="modal-card modal-card-large">
-            <div class="modal-icon">
-              <i class="ph ph-plus"></i>
-            </div>
-            <h3>Add New Tooling</h3>
-            <p>Fill the required fields. The remaining data can be edited later.</p>
-            <form id="addToolingForm" class="modal-form" onsubmit="return false;">
-              <div class="modal-field">
-                <label for="addToolingPN">PN *</label>
-                <input type="text" id="addToolingPN" class="modal-input-text" maxlength="120" placeholder="PN code" required />
-              </div>
-              <div class="modal-field">
-                <label for="addToolingPNDescription">PN Description</label>
-                <input type="text" id="addToolingPNDescription" class="modal-input-text" maxlength="255" placeholder="Optional" />
-              </div>
-              <div class="modal-field modal-field-row">
-                <div class="modal-field">
-                  <label for="addToolingSupplier">Supplier *</label>
-                  <input list="addToolingSupplierList" id="addToolingSupplier" class="modal-input-text" placeholder="Select or type" required />
-                  <datalist id="addToolingSupplierList"></datalist>
-                </div>
-                <div class="modal-field">
-                  <label for="addToolingOwner">Responsible</label>
-                  <input list="addToolingOwnerList" id="addToolingOwner" class="modal-input-text" placeholder="Select or type" />
-                  <datalist id="addToolingOwnerList"></datalist>
-                </div>
-              </div>
-              <div class="modal-field">
-                <label for="addToolingDescription">Tooling Description</label>
-                <input type="text" id="addToolingDescription" class="modal-input-text" maxlength="255" placeholder="Optional" />
-              </div>
-              <div class="modal-field modal-field-row">
-                <div class="modal-field">
-                  <label for="addToolingLife">Tooling Life Qty *</label>
-                  <input type="text" id="addToolingLife" class="modal-input-text" inputmode="numeric" data-mask="thousands" placeholder="0" required />
-                </div>
-              </div>
-              <div class="modal-field modal-field-row">
-                <div class="modal-field">
-                  <label for="addToolingProduced">Produced *</label>
-                  <input type="text" id="addToolingProduced" class="modal-input-text" inputmode="numeric" data-mask="thousands" placeholder="0" required />
-                </div>
-                <div class="modal-field">
-                  <label for="addToolingProductionDate">Production Date</label>
-                  <input type="date" id="addToolingProductionDate" class="modal-input-text" />
-                </div>
-              </div>
-              <div class="modal-field modal-field-row">
-                <div class="modal-field">
-                  <label for="addToolingForecast">Annual Volume Forecast</label>
-                  <input type="text" id="addToolingForecast" class="modal-input-text" inputmode="numeric" data-mask="thousands" placeholder="Optional" />
-                </div>
-                <div class="modal-field">
-                  <label for="addToolingForecastDate">Forecast Date</label>
-                  <input type="date" id="addToolingForecastDate" class="modal-input-text" />
-                </div>
-              </div>
-            </form>
-            <div class="modal-tip">ℹ️ The remaining fields can be filled later.</div>
-            <div class="modal-actions">
-              <button class="btn-secondary" type="button" onclick="closeAddToolingModal()">Cancel</button>
-              <button class="btn-danger" type="button" onclick="submitAddToolingForm()">Create Tooling</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Expiration Filter Modal -->
-        <div class="modal-overlay" id="expirationFilterOverlay">
-          <div class="modal-card modal-card-small">
-            <div class="modal-icon">
-              <i class="ph ph-funnel"></i>
-            </div>
-            <h3>Filter Options</h3>
-            <div class="filter-options-content">
-              <label class="filter-option-item">
-                <div class="filter-option-info">
-                  <span class="filter-option-label">Show only expired/expiring</span>
-                  <span class="filter-option-desc">Suppliers with tooling expired or expiring within 2 years</span>
-                </div>
-                <input type="checkbox" id="expirationFilterSwitch" class="expiration-switch">
-                <span class="expiration-slider"></span>
-              </label>
-            </div>
-            <div class="modal-actions">
-              <button class="btn-secondary" type="button" onclick="closeExpirationFilterOverlay()">Close</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Supplier Filter Options Overlay -->
-        <div class="modal-overlay" id="supplierFilterOverlay">
-          <div class="modal-card">
-            <div class="modal-icon">
-              <i class="ph ph-faders"></i>
-            </div>
-            <h3>Export & Import Options</h3>
-            <div class="filter-options-content">
-              <div class="filter-option-group-title">Export for Supplier</div>
-              <button class="filter-option-button" type="button" onclick="exportForecastSupplier()">
+        <div class="content-body scrollable">
+          <div class="empty-state" id="emptyState">
+            <i class="ph ph-package"></i>
+            <h3>No supplier selected</h3>
+            <p>Select a supplier on the left to view the tooling.</p>
+            <p class="empty-state-hint">New supplier? Export the template and import it here.</p>
+            <div class="empty-state-actions">
+              <button class="btn btn-template" onclick="exportEmptyTemplate()"
+                title="Export empty template for new supplier">
                 <i class="ph ph-download-simple"></i>
-                <div class="filter-option-info">
-                  <span class="filter-option-label">Export Annual Volume (Supplier)</span>
-                  <span class="filter-option-desc">PN (unique), Supplier, Annual Volume, Annual Volume Date</span>
-                </div>
+                Export Template
               </button>
-              
-              <button class="filter-option-button" type="button" onclick="importForecastSupplier()">
+              <button class="btn btn-template" onclick="importNewSupplier()" title="Import new supplier from template">
                 <i class="ph ph-upload-simple"></i>
-                <div class="filter-option-info">
-                  <span class="filter-option-label">Import Annual Volume (Supplier)</span>
-                  <span class="filter-option-desc">Update Annual Volume by PN (applies to all records with same PN)</span>
-                </div>
+                Import Template
               </button>
-              
-              <div class="filter-option-divider"></div>
-              
-              <div class="filter-option-group-title">Export for Manager</div>
-              <button class="filter-option-button" type="button" onclick="exportForecastManager()">
-                <i class="ph ph-database"></i>
-                <div class="filter-option-info">
-                  <span class="filter-option-label">Export Full Database (Manager)</span>
-                  <span class="filter-option-desc">Export all columns from database</span>
-                </div>
-              </button>
-              
-              <button class="filter-option-button" type="button" onclick="importForecastManager()">
-                <i class="ph ph-upload-simple"></i>
-                <div class="filter-option-info">
-                  <span class="filter-option-label">Import Full Database (Manager)</span>
-                  <span class="filter-option-desc">Update all fields by ID</span>
-                </div>
-              </button>
-              
-              <div class="filter-option-divider"></div>
-              
-              <div class="filter-option-group-title">Data Management</div>
-              <button class="filter-option-button filter-option-danger" type="button" onclick="openClearAllStepHistoryModal()">
-                <i class="ph ph-path"></i>
-                <div class="filter-option-info">
-                  <span class="filter-option-label">Clear All Step History</span>
-                  <span class="filter-option-desc">Remove step tracking data from all tooling</span>
-                </div>
-              </button>
-            </div>
-            <div class="modal-actions">
-              <button class="btn-secondary" type="button" onclick="closeSupplierFilterOverlay()">Close</button>
             </div>
           </div>
-        </div>
-
-        <!-- Expiration info modal -->
-        <div class="modal-overlay info-modal-overlay" id="expirationInfoOverlay">
-          <div class="modal-card info-modal-card">
-            <button type="button" class="info-modal-close" data-expiration-info-close aria-label="Close">
-              <i class="ph ph-x"></i>
-            </button>
-            <div class="modal-icon">
-              <i class="ph ph-info"></i>
-            </div>
-            <h3>How the expiration is calculated</h3>
-            <p>The expiration field projects how long the tooling can keep running based on production data.</p>
-            <ul class="info-modal-list">
-              <li><strong>Remaining</strong> = Tooling Life (Qty) − Produced.</li>
-              <li><strong>Days available</strong> = (Remaining ÷ Annual Volume) × 365.</li>
-              <li>If Annual Volume is 0 or empty, we use: Remaining × 365 days.</li>
-              <li>We add the calculated days to the <strong>Production Date</strong>.</li>
-            </ul>
-            <div class="info-modal-highlight">
-              <strong>Formula:</strong> Production Date + ((Remaining ÷ Annual Volume) × 365) days<br><br>
-              Example: if Remaining = 4,000, Annual Volume = 2,000, and Production Date = 01/01/2024, we have (4000÷2000)×365 = 730 days. Adding 730 days to 01/01/2024 gives Expiration = 01/01/2026.
-            </div>
-            <div class="modal-actions">
-              <button class="btn-secondary" type="button" data-expiration-info-close>Close</button>
-            </div>
+          <div class="tooling-list" id="toolingList" style="display: none;">
+            <!-- Lista de ferramentais será preenchida dinamicamente -->
           </div>
-        </div>
-
-        <!-- Production date reminder modal -->
-        <div class="modal-overlay info-modal-overlay" id="productionInfoOverlay">
-          <div class="modal-card info-modal-card">
-            <button type="button" class="info-modal-close" data-production-info-close aria-label="Close">
-              <i class="ph ph-x"></i>
-            </button>
-            <div class="modal-icon">
-              <i class="ph ph-calendar"></i>
-            </div>
-            <h3>When to update the Production Date</h3>
-            <p>Every time you change the <strong>Produced</strong> quantity, record the production date used for that entry. This keeps the lifecycle timeline accurate.</p>
-            <ul class="info-modal-list">
-              <li>The date should reflect when the new Produced total became valid.</li>
-              <li>Reminders highlight the field after Produced changes to catch your attention.</li>
-              <li>Without the date, expiration projections and reports can become misleading.</li>
-            </ul>
-            <div class="info-modal-highlight">
-              Tip: update both fields together—first Produced, then Production Date—so reminders disappear automatically.
-            </div>
-            <div class="modal-actions">
-              <button class="btn-secondary" type="button" data-production-info-close>Close</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Steps info modal -->
-        <div class="modal-overlay info-modal-overlay" id="stepsInfoOverlay">
-          <div class="modal-card info-modal-card">
-            <button type="button" class="info-modal-close" data-steps-info-close aria-label="Close">
-              <i class="ph ph-x"></i>
-            </button>
-            <div class="modal-icon">
-              <i class="ph ph-list-numbers"></i>
-            </div>
-            <h3>Management Steps</h3>
-            <p>The steps guide the tooling management process from data collection to supply continuity strategy.</p>
-            <table class="steps-info-table">
+          <div class="spreadsheet-container" id="spreadsheetContainer" style="display: none;">
+            <table class="spreadsheet-table" id="spreadsheetTable">
               <thead>
                 <tr>
-                  <th>Steps</th>
-                  <th>Action</th>
-                  <th>Responsible</th>
+                  <th class="col-checkbox" id="spreadsheetCheckboxHeader" style="display: none;">
+                    <div class="spreadsheet-checkbox-all" onclick="toggleSpreadsheetSelectAll()"
+                      title="Select all / Deselect all">
+                      <i class="ph ph-square" id="spreadsheetSelectAllIcon"></i>
+                    </div>
+                  </th>
+                  <th class="col-id" data-filterable="id">
+                    <div class="th-content">
+                      <span>ID</span>
+                      <button class="column-filter-btn" onclick="openColumnFilter(event, 'id')" title="Filter">
+                        <i class="ph ph-funnel"></i>
+                      </button>
+                    </div>
+                  </th>
+                  <th class="col-pn" data-filterable="pn">
+                    <div class="th-content">
+                      <span>PN</span>
+                      <button class="column-filter-btn" onclick="openColumnFilter(event, 'pn')" title="Filter">
+                        <i class="ph ph-funnel"></i>
+                      </button>
+                    </div>
+                  </th>
+                  <th class="col-tool-desc" data-filterable="tool_description">
+                    <div class="th-content">
+                      <span>Tooling Description</span>
+                      <button class="column-filter-btn" onclick="openColumnFilter(event, 'tool_description')"
+                        title="Filter">
+                        <i class="ph ph-funnel"></i>
+                      </button>
+                    </div>
+                  </th>
+                  <th class="col-life" data-filterable="tooling_life_qty">
+                    <div class="th-content">
+                      <span>Tooling Life</span>
+                      <button class="column-filter-btn" onclick="openColumnFilter(event, 'tooling_life_qty')"
+                        title="Filter">
+                        <i class="ph ph-funnel"></i>
+                      </button>
+                    </div>
+                  </th>
+                  <th class="col-produced" data-filterable="produced">
+                    <div class="th-content">
+                      <span>Produced</span>
+                      <button class="column-filter-btn" onclick="openColumnFilter(event, 'produced')" title="Filter">
+                        <i class="ph ph-funnel"></i>
+                      </button>
+                    </div>
+                  </th>
+                  <th class="col-volume" data-filterable="annual_volume_forecast">
+                    <div class="th-content">
+                      <span>Annual Volume</span>
+                      <button class="column-filter-btn" onclick="openColumnFilter(event, 'annual_volume_forecast')"
+                        title="Filter">
+                        <i class="ph ph-funnel"></i>
+                      </button>
+                    </div>
+                  </th>
+                  <th class="col-exp-date" data-sortable="expiration">
+                    <div class="th-content">
+                      <span>Expiration</span>
+                      <button class="column-sort-btn" onclick="toggleColumnSort(event, 'expiration')" title="Sort">
+                        <i class="ph ph-arrows-down-up"></i>
+                      </button>
+                    </div>
+                  </th>
+                  <th class="col-steps" data-filterable="steps">
+                    <div class="th-content">
+                      <span>Steps</span>
+                      <button class="column-filter-btn" onclick="openColumnFilter(event, 'steps')" title="Filter">
+                        <i class="ph ph-funnel"></i>
+                      </button>
+                    </div>
+                  </th>
+                  <th class="col-status" data-filterable="status">
+                    <div class="th-content">
+                      <span>Status</span>
+                      <button class="column-filter-btn" onclick="openColumnFilter(event, 'status')" title="Filter">
+                        <i class="ph ph-funnel"></i>
+                      </button>
+                    </div>
+                  </th>
+                  <th class="col-progress" data-sortable="progress">
+                    <div class="th-content">
+                      <span>Tool. Life</span>
+                      <button class="column-sort-btn" onclick="toggleColumnSort(event, 'progress')" title="Sort">
+                        <i class="ph ph-arrows-down-up"></i>
+                      </button>
+                    </div>
+                  </th>
+                  <th class="col-icons">Info</th>
+                  <th class="col-expand"></th>
                 </tr>
               </thead>
-              <tbody>
-                <tr>
-                  <td class="step-number">1</td>
-                  <td>Control Data Update</td>
-                  <td>Supply Continuity</td>
-                </tr>
-                <tr>
-                  <td class="step-number">2</td>
-                  <td>Critical Tooling Identification</td>
-                  <td>Supply Continuity</td>
-                </tr>
-                <tr>
-                  <td class="step-number">3</td>
-                  <td>Supplier Validation Request</td>
-                  <td>Supply Continuity</td>
-                </tr>
-                <tr>
-                  <td class="step-number">4</td>
-                  <td>Critical Tooling Reassessment</td>
-                  <td>Supply Continuity</td>
-                </tr>
-                <tr>
-                  <td class="step-number">5</td>
-                  <td>On-Site Technical Analysis</td>
-                  <td>SQIE</td>
-                </tr>
-                <tr>
-                  <td class="step-number">6</td>
-                  <td>Technical Confirmation</td>
-                  <td>SQIE</td>
-                </tr>
-                <tr>
-                  <td class="step-number">7</td>
-                  <td>Supply Continuity Strategy</td>
-                  <td>Sourcing Manager</td>
-                </tr>
+              <tbody id="spreadsheetBody">
+                <!-- Linhas serão preenchidas dinamicamente -->
               </tbody>
             </table>
-            <div class="info-modal-highlight">
-              Select the appropriate step to track the current status of each tooling item.
+          </div>
+        </div>
+      </div>
+
+      <!-- Floating buttons -->
+      <div class="floating-actions">
+        <button class="floating-clear-filter-btn" id="floatingClearFilterBtn" onclick="clearColumnFilters()"
+          title="Clear all filters" style="display: none;">
+          <i class="ph ph-funnel-x"></i>
+        </button>
+      </div>
+
+      <!-- Search overlay -->
+      <div class="search-overlay" id="searchOverlay">
+        <div class="search-overlay-content">
+          <div class="search-overlay-header">
+            <i class="ph ph-magnifying-glass"></i>
+            <input type="text" id="searchInput" placeholder="Type to search..." autofocus>
+            <button class="btn-close-search" id="searchActionBtn" onclick="handleSearchAction()">
+              <i class="ph ph-x"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Delete confirmation modal -->
+      <div class="modal-overlay" id="deleteConfirmOverlay">
+        <div class="delete-modal">
+          <div class="delete-modal-icon">
+            <i class="ph ph-trash"></i>
+          </div>
+          <div class="delete-modal-content">
+            <h3 class="delete-modal-title">Delete Tooling</h3>
+            <p class="delete-modal-description">You are about to delete <strong id="deleteItemDescription"></strong>.
+              This action cannot be undone.</p>
+            <div class="delete-modal-code-box">
+              <span class="delete-code-label">Enter confirmation code</span>
+              <span class="delete-code-value" id="deleteConfirmCode"></span>
             </div>
-            <div class="modal-actions">
-              <button class="btn-secondary" type="button" data-steps-info-close>Close</button>
+            <input type="text" id="deleteConfirmInput" class="delete-modal-input" maxlength="3" placeholder="000"
+              autocomplete="off" />
+          </div>
+          <div class="delete-modal-actions">
+            <button class="delete-btn-cancel" type="button" onclick="cancelDeleteTooling()">
+              <i class="ph ph-x"></i>
+              <span>Cancel</span>
+            </button>
+            <button class="delete-btn-confirm" type="button" onclick="handleDeleteConfirmation()">
+              <i class="ph ph-trash"></i>
+              <span>Delete</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Comment delete modal -->
+      <div class="modal-overlay" id="commentDeleteOverlay">
+        <div class="comment-delete-modal">
+          <div class="comment-delete-icon">
+            <i class="ph ph-chats-circle"></i>
+          </div>
+          <div class="comment-delete-content">
+            <div class="comment-delete-header">
+              <h3>Delete Comment</h3>
+              <p>This comment will be removed permanently from the tooling record below.</p>
+              <div class="comment-delete-context" id="commentDeleteContext">Tooling —</div>
+            </div>
+            <div class="comment-delete-preview">
+              <div class="comment-delete-preview-meta">
+                <i class="ph ph-clock"></i>
+                <span id="commentDeleteDate">--/--/----</span>
+              </div>
+              <p class="comment-delete-preview-text" id="commentDeleteText">Select a comment to preview its content.</p>
+            </div>
+          </div>
+          <div class="comment-delete-actions">
+            <button type="button" class="comment-delete-btn cancel" onclick="closeCommentDeleteModal()">
+              <i class="ph ph-arrow-counter-clockwise"></i>
+              <span>Keep comment</span>
+            </button>
+            <button type="button" class="comment-delete-btn confirm" id="commentDeleteConfirmBtn"
+              onclick="confirmCommentDelete()">
+              <i class="ph ph-trash"></i>
+              <span>Delete comment</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Clear step history modal -->
+      <div class="modal-overlay" id="clearStepHistoryOverlay">
+        <div class="delete-modal">
+          <div class="delete-modal-icon clear-step-icon">
+            <i class="ph ph-path"></i>
+          </div>
+          <div class="delete-modal-content">
+            <h3 class="delete-modal-title">Clear Step History</h3>
+            <p class="delete-modal-description">You are about to clear all step tracking history for <strong
+                id="clearStepItemDescription"></strong>. This action cannot be undone.</p>
+          </div>
+          <div class="delete-modal-actions">
+            <button class="delete-btn-cancel" type="button" onclick="cancelClearStepHistory()">
+              <i class="ph ph-x"></i>
+              <span>Cancel</span>
+            </button>
+            <button class="delete-btn-confirm" type="button" onclick="confirmClearStepHistory()">
+              <i class="ph ph-trash"></i>
+              <span>Clear History</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Clear ALL step history modal -->
+      <div class="modal-overlay" id="clearAllStepHistoryOverlay">
+        <div class="delete-modal">
+          <div class="delete-modal-icon clear-step-icon">
+            <i class="ph ph-path"></i>
+          </div>
+          <div class="delete-modal-content">
+            <h3 class="delete-modal-title">Clear All Step History</h3>
+            <p class="delete-modal-description">You are about to clear <strong>ALL step tracking history</strong> from
+              the entire database. This action cannot be undone.</p>
+            <div class="delete-modal-code-box">
+              <span class="delete-code-label">Enter confirmation code</span>
+              <span class="delete-code-value" id="clearAllStepsConfirmCode"></span>
+            </div>
+            <input type="text" id="clearAllStepsConfirmInput" class="delete-modal-input" maxlength="3" placeholder="000"
+              autocomplete="off" />
+          </div>
+          <div class="delete-modal-actions">
+            <button class="delete-btn-cancel" type="button" onclick="cancelClearAllStepHistory()">
+              <i class="ph ph-x"></i>
+              <span>Cancel</span>
+            </button>
+            <button class="delete-btn-confirm" type="button" onclick="handleClearAllStepHistoryConfirmation()">
+              <i class="ph ph-trash"></i>
+              <span>Clear All</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- New tooling modal -->
+      <div class="modal-overlay" id="addToolingOverlay">
+        <div class="modal-card modal-card-large">
+          <div class="modal-icon">
+            <i class="ph ph-plus"></i>
+          </div>
+          <h3>Add New Tooling</h3>
+          <p>Fill the required fields. The remaining data can be edited later.</p>
+          <form id="addToolingForm" class="modal-form" onsubmit="return false;">
+            <div class="modal-field">
+              <label for="addToolingPN">PN *</label>
+              <input type="text" id="addToolingPN" class="modal-input-text" maxlength="120" placeholder="PN code"
+                required />
+            </div>
+            <div class="modal-field">
+              <label for="addToolingPNDescription">PN Description</label>
+              <input type="text" id="addToolingPNDescription" class="modal-input-text" maxlength="255"
+                placeholder="Optional" />
+            </div>
+            <div class="modal-field modal-field-row">
+              <div class="modal-field">
+                <label for="addToolingSupplier">Supplier *</label>
+                <input list="addToolingSupplierList" id="addToolingSupplier" class="modal-input-text"
+                  placeholder="Select or type" required />
+                <datalist id="addToolingSupplierList"></datalist>
+              </div>
+              <div class="modal-field">
+                <label for="addToolingOwner">Responsible</label>
+                <input list="addToolingOwnerList" id="addToolingOwner" class="modal-input-text"
+                  placeholder="Select or type" />
+                <datalist id="addToolingOwnerList"></datalist>
+              </div>
+            </div>
+            <div class="modal-field">
+              <label for="addToolingDescription">Tooling Description</label>
+              <input type="text" id="addToolingDescription" class="modal-input-text" maxlength="255"
+                placeholder="Optional" />
+            </div>
+            <div class="modal-field modal-field-row">
+              <div class="modal-field">
+                <label for="addToolingLife">Tooling Life Qty *</label>
+                <input type="text" id="addToolingLife" class="modal-input-text" inputmode="numeric"
+                  data-mask="thousands" placeholder="0" required />
+              </div>
+            </div>
+            <div class="modal-field modal-field-row">
+              <div class="modal-field">
+                <label for="addToolingProduced">Produced *</label>
+                <input type="text" id="addToolingProduced" class="modal-input-text" inputmode="numeric"
+                  data-mask="thousands" placeholder="0" required />
+              </div>
+              <div class="modal-field">
+                <label for="addToolingProductionDate">Production Date</label>
+                <input type="date" id="addToolingProductionDate" class="modal-input-text" />
+              </div>
+            </div>
+            <div class="modal-field modal-field-row">
+              <div class="modal-field">
+                <label for="addToolingForecast">Annual Volume Forecast</label>
+                <input type="text" id="addToolingForecast" class="modal-input-text" inputmode="numeric"
+                  data-mask="thousands" placeholder="Optional" />
+              </div>
+              <div class="modal-field">
+                <label for="addToolingForecastDate">Forecast Date</label>
+                <input type="date" id="addToolingForecastDate" class="modal-input-text" />
+              </div>
+            </div>
+          </form>
+          <div class="modal-tip">ℹ️ The remaining fields can be filled later.</div>
+          <div class="modal-actions">
+            <button class="btn-secondary" type="button" onclick="closeAddToolingModal()">Cancel</button>
+            <button class="btn-danger" type="button" onclick="submitAddToolingForm()">Create Tooling</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Expiration Filter Modal -->
+      <div class="modal-overlay" id="expirationFilterOverlay">
+        <div class="modal-card modal-card-small">
+          <div class="modal-icon">
+            <i class="ph ph-funnel"></i>
+          </div>
+          <h3>Filter Options</h3>
+          <div class="filter-options-content">
+            <label class="filter-option-item">
+              <div class="filter-option-info">
+                <span class="filter-option-label">Show only expired/expiring</span>
+                <span class="filter-option-desc">Suppliers with tooling expired or expiring within 2 years</span>
+              </div>
+              <input type="checkbox" id="expirationFilterSwitch" class="expiration-switch">
+              <span class="expiration-slider"></span>
+            </label>
+          </div>
+          <div class="modal-actions">
+            <button class="btn-secondary" type="button" onclick="closeExpirationFilterOverlay()">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Supplier Filter Options Overlay -->
+      <div class="modal-overlay" id="supplierFilterOverlay">
+        <div class="modal-card">
+          <div class="modal-icon">
+            <i class="ph ph-faders"></i>
+          </div>
+          <h3>Export & Import Options</h3>
+          <div class="filter-options-content">
+            <div class="filter-option-group-title">Export for Supplier</div>
+            <button class="filter-option-button" type="button" onclick="exportForecastSupplier()">
+              <i class="ph ph-download-simple"></i>
+              <div class="filter-option-info">
+                <span class="filter-option-label">Export Annual Volume (Supplier)</span>
+                <span class="filter-option-desc">PN (unique), Supplier, Annual Volume, Annual Volume Date</span>
+              </div>
+            </button>
+
+            <button class="filter-option-button" type="button" onclick="importForecastSupplier()">
+              <i class="ph ph-upload-simple"></i>
+              <div class="filter-option-info">
+                <span class="filter-option-label">Import Annual Volume (Supplier)</span>
+                <span class="filter-option-desc">Update Annual Volume by PN (applies to all records with same PN)</span>
+              </div>
+            </button>
+
+            <div class="filter-option-divider"></div>
+
+            <div class="filter-option-group-title">Export for Manager</div>
+            <button class="filter-option-button" type="button" onclick="exportForecastManager()">
+              <i class="ph ph-database"></i>
+              <div class="filter-option-info">
+                <span class="filter-option-label">Export Full Database (Manager)</span>
+                <span class="filter-option-desc">Export all columns from database</span>
+              </div>
+            </button>
+
+            <button class="filter-option-button" type="button" onclick="importForecastManager()">
+              <i class="ph ph-upload-simple"></i>
+              <div class="filter-option-info">
+                <span class="filter-option-label">Import Full Database (Manager)</span>
+                <span class="filter-option-desc">Update all fields by ID</span>
+              </div>
+            </button>
+
+            <div class="filter-option-divider"></div>
+
+            <div class="filter-option-group-title">Data Management</div>
+            <button class="filter-option-button filter-option-danger" type="button"
+              onclick="openClearAllStepHistoryModal()">
+              <i class="ph ph-path"></i>
+              <div class="filter-option-info">
+                <span class="filter-option-label">Clear All Step History</span>
+                <span class="filter-option-desc">Remove step tracking data from all tooling</span>
+              </div>
+            </button>
+          </div>
+          <div class="modal-actions">
+            <button class="btn-secondary" type="button" onclick="closeSupplierFilterOverlay()">Close</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Expiration info modal -->
+      <div class="modal-overlay info-modal-overlay" id="expirationInfoOverlay">
+        <div class="modal-card info-modal-card">
+          <button type="button" class="info-modal-close" data-expiration-info-close aria-label="Close">
+            <i class="ph ph-x"></i>
+          </button>
+          <div class="modal-icon">
+            <i class="ph ph-info"></i>
+          </div>
+          <h3>How the expiration is calculated</h3>
+          <p>The expiration field projects how long the tooling can keep running based on production data.</p>
+          <ul class="info-modal-list">
+            <li><strong>Remaining</strong> = Tooling Life (Qty) − Produced.</li>
+            <li><strong>Days available</strong> = (Remaining ÷ Annual Volume) × 365.</li>
+            <li>If Annual Volume is 0 or empty, we use: Remaining × 365 days.</li>
+            <li>We add the calculated days to the <strong>Production Date</strong>.</li>
+          </ul>
+          <div class="info-modal-highlight">
+            <strong>Formula:</strong> Production Date + ((Remaining ÷ Annual Volume) × 365) days<br><br>
+            Example: if Remaining = 4,000, Annual Volume = 2,000, and Production Date = 01/01/2024, we have
+            (4000÷2000)×365 = 730 days. Adding 730 days to 01/01/2024 gives Expiration = 01/01/2026.
+          </div>
+          <div class="modal-actions">
+            <button class="btn-secondary" type="button" data-expiration-info-close>Close</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Production date reminder modal -->
+      <div class="modal-overlay info-modal-overlay" id="productionInfoOverlay">
+        <div class="modal-card info-modal-card">
+          <button type="button" class="info-modal-close" data-production-info-close aria-label="Close">
+            <i class="ph ph-x"></i>
+          </button>
+          <div class="modal-icon">
+            <i class="ph ph-calendar"></i>
+          </div>
+          <h3>When to update the Production Date</h3>
+          <p>Every time you change the <strong>Produced</strong> quantity, record the production date used for that
+            entry. This keeps the lifecycle timeline accurate.</p>
+          <ul class="info-modal-list">
+            <li>The date should reflect when the new Produced total became valid.</li>
+            <li>Reminders highlight the field after Produced changes to catch your attention.</li>
+            <li>Without the date, expiration projections and reports can become misleading.</li>
+          </ul>
+          <div class="info-modal-highlight">
+            Tip: update both fields together—first Produced, then Production Date—so reminders disappear automatically.
+          </div>
+          <div class="modal-actions">
+            <button class="btn-secondary" type="button" data-production-info-close>Close</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Steps info modal -->
+      <div class="modal-overlay info-modal-overlay" id="stepsInfoOverlay">
+        <div class="modal-card info-modal-card">
+          <button type="button" class="info-modal-close" data-steps-info-close aria-label="Close">
+            <i class="ph ph-x"></i>
+          </button>
+          <div class="modal-icon">
+            <i class="ph ph-list-numbers"></i>
+          </div>
+          <h3>Management Steps</h3>
+          <p>The steps guide the tooling management process from data collection to supply continuity strategy.</p>
+          <table class="steps-info-table">
+            <thead>
+              <tr>
+                <th>Steps</th>
+                <th>Action</th>
+                <th>Responsible</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="step-number">1</td>
+                <td>Control Data Update</td>
+                <td>Supply Continuity</td>
+              </tr>
+              <tr>
+                <td class="step-number">2</td>
+                <td>Critical Tooling Identification</td>
+                <td>Supply Continuity</td>
+              </tr>
+              <tr>
+                <td class="step-number">3</td>
+                <td>Supplier Validation Request</td>
+                <td>Supply Continuity</td>
+              </tr>
+              <tr>
+                <td class="step-number">4</td>
+                <td>Critical Tooling Reassessment</td>
+                <td>Supply Continuity</td>
+              </tr>
+              <tr>
+                <td class="step-number">5</td>
+                <td>On-Site Technical Analysis</td>
+                <td>SQIE</td>
+              </tr>
+              <tr>
+                <td class="step-number">6</td>
+                <td>Technical Confirmation</td>
+                <td>SQIE</td>
+              </tr>
+              <tr>
+                <td class="step-number">7</td>
+                <td>Supply Continuity Strategy</td>
+                <td>Sourcing Manager</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="info-modal-highlight">
+            Select the appropriate step to track the current status of each tooling item.
+          </div>
+          <div class="modal-actions">
+            <button class="btn-secondary" type="button" data-steps-info-close>Close</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab Analytics -->
+      <div class="tab-content" id="tab-analytics">
+        <!-- header removed per user request -->
+        <div class="content-body" style="padding: 0; overflow: hidden; display: flex; flex-direction: column;">
+          <div class="analytics-grid"
+            style="grid-template-columns: repeat(4, 1fr); padding: 20px 20px 0 20px; gap: 20px; flex-shrink: 0;">
+            <div class="metric-card">
+              <div class="metric-icon">
+                <i class="ph ph-wrench"></i>
+              </div>
+              <div class="metric-content">
+                <h3>Total de Ferramentais</h3>
+                <p class="metric-value" id="totalTooling">0</p>
+              </div>
+            </div>
+            <div class="metric-card metric-card--expired">
+              <div class="metric-icon">
+                <i class="ph ph-warning-circle"></i>
+              </div>
+              <div class="metric-content">
+                <h3>Expirados</h3>
+                <p class="metric-value" id="totalExpired">0</p>
+              </div>
+            </div>
+            <div class="metric-card metric-card--warning">
+              <div class="metric-icon">
+                <i class="ph ph-clock"></i>
+              </div>
+              <div class="metric-content">
+                <h3>Expirando (2 anos)</h3>
+                <p class="metric-value" id="totalExpiring">0</p>
+              </div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-icon">
+                <i class="ph ph-factory"></i>
+              </div>
+              <div class="metric-content">
+                <h3>Fornecedores</h3>
+                <p class="metric-value" id="totalSuppliers">0</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="analytics-divider"></div>
+
+          <div class="analytics-tables-row">
+            <div class="analytics-section">
+              <h3 class="analytics-section-title">Steps</h3>
+              <div class="steps-columns-wrapper" id="stepsColumnsWrapper">
+                <div class="steps-columns-container" id="stepsColumnsContainer">
+                  <!-- 7 columns populated dynamically -->
+                </div>
+              </div>
+
+              <!-- timeline card wrapper moved below steps -->
+              <div class="timeline-card">
+                <div class="steps-timeline" id="stepsTimeline">
+                  <!-- Timeline populated dynamically -->
+                </div>
+              </div>
+              <!-- status legend removed per user request -->
             </div>
           </div>
         </div>
+      </div>
 
-        <!-- Tab Analytics -->
-        <div class="tab-content" id="tab-analytics">
-          <div class="content-header">
-            <h2>Analytics</h2>
-          </div>
-          <div class="content-body" style="padding: 0; overflow: hidden; display: flex; flex-direction: column;">
-            <div class="analytics-grid" style="grid-template-columns: repeat(4, 1fr); padding: 20px 20px 0 20px; gap: 20px; flex-shrink: 0;">
-              <div class="metric-card">
-                <div class="metric-icon">
-                  <i class="ph ph-wrench"></i>
-                </div>
-                <div class="metric-content">
-                  <h3>Total Tooling</h3>
-                  <p class="metric-value" id="totalTooling">0</p>
-                </div>
-              </div>
-              <div class="metric-card metric-card--expired">
-                <div class="metric-icon">
-                  <i class="ph ph-warning-circle"></i>
-                </div>
-                <div class="metric-content">
-                  <h3>Expired</h3>
-                  <p class="metric-value" id="totalExpired">0</p>
-                </div>
-              </div>
-              <div class="metric-card metric-card--warning">
-                <div class="metric-icon">
-                  <i class="ph ph-clock"></i>
-                </div>
-                <div class="metric-content">
-                  <h3>Expiring (2 years)</h3>
-                  <p class="metric-value" id="totalExpiring">0</p>
-                </div>
-              </div>
-              <div class="metric-card">
-                <div class="metric-icon">
-                  <i class="ph ph-factory"></i>
-                </div>
-                <div class="metric-content">
-                  <h3>Suppliers</h3>
-                  <p class="metric-value" id="totalSuppliers">0</p>
-                </div>
-              </div>
-            </div>
-            
-            <div class="analytics-divider"></div>
-            
-            <div class="analytics-tables-row">
-              <div class="analytics-section">
-                <h3 class="analytics-section-title">Top Suppliers</h3>
-                <div class="analytics-table-container">
-                  <table class="analytics-table" id="topSuppliersTable">
-                    <thead>
-                      <tr>
-                        <th>Supplier</th>
-                        <th>Total</th>
-                        <th>Expired</th>
-                        <th>Expiring (2y)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <!-- Rows will be inserted here -->
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div class="analytics-section">
-                <h3 class="analytics-section-title">Tooling Management Status</h3>
-                <div class="analytics-table-container">
-                  <table class="analytics-table" id="stepsSummaryTable">
-                    <thead>
-                      <tr>
-                        <th>Steps</th>
-                        <th>Action</th>
-                        <th>Responsible</th>
-                        <th>Deadline</th>
-                        <th>Quantity</th>
-                        <th>Percentage</th>
-                        <th>Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <!-- Rows will be inserted here -->
-                    </tbody>
-                  </table>
-                </div>
-                <div class="status-legend">
-                  <span class="legend-item"><span class="step-status-badge status-completed">DONE</span> Completed</span>
-                  <span class="legend-item"><span class="step-status-badge status-current">NOW</span> In Progress</span>
-                  <span class="legend-item"><span class="step-status-badge status-behind">LATE</span> Behind Schedule</span>
-                  <span class="legend-item"><span class="step-status-badge status-upcoming">ON-GOING</span> Upcoming</span>
-                </div>
-              </div>
-            </div>
-          </div>
+      <!-- Tab Settings -->
+      <div class="tab-content" id="tab-settings">
+        <div class="content-header">
+          <h2>Settings</h2>
         </div>
-
-        <!-- Tab Settings -->
-        <div class="tab-content" id="tab-settings">
-          <div class="content-header">
-            <h2>Settings</h2>
-          </div>
-          <div class="content-body settings-body">
-            <div class="settings-carousel-wrapper">
-              <button class="carousel-nav-btn carousel-nav-prev" id="carouselPrevBtn" onclick="navigateSettingsCarousel(-1)" aria-label="Previous card">
-                <i class="ph ph-caret-left"></i>
-              </button>
-              <div class="settings-grid" id="settingsCarousel">
-                <section class="settings-card settings-card--overview">
-                  <div class="settings-card-header">
-                    <div>
-                      <p class="settings-card-eyebrow">Tooling Control</p>
-                      <h3>Application Overview</h3>
-                    </div>
-                    <span class="settings-version-chip" id="appVersionSettings">v0.1.1</span>
+        <div class="content-body settings-body">
+          <div class="settings-carousel-wrapper">
+            <button class="carousel-nav-btn carousel-nav-prev" id="carouselPrevBtn"
+              onclick="navigateSettingsCarousel(-1)" aria-label="Previous card">
+              <i class="ph ph-caret-left"></i>
+            </button>
+            <div class="settings-grid" id="settingsCarousel">
+              <section class="settings-card settings-card--overview">
+                <div class="settings-card-header">
+                  <div>
+                    <p class="settings-card-eyebrow">Tooling Control</p>
+                    <h3>Application Overview</h3>
                   </div>
-                  <p class="settings-description">Centralized control for tooling lifecycle and documentation from suppliers.</p>
-                  <div class="settings-meta-grid">
-                    <div class="settings-meta">
-                      <span class="meta-label">Environment</span>
-                      <span class="meta-value">Desktop</span>
-                    </div>
-                    <div class="settings-meta">
-                      <span class="meta-label">Database</span>
-                      <span class="meta-value">SQLite</span>
-                    </div>
-                    <div class="settings-meta">
-                      <span class="meta-label">Update</span>
-                      <span class="meta-value">On demand</span>
-                    </div>
+                  <span class="settings-version-chip" id="appVersionSettings">v0.2.2</span>
+                </div>
+                <p class="settings-description">Centralized control for tooling lifecycle and documentation from
+                  suppliers.</p>
+                <div class="settings-meta-grid">
+                  <div class="settings-meta">
+                    <span class="meta-label">Environment</span>
+                    <span class="meta-value">Desktop</span>
                   </div>
-                </section>
+                  <div class="settings-meta">
+                    <span class="meta-label">Database</span>
+                    <span class="meta-value">SQLite</span>
+                  </div>
+                  <div class="settings-meta">
+                    <span class="meta-label">Update</span>
+                    <span class="meta-value">On demand</span>
+                  </div>
+                </div>
+              </section>
 
-                <section class="settings-card">
-                  <h3>Data</h3>
-                  <p class="settings-description">Reload data whenever there is a new reference file.</p>
-                  <button class="btn-primary" id="reloadData">
-                    <i class="ph ph-arrow-clockwise"></i>
-                    Reload Data
-                  </button>
-                </section>
+              <section class="settings-card">
+                <h3>Data</h3>
+                <p class="settings-description">Reload data whenever there is a new reference file.</p>
+                <button class="btn-primary" id="reloadData">
+                  <i class="ph ph-arrow-clockwise"></i>
+                  Reload Data
+                </button>
+              </section>
 
               <section class="settings-card settings-card--tech">
                 <h3>Tech Stack</h3>
@@ -973,7 +1037,8 @@
                 <p class="settings-description">Manage the options displayed in the Tooling Status field.</p>
                 <ul class="status-options-list" id="statusOptionsList"></ul>
                 <div class="settings-inline-form">
-                  <input type="text" class="setting-input" id="statusOptionInput" placeholder="Add new status" maxlength="60"/>
+                  <input type="text" class="setting-input" id="statusOptionInput" placeholder="Add new status"
+                    maxlength="60" />
                   <button class="btn-primary" type="button" id="addStatusButton">
                     <i class="ph ph-plus"></i>
                     Add
@@ -1022,107 +1087,109 @@
                   </div>
                 </div>
               </section>
-              </div>
-              <button class="carousel-nav-btn carousel-nav-next" id="carouselNextBtn" onclick="navigateSettingsCarousel(1)" aria-label="Next card">
-                <i class="ph ph-caret-right"></i>
-              </button>
             </div>
-            <div class="carousel-indicators" id="carouselIndicators">
-              <span class="carousel-dot active" data-index="0" onclick="goToSettingsCarouselSlide(0)"></span>
-              <span class="carousel-dot" data-index="1" onclick="goToSettingsCarouselSlide(1)"></span>
-              <span class="carousel-dot" data-index="2" onclick="goToSettingsCarouselSlide(2)"></span>
-              <span class="carousel-dot" data-index="3" onclick="goToSettingsCarouselSlide(3)"></span>
-              <span class="carousel-dot" data-index="4" onclick="goToSettingsCarouselSlide(4)"></span>
-              <span class="carousel-dot" data-index="5" onclick="goToSettingsCarouselSlide(5)"></span>
-              <span class="carousel-dot" data-index="6" onclick="goToSettingsCarouselSlide(6)"></span>
-            </div>
-          </div>
-        </div>
-      </main>
-    </div>
-
-    <!-- Status Bar -->
-    <footer class="status-bar">
-      <div class="status-bar-left">
-        <div class="status-item">
-          <i class="ph ph-database"></i>
-          <span class="status-label">Total:</span>
-          <span class="status-value" id="statusTotal">0</span>
-        </div>
-        <div class="status-item">
-          <i class="ph ph-warning-circle"></i>
-          <span class="status-label">Expired:</span>
-          <span class="status-value" id="statusExpired">0</span>
-        </div>
-        <div class="status-item">
-          <i class="ph ph-clock"></i>
-          <span class="status-label">Expiring:</span>
-          <span class="status-value" id="statusExpiring">0</span>
-        </div>
-      </div>
-      <div class="status-bar-center">
-        <div class="status-item status-search">
-          <button class="status-search-btn" id="statusSearchBtn" onclick="toggleStatusSearch()" title="Search suppliers">
-            <i class="ph ph-magnifying-glass"></i>
-          </button>
-          <div class="status-search-input-wrapper" id="statusSearchInputWrapper">
-            <input type="text" id="statusSupplierSearchInput" placeholder="Search suppliers..." />
-            <button class="status-search-clear" id="statusSearchClear" onclick="clearStatusSearch()">
-              <i class="ph ph-x"></i>
+            <button class="carousel-nav-btn carousel-nav-next" id="carouselNextBtn"
+              onclick="navigateSettingsCarousel(1)" aria-label="Next card">
+              <i class="ph ph-caret-right"></i>
             </button>
           </div>
-          <button class="status-add-btn" id="statusAddBtn" onclick="openAddToolingModal()" title="New Tooling">
-            <i class="ph ph-plus"></i>
+          <div class="carousel-indicators" id="carouselIndicators">
+            <span class="carousel-dot active" data-index="0" onclick="goToSettingsCarouselSlide(0)"></span>
+            <span class="carousel-dot" data-index="1" onclick="goToSettingsCarouselSlide(1)"></span>
+            <span class="carousel-dot" data-index="2" onclick="goToSettingsCarouselSlide(2)"></span>
+            <span class="carousel-dot" data-index="3" onclick="goToSettingsCarouselSlide(3)"></span>
+            <span class="carousel-dot" data-index="4" onclick="goToSettingsCarouselSlide(4)"></span>
+            <span class="carousel-dot" data-index="5" onclick="goToSettingsCarouselSlide(5)"></span>
+            <span class="carousel-dot" data-index="6" onclick="goToSettingsCarouselSlide(6)"></span>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Status Bar -->
+  <footer class="status-bar">
+    <div class="status-bar-left">
+      <div class="status-item">
+        <i class="ph ph-database"></i>
+        <span class="status-label">Total:</span>
+        <span class="status-value" id="statusTotal">0</span>
+      </div>
+      <div class="status-item">
+        <i class="ph ph-warning-circle"></i>
+        <span class="status-label">Expired:</span>
+        <span class="status-value" id="statusExpired">0</span>
+      </div>
+      <div class="status-item">
+        <i class="ph ph-clock"></i>
+        <span class="status-label">Expiring:</span>
+        <span class="status-value" id="statusExpiring">0</span>
+      </div>
+    </div>
+    <div class="status-bar-center">
+      <div class="status-item status-search">
+        <button class="status-search-btn" id="statusSearchBtn" onclick="toggleStatusSearch()" title="Search suppliers">
+          <i class="ph ph-magnifying-glass"></i>
+        </button>
+        <div class="status-search-input-wrapper" id="statusSearchInputWrapper">
+          <input type="text" id="statusSupplierSearchInput" placeholder="Search suppliers..." />
+          <button class="status-search-clear" id="statusSearchClear" onclick="clearStatusSearch()">
+            <i class="ph ph-x"></i>
           </button>
         </div>
-      </div>
-      <div class="status-bar-right">
-        <div class="status-item status-version">
-          <span class="status-label" id="appVersion"></span>
-        </div>
-      </div>
-    </footer>
-
-    <!-- Toast notification -->
-    <div id="toast" class="toast">
-      <div class="toast-icon">
-        <i class="ph ph-check-circle"></i>
-      </div>
-      <div class="toast-message" id="toastMessage">Success!</div>
-    </div>
-
-    <!-- Column Filter Popup -->
-    <div class="column-filter-popup" id="columnFilterPopup">
-      <div class="column-filter-popup-header">
-        <span class="column-filter-popup-title" id="columnFilterPopupTitle">Filter</span>
-        <button class="column-filter-popup-close" onclick="closeColumnFilter()">
-          <i class="ph ph-x"></i>
+        <button class="status-add-btn" id="statusAddBtn" onclick="openAddToolingModal()" title="New Tooling">
+          <i class="ph ph-plus"></i>
         </button>
-      </div>
-      <div class="column-filter-popup-sort" id="columnFilterSort">
-        <span class="column-filter-sort-label">Sort:</span>
-        <button class="column-filter-sort-btn" data-sort="asc" onclick="setColumnSortFromPopup('asc')">
-          <i class="ph ph-sort-ascending"></i> Ascending
-        </button>
-        <button class="column-filter-sort-btn" data-sort="desc" onclick="setColumnSortFromPopup('desc')">
-          <i class="ph ph-sort-descending"></i> Descending
-        </button>
-      </div>
-      <div class="column-filter-popup-search">
-        <input type="text" id="columnFilterSearch" placeholder="Search..." oninput="filterColumnOptions()">
-      </div>
-      <div class="column-filter-popup-actions">
-        <button class="column-filter-action-btn" onclick="selectAllFilterOptions()">Select All</button>
-        <button class="column-filter-action-btn" onclick="clearAllFilterOptions()">Clear All</button>
-      </div>
-      <div class="column-filter-popup-list" id="columnFilterList">
-        <!-- Options will be populated dynamically -->
-      </div>
-      <div class="column-filter-popup-footer">
-        <button class="column-filter-apply-btn" onclick="applyColumnFilter()">Apply</button>
       </div>
     </div>
+    <div class="status-bar-right">
+      <div class="status-item status-version">
+        <span class="status-label" id="appVersion"></span>
+      </div>
+    </div>
+  </footer>
 
-    <script src="renderer.js"></script>
-  </body>
+  <!-- Toast notification -->
+  <div id="toast" class="toast">
+    <div class="toast-icon">
+      <i class="ph ph-check-circle"></i>
+    </div>
+    <div class="toast-message" id="toastMessage">Success!</div>
+  </div>
+
+  <!-- Column Filter Popup -->
+  <div class="column-filter-popup" id="columnFilterPopup">
+    <div class="column-filter-popup-header">
+      <span class="column-filter-popup-title" id="columnFilterPopupTitle">Filter</span>
+      <button class="column-filter-popup-close" onclick="closeColumnFilter()">
+        <i class="ph ph-x"></i>
+      </button>
+    </div>
+    <div class="column-filter-popup-sort" id="columnFilterSort">
+      <span class="column-filter-sort-label">Sort:</span>
+      <button class="column-filter-sort-btn" data-sort="asc" onclick="setColumnSortFromPopup('asc')">
+        <i class="ph ph-sort-ascending"></i> Ascending
+      </button>
+      <button class="column-filter-sort-btn" data-sort="desc" onclick="setColumnSortFromPopup('desc')">
+        <i class="ph ph-sort-descending"></i> Descending
+      </button>
+    </div>
+    <div class="column-filter-popup-search">
+      <input type="text" id="columnFilterSearch" placeholder="Search..." oninput="filterColumnOptions()">
+    </div>
+    <div class="column-filter-popup-actions">
+      <button class="column-filter-action-btn" onclick="selectAllFilterOptions()">Select All</button>
+      <button class="column-filter-action-btn" onclick="clearAllFilterOptions()">Clear All</button>
+    </div>
+    <div class="column-filter-popup-list" id="columnFilterList">
+      <!-- Options will be populated dynamically -->
+    </div>
+    <div class="column-filter-popup-footer">
+      <button class="column-filter-apply-btn" onclick="applyColumnFilter()">Apply</button>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+
 </html>

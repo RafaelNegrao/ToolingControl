@@ -209,27 +209,27 @@ function getExpirationDiffDays(expirationDate) {
   if (!expirationDate) {
     return null;
   }
-  
+
   // Normaliza a string de data para formato ISO (YYYY-MM-DD)
   let normalizedDate = String(expirationDate).trim();
-  
+
   // Se estiver no formato DD/MM/YYYY, converte para YYYY-MM-DD
   const ddmmyyyyMatch = normalizedDate.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (ddmmyyyyMatch) {
     const [, day, month, year] = ddmmyyyyMatch;
     normalizedDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
   }
-  
+
   const expDate = new Date(normalizedDate);
   if (Number.isNaN(expDate.getTime())) {
     return null;
   }
-  
+
   // Normaliza ambas as datas para meia-noite para comparação precisa
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   expDate.setHours(0, 0, 0, 0);
-  
+
   return Math.ceil((expDate - now) / MS_PER_DAY);
 }
 
@@ -340,7 +340,7 @@ function parseExcelDate(value) {
   if (value === null || value === undefined || value === '') {
     return null;
   }
-  
+
   // Se é um objeto de célula do Excel, extrair o valor real
   if (typeof value === 'object' && value !== null) {
     // Verificar se tem result (fórmula)
@@ -358,12 +358,12 @@ function parseExcelDate(value) {
     }
     return null;
   }
-  
+
   // Se é um Date válido
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     return value;
   }
-  
+
   // Se é um número serial do Excel
   if (typeof value === 'number' && !Number.isNaN(value)) {
     // Verificar se é um número serial válido (entre 1 e ~50000 para datas razoáveis)
@@ -372,7 +372,7 @@ function parseExcelDate(value) {
     }
     return null;
   }
-  
+
   // Se é uma string, tentar parsear diferentes formatos
   const text = String(value).trim();
   if (!text) {
@@ -387,14 +387,14 @@ function parseExcelDate(value) {
       return new Date(EXCEL_EPOCH_MS + serialValue * MS_PER_DAY);
     }
   }
-  
+
   // Formato ISO: YYYY-MM-DD
   const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (isoMatch) {
     const [_, year, month, day] = isoMatch;
     return new Date(`${year}-${month}-${day}T00:00:00`);
   }
-  
+
   // Formato com barras (prioriza padrão brasileiro DD/MM/YYYY)
   const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (slashMatch) {
@@ -409,7 +409,7 @@ function parseExcelDate(value) {
       return new Date(`${year}-${month}-${day}T00:00:00`);
     }
   }
-  
+
   // Tentar parsear com Date nativo como último recurso
   const parsed = new Date(text);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
@@ -523,7 +523,7 @@ function formatChangeCommentText(changeEntries = []) {
 
 function buildUpdatedComments(existing, supplierComment, currentDateStr, toolingLife = null, isNewRecord = false, changeEntries = []) {
   let comments = [];
-  
+
   // Tentar parsear comentários existentes
   if (existing) {
     try {
@@ -536,7 +536,7 @@ function buildUpdatedComments(existing, supplierComment, currentDateStr, tooling
       comments = [];
     }
   }
-  
+
   // Se for novo registro e tiver tooling life, adicionar comentário inicial
   if (isNewRecord && toolingLife !== null && toolingLife !== undefined) {
     const formattedLife = toolingLife.toLocaleString('pt-BR');
@@ -546,7 +546,7 @@ function buildUpdatedComments(existing, supplierComment, currentDateStr, tooling
       initial: true
     });
   }
-  
+
   // Se há comentário do supplier, adicionar
   if (supplierComment && supplierComment.trim()) {
     comments.push({
@@ -566,7 +566,7 @@ function buildUpdatedComments(existing, supplierComment, currentDateStr, tooling
       origin: 'import'
     });
   }
-  
+
   return JSON.stringify(comments);
 }
 
@@ -809,7 +809,7 @@ function toISODateString(value) {
   if (text === '') {
     return '';
   }
-  
+
   // Formato ISO: YYYY-MM-DD
   const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (isoMatch) {
@@ -820,7 +820,7 @@ function toISODateString(value) {
     }
     return '';
   }
-  
+
   // Formato BR: DD/MM/YYYY
   const slashMatch = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (slashMatch) {
@@ -832,24 +832,24 @@ function toISODateString(value) {
     }
     return '';
   }
-  
+
   // Se o texto for apenas números (possivelmente um serial date do Excel), ignorar
   if (/^\d+$/.test(text)) {
     return '';
   }
-  
+
   // Tentar parsear como data, mas validar o resultado
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) {
     return '';
   }
-  
+
   // Validar que a data parseada está em um range razoável
   const year = parsed.getFullYear();
   if (year < 1900 || year > 2200) {
     return '';
   }
-  
+
   return parsed.toISOString().split('T')[0];
 }
 function normalizeComparableValueForChange(value, type) {
@@ -1034,7 +1034,7 @@ function checkAndAddColumns() {
     { name: 'replacement_tooling_id', type: 'INTEGER' },
     { name: 'analysis_completed', type: 'INTEGER' }
   ];
-  
+
   return new Promise((resolve, reject) => {
     db.all('PRAGMA table_info(ferramental)', [], (err, columns) => {
       if (err) {
@@ -1159,11 +1159,11 @@ function recordStepChange(toolingId, oldStep, newStep) {
       resolve({ recorded: false, reason: 'no_change' });
       return;
     }
-    
+
     db.run(
       `INSERT INTO step_history (tooling_id, old_step, new_step) VALUES (?, ?, ?)`,
       [toolingId, oldStep || null, newStep],
-      function(err) {
+      function (err) {
         if (err) {
           console.error('[StepHistory] Error recording step change:', err);
           reject(err);
@@ -1198,7 +1198,7 @@ function clearStepHistory(toolingId) {
     db.run(
       `DELETE FROM step_history WHERE tooling_id = ?`,
       [toolingId],
-      function(err) {
+      function (err) {
         if (err) {
           console.error('[StepHistory] Error clearing step history:', err);
           reject(err);
@@ -1224,24 +1224,24 @@ function clearAllStepHistory() {
       if (createErr) {
         console.error('[StepHistory] Error ensuring step_history table:', createErr);
       }
-      
+
       // Delete all step history records
-      db.run(`DELETE FROM step_history`, function(err) {
+      db.run(`DELETE FROM step_history`, function (err) {
         if (err) {
           console.error('[StepHistory] Error clearing step_history table:', err);
           // Continue anyway to clear the steps field
         }
-        
+
         const historyDeleted = this ? this.changes : 0;
         console.log(`[StepHistory] Cleared ${historyDeleted} entries from step_history`);
-        
-        // Clear only analysis_completed (unchecking steps checkboxes), keeping the steps field intact
-        db.run(`UPDATE ferramental SET analysis_completed = 0, last_update = datetime('now')`, function(updateErr) {
+
+        // Clear steps field and analysis_completed from all ferramental records
+        db.run(`UPDATE ferramental SET steps = NULL, analysis_completed = 0, last_update = datetime('now')`, function (updateErr) {
           if (updateErr) {
-            console.error('[StepHistory] Error clearing analysis_completed:', updateErr);
+            console.error('[StepHistory] Error clearing steps:', updateErr);
             reject(updateErr);
           } else {
-            console.log(`[StepHistory] Cleared analysis_completed from ${this.changes} tooling records (steps field preserved)`);
+            console.log(`[StepHistory] Cleared steps and analysis_completed from ${this.changes} tooling records`);
             resolve({ success: true, historyDeleted, toolingsUpdated: this.changes });
           }
         });
@@ -1301,7 +1301,7 @@ function ensureTodosTable() {
             db.serialize(() => {
               db.run('DROP TABLE IF EXISTS todos_backup', (dropErr) => {
               });
-              
+
               db.run('ALTER TABLE todos RENAME TO todos_backup', (renameErr) => {
                 if (renameErr) {
                   reject(renameErr);
@@ -1427,7 +1427,7 @@ function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
 
       const validValues = validFields.map(key => data[key]);
       const setClause = validFields.map(field => `${field.trim()} = ?`).join(', ');
-      
+
       // Verifica se todos os campos são "silenciosos" (não devem atualizar last_update)
       const hasUserEditableFields = validFields.some(field => !SILENT_UPDATE_FIELDS.has(field));
       const query = hasUserEditableFields
@@ -1437,7 +1437,7 @@ function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
       db.run(
         query,
         [...validValues, id],
-        async function(err) {
+        async function (err) {
           if (err && isMissingReplacementColumnError(err) && attempt === 1) {
             try {
               await ensureReplacementColumnExists(true);
@@ -1465,7 +1465,7 @@ function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
                 }
               }
             }
-            
+
             resolve({
               success: true,
               changes: this.changes,
@@ -1543,6 +1543,75 @@ ipcMain.handle('get-suppliers-with-stats', async () => {
           a.supplier.localeCompare(b.supplier, 'pt-BR', { sensitivity: 'base' })
         );
         resolve(result);
+      }
+    );
+  });
+});
+
+ipcMain.handle('rename-supplier', async (event, currentName, newName) => {
+  return new Promise(async (resolve) => {
+    const normalizedCurrent = String(currentName || '').trim();
+    const normalizedNew = String(newName || '').trim();
+
+    if (!normalizedCurrent || !normalizedNew) {
+      resolve({ success: false, message: 'Nome do fornecedor inválido.' });
+      return;
+    }
+
+    if (normalizedCurrent === normalizedNew) {
+      resolve({ success: true, supplierName: normalizedNew, updated: 0 });
+      return;
+    }
+
+    try {
+      await ensureSupplierMetadataTable();
+    } catch (err) {
+    }
+
+    db.get(
+      `SELECT COUNT(1) as count FROM ferramental 
+       WHERE LOWER(TRIM(supplier)) = LOWER(TRIM(?))
+         AND LOWER(TRIM(supplier)) != LOWER(TRIM(?))`,
+      [normalizedNew, normalizedCurrent],
+      (checkErr, row) => {
+        if (checkErr) {
+          resolve({ success: false, message: 'Erro ao validar fornecedor.' });
+          return;
+        }
+
+        if ((row?.count || 0) > 0) {
+          resolve({ success: false, message: 'Já existe um fornecedor com esse nome.' });
+          return;
+        }
+
+        db.run(
+          'UPDATE ferramental SET supplier = ? WHERE TRIM(supplier) = ?',
+          [normalizedNew, normalizedCurrent],
+          function updateSupplier(err) {
+            if (err) {
+              resolve({ success: false, message: 'Erro ao atualizar fornecedor.' });
+              return;
+            }
+
+            db.run(
+              `UPDATE ${SUPPLIER_METADATA_TABLE} SET supplier = ? WHERE supplier = ?`,
+              [normalizedNew, normalizedCurrent],
+              () => { }
+            );
+
+            try {
+              renameAttachmentsFolder(normalizedCurrent, normalizedNew);
+            } catch (renameErr) {
+              resolve({
+                success: false,
+                message: 'Fornecedor renomeado, mas houve erro ao mover os anexos.'
+              });
+              return;
+            }
+
+            resolve({ success: true, supplierName: normalizedNew, updated: this.changes || 0 });
+          }
+        );
       }
     );
   });
@@ -1669,10 +1738,10 @@ ipcMain.handle('get-ids-with-incoming-links', async (event, targetIds) => {
       resolve([]);
       return;
     }
-    
+
     // Cria placeholders para a query
     const placeholders = targetIds.map(() => '?').join(',');
-    
+
     db.all(
       `SELECT DISTINCT replacement_tooling_id FROM ferramental 
        WHERE replacement_tooling_id IN (${placeholders})
@@ -1762,6 +1831,7 @@ ipcMain.handle('get-analytics', async () => {
 
 ipcMain.handle('get-steps-summary', async () => {
   return new Promise((resolve, reject) => {
+    // First query: counts per step
     db.all(`
       SELECT 
         steps,
@@ -1775,9 +1845,47 @@ ipcMain.handle('get-steps-summary', async () => {
     `, [], (err, rows) => {
       if (err) {
         reject(err);
-      } else {
-        resolve(rows || []);
+        return;
       }
+
+      // Second query: suppliers per step
+      db.all(`
+        SELECT 
+          steps,
+          supplier,
+          COUNT(*) as count
+        FROM ferramental
+        WHERE steps IS NOT NULL 
+          AND TRIM(steps) != '' 
+          AND TRIM(steps) != '0'
+          AND supplier IS NOT NULL
+          AND TRIM(supplier) != ''
+        GROUP BY steps, supplier
+        ORDER BY CAST(steps AS INTEGER), supplier COLLATE NOCASE
+      `, [], (err2, supplierRows) => {
+        if (err2) {
+          reject(err2);
+          return;
+        }
+
+        // Build a map of suppliers per step
+        const suppliersMap = {};
+        (supplierRows || []).forEach(sr => {
+          if (!suppliersMap[sr.steps]) {
+            suppliersMap[sr.steps] = [];
+          }
+          suppliersMap[sr.steps].push({ supplier: sr.supplier, count: sr.count });
+        });
+
+        // Merge suppliers into step rows
+        const result = (rows || []).map(row => ({
+          steps: row.steps,
+          count: row.count,
+          suppliers: suppliersMap[row.steps] || []
+        }));
+
+        resolve(result);
+      });
     });
   });
 });
@@ -1854,7 +1962,7 @@ ipcMain.handle('create-tooling', async (event, data) => {
           productionDate,
           comments
         ],
-        function(err) {
+        function (err) {
           if (err) {
             reject(err);
           } else {
@@ -1870,7 +1978,7 @@ ipcMain.handle('create-tooling', async (event, data) => {
 
 ipcMain.handle('delete-tooling', async (event, id) => {
   return new Promise((resolve, reject) => {
-    db.run('DELETE FROM ferramental WHERE id = ?', [id], function(err) {
+    db.run('DELETE FROM ferramental WHERE id = ?', [id], function (err) {
       if (err) {
         reject(err);
       } else {
@@ -1886,7 +1994,7 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
     // Construir query baseada nos IDs filtrados
     let query;
     let params;
-    
+
     if (filteredIds && Array.isArray(filteredIds) && filteredIds.length > 0) {
       // Exportar apenas os IDs filtrados
       const placeholders = filteredIds.map(() => '?').join(',');
@@ -1925,7 +2033,7 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
       `;
       params = [supplierName];
     }
-    
+
     db.all(query, params, async (err, rows) => {
       if (err) {
         reject(err);
@@ -1934,7 +2042,7 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
 
       try {
         const workbook = new ExcelJS.Workbook();
-        
+
         // Criar aba de dados
         const worksheet = workbook.addWorksheet('Tooling Data');
 
@@ -2001,7 +2109,7 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
           // Converter datas para objetos Date do JavaScript (ExcelJS converte automaticamente)
           const prodDate = parseExcelDate(row.production_date);
           const foreDate = parseExcelDate(row.forecast_date);
-          
+
           worksheet.addRow({
             id: row.id || '',
             pn: row.pn || '',
@@ -2022,7 +2130,7 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
 
         // Calcular primeira linha vazia (para desbloquear PN)
         const firstEmptyRow = rows.length + 2; // +2 porque: +1 para header, +1 para próxima linha
-        
+
         // Adicionar 100 linhas vazias extras
         for (let i = 0; i < 100; i++) {
           worksheet.addRow({
@@ -2045,7 +2153,7 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         for (let rowNum = 2; rowNum <= totalRows + 1; rowNum++) {
           const row = worksheet.getRow(rowNum);
           const expirationCell = row.getCell(10); // Coluna J (Expiration Date)
-          
+
           // Fórmula: se(annual_volume=0; prod_date + (remaining/1*365); prod_date + (remaining/annual_volume*365))
           // Remaining = Tooling Life (E) - Produced (F)
           // Se Production Date (G) vazio -> não mostra nada
@@ -2081,17 +2189,17 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
             // Header row - manter bloqueado
             return;
           }
-          
+
           // Verificar se é linha vazia ou além dos dados existentes
           const isEmptyOrNew = rowNumber >= firstEmptyRow;
-          
+
           // Desbloquear colunas C até I e K (índices 3 a 9 e 11) - excluindo J (Expiration Date)
           for (let colIndex = 3; colIndex <= 11; colIndex++) {
             if (colIndex === 10) continue; // Pular coluna J (Expiration Date) - mantém bloqueada
             const cell = row.getCell(colIndex);
             cell.protection = { locked: false };
           }
-          
+
           // Se for linha vazia ou nova, desbloquear também coluna B (PN)
           if (isEmptyOrNew) {
             const pnCell = row.getCell(2);
@@ -2140,12 +2248,12 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         await ensureSupplierMetadataTable();
         const lastImportTimestamp = await getSupplierImportTimestamp(supplierName);
         const supplierSheet = workbook.addWorksheet(SUPPLIER_INFO_SHEET_NAME);
-        
+
         // Remover gridlines da aba Instructions
         supplierSheet.views = [
           { showGridLines: false }
         ];
-        
+
         supplierSheet.columns = [
           { header: 'Field', key: 'field', width: 28 },
           { header: 'Value', key: 'value', width: 55 }
@@ -2217,11 +2325,11 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         // Auto-fit nas colunas da aba Tooling Data - calcular largura baseada no conteúdo real
         worksheet.columns.forEach((column, index) => {
           let maxContentLength = 0;
-          
+
           column.eachCell({ includeEmpty: false }, cell => {
             // Pular o cabeçalho (linha 1) - vamos tratar separadamente
             if (cell.row === 1) return;
-            
+
             let cellLength = 0;
             // Tratar datas especialmente
             if (cell.value instanceof Date) {
@@ -2231,15 +2339,15 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
             } else if (cell.value) {
               cellLength = cell.value.toString().length;
             }
-            
+
             if (cellLength > maxContentLength) {
               maxContentLength = cellLength;
             }
           });
-          
+
           // Calcular largura do header
           const headerLength = column.header ? column.header.toString().length : 0;
-          
+
           // Largura final = maior entre header e conteúdo + padding de 2
           // Largura mínima de 8, máxima de 50 para acomodar colunas de comentários
           const calculatedWidth = Math.max(headerLength, maxContentLength) + 2;
@@ -2276,10 +2384,10 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         // Salvar o arquivo
         await workbook.xlsx.writeFile(result.filePath);
 
-        resolve({ 
-          success: true, 
+        resolve({
+          success: true,
           message: 'File exported successfully',
-          filePath: result.filePath 
+          filePath: result.filePath
         });
 
       } catch (error) {
@@ -2375,7 +2483,7 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
 
       // Criar novo registro
       const mergedComments = buildUpdatedComments('', supplierComment, todayStr, toolingLifeQty, true);
-      
+
       await dbRun(
         `INSERT INTO ferramental (
           supplier, pn, pn_description, tool_description, tooling_life_qty, produced,
@@ -2498,7 +2606,7 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
 ipcMain.handle('export-empty-template', async () => {
   try {
     const workbook = new ExcelJS.Workbook();
-    
+
     // Criar aba de dados
     const worksheet = workbook.addWorksheet('Tooling Data');
 
@@ -2568,7 +2676,7 @@ ipcMain.handle('export-empty-template', async () => {
     for (let rowNum = 2; rowNum <= 101; rowNum++) {
       const row = worksheet.getRow(rowNum);
       const expirationCell = row.getCell(10);
-      
+
       expirationCell.value = {
         formula: `IF(OR(G${rowNum}="",E${rowNum}="",F${rowNum}=""),"",IF(OR(H${rowNum}="",H${rowNum}=0),G${rowNum}+ROUND((E${rowNum}-F${rowNum})/1*365,0),G${rowNum}+ROUND((E${rowNum}-F${rowNum})/H${rowNum}*365,0)))`,
         date1904: false
@@ -2595,11 +2703,11 @@ ipcMain.handle('export-empty-template', async () => {
     // Desbloquear colunas B a I e K para edição (todas as linhas são novas)
     worksheet.eachRow((row, rowNumber) => {
       if (rowNumber === 1) return;
-      
+
       // Desbloquear coluna B (PN) - para novas linhas
       const pnCell = row.getCell(2);
       pnCell.protection = { locked: false };
-      
+
       // Desbloquear colunas C até I e K
       for (let colIndex = 3; colIndex <= 11; colIndex++) {
         if (colIndex === 10) continue; // Pular coluna J (Expiration Date)
@@ -2640,11 +2748,11 @@ ipcMain.handle('export-empty-template', async () => {
 
     // Criar aba Info & Instructions com Supplier Name editável
     const supplierSheet = workbook.addWorksheet(SUPPLIER_INFO_SHEET_NAME);
-    
+
     supplierSheet.views = [
       { showGridLines: false }
     ];
-    
+
     supplierSheet.columns = [
       { header: 'Field', key: 'field', width: 28 },
       { header: 'Value', key: 'value', width: 55 }
@@ -2653,18 +2761,18 @@ ipcMain.handle('export-empty-template', async () => {
     // Adicionar linha de Supplier Name VAZIA para preenchimento
     const supplierNameRow = supplierSheet.addRow({ field: 'Supplier Name', value: '' });
     supplierSheet.addRow({ field: SUPPLIER_INFO_TIMESTAMP_LABEL, value: '' });
-    
+
     // Adicionar instruções
     supplierSheet.addRow({ field: '', value: '' });
     const instrRow = supplierSheet.addRow({ field: 'INSTRUÇÕES', value: '' });
     instrRow.getCell(1).font = { bold: true, size: 12 };
     supplierSheet.addRow({ field: '', value: '' });
-    
+
     const importantRow = supplierSheet.addRow({ field: '⚠️ IMPORTANTE:', value: '' });
     importantRow.getCell(1).font = { bold: true, color: { argb: 'FFFF0000' } };
     supplierSheet.addRow({ field: '', value: 'Preencha o "Supplier Name" acima antes de importar!' });
     supplierSheet.addRow({ field: '', value: '' });
-    
+
     const addNewRow = supplierSheet.addRow({ field: 'Como Adicionar Novo Ferramental:', value: '' });
     addNewRow.getCell(1).font = { bold: true };
     supplierSheet.addRow({ field: '', value: 'Os itens com * são obrigatórios para adição de novo ferramental' });
@@ -2771,10 +2879,10 @@ ipcMain.handle('export-empty-template', async () => {
 
     await workbook.xlsx.writeFile(result.filePath);
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       message: 'Template exported successfully',
-      filePath: result.filePath 
+      filePath: result.filePath
     };
   } catch (error) {
     return { success: false, message: error.message || 'Error exporting template' };
@@ -2801,7 +2909,7 @@ ipcMain.handle('import-new-supplier', async () => {
     await workbook.xlsx.readFile(filePath);
 
     validateVerificationSheet(workbook);
-    
+
     const supplierInfoSheet = workbook.getWorksheet(SUPPLIER_INFO_SHEET_NAME);
     if (!supplierInfoSheet) {
       throw new Error('Aba "Info & Instructions" não encontrada. Use o template oficial.');
@@ -2869,7 +2977,7 @@ ipcMain.handle('import-new-supplier', async () => {
 
       // Criar novo registro
       const mergedComments = buildUpdatedComments('', supplierComment, todayStr, toolingLifeQty, true);
-      
+
       await dbRun(
         `INSERT INTO ferramental (
           supplier, pn, pn_description, tool_description, tooling_life_qty, produced,
@@ -2905,7 +3013,7 @@ ipcMain.handle('import-new-supplier', async () => {
     const timestampStr = getCurrentTimestampBR();
     updateSupplierInfoTimestamp(workbook, timestampStr);
     await setSupplierImportTimestamp(supplierName, timestampStr);
-    
+
     const verificationSheet = workbook.getWorksheet(VERIFICATION_SHEET_NAME);
     if (verificationSheet) {
       verificationSheet.state = 'veryHidden';
@@ -2941,24 +3049,98 @@ function getAttachmentsDir() {
   return attachmentsPath;
 }
 
+function resolveUniqueTargetPath(targetDir, fileName) {
+  const extension = path.extname(fileName);
+  const baseName = path.basename(fileName, extension);
+  let counter = 1;
+  let candidate = path.join(targetDir, `${baseName} (${counter})${extension}`);
+  while (fs.existsSync(getLongPath(candidate))) {
+    counter += 1;
+    candidate = path.join(targetDir, `${baseName} (${counter})${extension}`);
+  }
+  return candidate;
+}
+
+function moveDirectoryContents(sourceDir, targetDir) {
+  const longSourceDir = getLongPath(sourceDir);
+  if (!fs.existsSync(longSourceDir)) {
+    return;
+  }
+
+  const longTargetDir = getLongPath(targetDir);
+  if (!fs.existsSync(longTargetDir)) {
+    fs.mkdirSync(longTargetDir, { recursive: true });
+  }
+
+  const entries = fs.readdirSync(longSourceDir, { withFileTypes: true });
+  entries.forEach(entry => {
+    const sourcePath = path.join(sourceDir, entry.name);
+    const targetPath = path.join(targetDir, entry.name);
+    const longSourcePath = getLongPath(sourcePath);
+    const longTargetPath = getLongPath(targetPath);
+
+    if (entry.isDirectory()) {
+      if (fs.existsSync(longTargetPath)) {
+        moveDirectoryContents(sourcePath, targetPath);
+      } else {
+        fs.renameSync(longSourcePath, longTargetPath);
+      }
+      return;
+    }
+
+    let finalTargetPath = targetPath;
+    let longFinalTargetPath = longTargetPath;
+    if (fs.existsSync(longFinalTargetPath)) {
+      finalTargetPath = resolveUniqueTargetPath(targetDir, entry.name);
+      longFinalTargetPath = getLongPath(finalTargetPath);
+    }
+
+    fs.renameSync(longSourcePath, longFinalTargetPath);
+  });
+}
+
+function renameAttachmentsFolder(oldSupplierName, newSupplierName) {
+  const attachmentsDir = getAttachmentsDir();
+  const oldDir = path.join(attachmentsDir, sanitizeFileName(oldSupplierName));
+  const newDir = path.join(attachmentsDir, sanitizeFileName(newSupplierName));
+
+  if (oldDir === newDir) {
+    return;
+  }
+
+  const longOldDir = getLongPath(oldDir);
+  if (!fs.existsSync(longOldDir)) {
+    return;
+  }
+
+  const longNewDir = getLongPath(newDir);
+  if (!fs.existsSync(longNewDir)) {
+    fs.renameSync(longOldDir, longNewDir);
+    return;
+  }
+
+  moveDirectoryContents(oldDir, newDir);
+  fs.rmSync(longOldDir, { recursive: true, force: true });
+}
+
 // Lista anexos de um fornecedor
 ipcMain.handle('get-attachments', async (event, supplierName, itemId = null) => {
   const attachmentsDir = getAttachmentsDir();
   let targetDir;
-  
+
   if (itemId) {
     targetDir = path.join(attachmentsDir, sanitizeFileName(supplierName), String(itemId));
   } else {
     targetDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
   }
-  
+
   // Usar caminho longo para Windows se necessário
   const longTargetDir = getLongPath(targetDir);
-  
+
   if (!fs.existsSync(longTargetDir)) {
     return [];
   }
-  
+
   try {
     const allItems = fs.readdirSync(longTargetDir);
     const files = allItems.filter(itemName => {
@@ -2967,7 +3149,7 @@ ipcMain.handle('get-attachments', async (event, supplierName, itemId = null) => 
       const stats = fs.statSync(longFullPath);
       return stats.isFile();
     });
-    
+
     return files.map(fileName => {
       const filePath = path.join(targetDir, fileName);
       const longFilePath = getLongPath(filePath);
@@ -3038,24 +3220,24 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
       { name: 'All Files', extensions: ['*'] }
     ]
   });
-  
+
   if (result.canceled || result.filePaths.length === 0) {
     return { success: false, cancelled: true };
   }
-  
+
   try {
     const attachmentsDir = getAttachmentsDir();
     let targetDir;
-    
+
     const supplierDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
     const hasCardScope = itemId !== null && itemId !== undefined;
     targetDir = hasCardScope
       ? path.join(supplierDir, String(itemId))
       : supplierDir;
-    
+
     // Usar caminho longo para Windows se necessário
     const longTargetDir = getLongPath(targetDir);
-    
+
     if (!fs.existsSync(longTargetDir)) {
       try {
         fs.mkdirSync(longTargetDir, { recursive: true });
@@ -3063,7 +3245,7 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
         return { success: false, error: 'Não foi possível criar diretório de anexos.' };
       }
     }
-    
+
     const results = result.filePaths.map(sourcePath => {
       try {
         const fileName = path.basename(sourcePath);
@@ -3077,12 +3259,12 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
         return { success: false, fileName: path.basename(sourcePath), error: error.message };
       }
     });
-    
+
     const hasFailure = results.some(r => r.success !== true);
     const fileCount = results.filter(r => r.success === true).length;
-    
-    return { 
-      success: !hasFailure, 
+
+    return {
+      success: !hasFailure,
       results,
       message: fileCount > 1 ? `${fileCount} arquivos anexados` : 'Arquivo anexado'
     };
@@ -3155,20 +3337,20 @@ ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, fileP
 ipcMain.handle('open-attachment', async (event, supplierName, fileName, itemId = null) => {
   const attachmentsDir = getAttachmentsDir();
   let filePath;
-  
+
   if (itemId) {
     filePath = path.join(attachmentsDir, sanitizeFileName(supplierName), String(itemId), fileName);
   } else {
     filePath = path.join(attachmentsDir, sanitizeFileName(supplierName), fileName);
   }
-  
+
   // Usar caminho longo para Windows se necessário
   const longPath = getLongPath(filePath);
-  
+
   if (!fs.existsSync(longPath)) {
     throw new Error('Arquivo não encontrado');
   }
-  
+
   try {
     // Usar função que lida com caminhos longos no Windows
     return await openFileWithLongPath(filePath);
@@ -3181,13 +3363,13 @@ ipcMain.handle('open-attachment', async (event, supplierName, fileName, itemId =
 ipcMain.handle('open-attachments-folder', async (event, supplierName) => {
   const attachmentsDir = getAttachmentsDir();
   const supplierDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
-  
+
   // Criar diretório se não existir
   const longSupplierDir = getLongPath(supplierDir);
   if (!fs.existsSync(longSupplierDir)) {
     fs.mkdirSync(longSupplierDir, { recursive: true });
   }
-  
+
   try {
     await shell.openPath(supplierDir);
     return { success: true };
@@ -3200,20 +3382,20 @@ ipcMain.handle('open-attachments-folder', async (event, supplierName) => {
 ipcMain.handle('delete-attachment', async (event, supplierName, fileName, itemId = null) => {
   const attachmentsDir = getAttachmentsDir();
   let filePath;
-  
+
   if (itemId) {
     filePath = path.join(attachmentsDir, sanitizeFileName(supplierName), String(itemId), fileName);
   } else {
     filePath = path.join(attachmentsDir, sanitizeFileName(supplierName), fileName);
   }
-  
+
   // Usar caminho longo para Windows se necessário
   const longPath = getLongPath(filePath);
-  
+
   if (!fs.existsSync(longPath)) {
     return { success: false, error: 'Arquivo não encontrado' };
   }
-  
+
   try {
     fs.unlinkSync(longPath);
     return { success: true };
@@ -3252,8 +3434,8 @@ function openFileWithLongPath(filePath) {
       // No Windows, usar cmd /c start para abrir arquivos com caminhos longos
       // Funciona melhor que PowerShell para caminhos extensos
       const normalizedPath = path.resolve(filePath);
-      const command = `cmd /c start "" "${normalizedPath}"`;  
-      
+      const command = `cmd /c start "" "${normalizedPath}"`;
+
       exec(command, { shell: true, windowsHide: true }, (error) => {
         if (error) {
           console.error('[OpenFile] cmd /c start failed, trying shell.openPath:', error);
@@ -3274,7 +3456,7 @@ function openFileWithLongPath(filePath) {
   });
 }
 
-function createWindow () {
+function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
@@ -3289,7 +3471,7 @@ function createWindow () {
 
   mainWindow.removeMenu();
   mainWindow.loadFile('index.html');
-  
+
   mainWindow.once('ready-to-show', () => {
     mainWindow.maximize();
   });
@@ -3325,7 +3507,7 @@ ipcMain.handle('get-todos', async (event, toolingId) => {
 
 ipcMain.handle('add-todo', async (event, toolingId, text) => {
   return new Promise((resolve, reject) => {
-    db.run('INSERT INTO todos (tooling_id, text, completed) VALUES (?, ?, 0)', [toolingId, text], function(err) {
+    db.run('INSERT INTO todos (tooling_id, text, completed) VALUES (?, ?, 0)', [toolingId, text], function (err) {
       if (err) {
         reject(err);
       } else {
@@ -3501,7 +3683,7 @@ ipcMain.handle('export-forecast-supplier', async () => {
 
         // Add data validations
         const lastRow = worksheet.rowCount;
-        
+
         // Annual Volume validation (column C) - numeric only
         for (let i = 2; i <= lastRow; i++) {
           worksheet.getCell(`C${i}`).dataValidation = {
@@ -3515,7 +3697,7 @@ ipcMain.handle('export-forecast-supplier', async () => {
             error: 'Please enter a valid number for Annual Volume'
           };
         }
-        
+
         // Annual Volume Date validation (column D) - date only
         for (let i = 2; i <= lastRow; i++) {
           worksheet.getCell(`D${i}`).dataValidation = {
@@ -3604,12 +3786,12 @@ ipcMain.handle('import-forecast-supplier', async () => {
     const filePath = dialogResult.filePaths[0];
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(filePath);
-    
+
     const worksheet = workbook.worksheets[0];
     if (!worksheet) {
       return { success: false, error: 'No worksheet found in file' };
     }
- 
+
     // Validate header row - new format with 4 columns (PN, Supplier, Annual Volume, Annual Volume Date)
     const headerRow = worksheet.getRow(1);
     const firstHeader = headerRow.getCell(1).value?.toString().trim();
@@ -3617,9 +3799,9 @@ ipcMain.handle('import-forecast-supplier', async () => {
     const fourthHeader = headerRow.getCell(4).value?.toString().trim();
 
     if (firstHeader !== 'PN' || thirdHeader !== 'Annual Volume' || fourthHeader !== 'Annual Volume Date') {
-      return { 
-        success: false, 
-        error: 'Invalid file format. Expected columns: PN, Supplier, Annual Volume, Annual Volume Date' 
+      return {
+        success: false,
+        error: 'Invalid file format. Expected columns: PN, Supplier, Annual Volume, Annual Volume Date'
       };
     }
 
@@ -3630,7 +3812,7 @@ ipcMain.handle('import-forecast-supplier', async () => {
     // Skip header row (row 1)
     for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
       const row = worksheet.getRow(rowNumber);
-      
+
       const pn = row.getCell(1).value; // Column A - PN
       const forecast = row.getCell(3).value; // Column C - Annual Volume
       const forecastDate = row.getCell(4).value; // Column D - Annual Volume Date
@@ -3644,7 +3826,7 @@ ipcMain.handle('import-forecast-supplier', async () => {
       try {
         // Prepare update data
         const updateData = {};
-        
+
         const normalizedForecast = cellValueToString(forecast);
         if (normalizedForecast !== '') {
           // Validate that forecast is a number
@@ -3697,8 +3879,8 @@ ipcMain.handle('import-forecast-supplier', async () => {
       }
     }
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       updatedCount,
       errors: errors.length > 0 ? errors : undefined
     };
@@ -3828,7 +4010,7 @@ ipcMain.handle('export-forecast-manager', async () => {
 
         // Add data validations
         const lastRow = worksheet.rowCount;
-        
+
         // Status column validation (column W = 23) - list validation
         const statusOptions = ['ACTIVE', 'UNDER CONSTRUCTION', 'OBSOLETE', 'INACTIVE'];
         for (let i = 2; i <= lastRow; i++) {
@@ -3852,7 +4034,7 @@ ipcMain.handle('export-forecast-manager', async () => {
           { col: 'R', name: 'Amount BRL' },
           { col: 'S', name: 'Tool Quantity' }
         ];
-        
+
         for (let i = 2; i <= lastRow; i++) {
           numericColumns.forEach(({ col, name }) => {
             worksheet.getCell(`${col}${i}`).dataValidation = {
@@ -3893,7 +4075,7 @@ ipcMain.handle('export-forecast-manager', async () => {
             cell.protection = { locked: true };
           }
         });
-        
+
         worksheet.getColumn('M').eachCell({ includeEmpty: true }, (cell, rowNumber) => {
           if (rowNumber > 1) {
             cell.protection = { locked: true };
@@ -3904,7 +4086,7 @@ ipcMain.handle('export-forecast-manager', async () => {
         for (let colIdx = 2; colIdx <= columns.length; colIdx++) {
           // Skip column 13 (M - % Life), it's locked
           if (colIdx === 13) continue;
-          
+
           worksheet.getColumn(colIdx).eachCell({ includeEmpty: true }, (cell, rowNumber) => {
             if (rowNumber > 1) {
               cell.protection = { locked: false };
@@ -3955,7 +4137,7 @@ ipcMain.handle('import-forecast-manager', async () => {
     title: 'Import Full Database (Manager)',
     buttonLabel: 'Import',
     properties: ['openFile'],
-    filters: [{ name: 'Excel Files', extensions: ['xlsx','xlsb'] }]
+    filters: [{ name: 'Excel Files', extensions: ['xlsx', 'xlsb'] }]
 
   });
 
@@ -3967,7 +4149,7 @@ ipcMain.handle('import-forecast-manager', async () => {
     const filePath = dialogResult.filePaths[0];
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(filePath);
-    
+
     const worksheet = workbook.worksheets[0];
     if (!worksheet) {
       return { success: false, error: 'No worksheet found in file' };
@@ -3976,11 +4158,11 @@ ipcMain.handle('import-forecast-manager', async () => {
     // Validate that first column is ID
     const headerRow = worksheet.getRow(1);
     const firstHeader = headerRow.getCell(1).value?.toString().trim();
-    
+
     if (firstHeader !== 'ID') {
-      return { 
-        success: false, 
-        error: 'Invalid file format. First column must be ID' 
+      return {
+        success: false,
+        error: 'Invalid file format. First column must be ID'
       };
     }
 
@@ -4027,7 +4209,7 @@ ipcMain.handle('import-forecast-manager', async () => {
 
     // Date columns for validation
     const dateColumns = ['Annual Volume Date', 'Forecast Date', 'Expiration Date', 'Finish Due Date'];
-    
+
     // Numeric columns for validation (% Life excluded - calculated field)
     const numericColumns = ['Tooling Life Qty', 'Produced', 'Remaining Life', 'Annual Forecast', 'Amount BRL', 'Tool Quantity'];
 
@@ -4038,7 +4220,7 @@ ipcMain.handle('import-forecast-manager', async () => {
     // Skip header row (row 1)
     for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber++) {
       const row = worksheet.getRow(rowNumber);
-      
+
       const id = row.getCell(headerMap['ID']).value;
 
       // Skip if no ID
@@ -4051,9 +4233,9 @@ ipcMain.handle('import-forecast-manager', async () => {
         for (const [excelHeader, dbColumn] of Object.entries(columnMapping)) {
           const colIndex = headerMap[excelHeader];
           if (!colIndex) continue; // Column not found in file
-          
+
           const cellValue = row.getCell(colIndex).value;
-          
+
           // Skip empty cells
           if (cellValue === null || cellValue === undefined || cellValue === '') continue;
 
@@ -4102,8 +4284,8 @@ ipcMain.handle('import-forecast-manager', async () => {
       }
     }
 
-    return { 
-      success: true, 
+    return {
+      success: true,
       updatedCount,
       errors: errors.length > 0 ? errors : undefined
     };

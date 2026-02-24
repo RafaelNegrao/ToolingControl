@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('api', {
   updateTooling: (id, data) => ipcRenderer.invoke('update-tooling', id, data),
   createTooling: (data) => ipcRenderer.invoke('create-tooling', data),
   deleteTooling: (id) => ipcRenderer.invoke('delete-tooling', id),
+  renameSupplier: (currentName, newName) => ipcRenderer.invoke('rename-supplier', currentName, newName),
   
   // Exportação de dados
   exportSupplierData: (supplierName, filteredIds = null) => ipcRenderer.invoke('export-supplier-data', supplierName, filteredIds),

@@ -75,6 +75,7 @@ cd "Ferramental App"
 npm install
 ```
 
+
 ### Run in development mode
 ```bash
 npm start

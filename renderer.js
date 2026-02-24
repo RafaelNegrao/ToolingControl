@@ -1,5 +1,5 @@
 // Estado da aplicação
-const APP_VERSION = 'v0.1.1';
+const APP_VERSION = 'v0.2.2';
 
 let currentTab = 'tooling';
 let toolingData = [];
@@ -61,6 +61,15 @@ let replacementPickerOverlayState = {
   subtitle: null,
   cardIndex: null,
   itemId: null
+};
+
+let renameSupplierElements = {
+  overlay: null,
+  input: null,
+  error: null,
+  subtitle: null,
+  confirmButton: null,
+  currentName: ''
 };
 
 let currentTimelineRootId = null;
@@ -135,16 +144,16 @@ class ExpirationMetrics {
     if (!Array.isArray(items)) {
       return { total: 0, expired: 0, expiring: 0 };
     }
-    
+
     return items.reduce((acc, item) => {
       // Total sempre conta todos os itens
       acc.total += 1;
-      
+
       // Ignora itens com análise concluída apenas para expired e expiring
       if (item.analysis_completed === 1) {
         return acc;
       }
-      
+
       const classification = classifyToolingExpirationState(item);
       if (classification.state === 'expired') {
         acc.expired += 1;
@@ -154,7 +163,7 @@ class ExpirationMetrics {
       return acc;
     }, { total: 0, expired: 0, expiring: 0 });
   }
-  
+
   /**
    * Verifica se um supplier tem itens críticos (expired ou expiring)
    * @param {Object} supplier - Objeto do supplier com items[]
@@ -261,11 +270,11 @@ function updateSupplierCardMetricsFromItems(supplierName, items) {
  */
 async function refreshSupplierCardMetricsFromDB(supplierName) {
   if (!supplierName) return;
-  
+
   try {
     // Busca dados frescos diretamente do banco
     const items = await window.api.getToolingBySupplier(supplierName);
-    
+
     // Atualiza suppliersData também para manter consistência
     if (Array.isArray(suppliersData)) {
       const supplierEntry = suppliersData.find(s => s.supplier === supplierName);
@@ -273,7 +282,7 @@ async function refreshSupplierCardMetricsFromDB(supplierName) {
         supplierEntry.items = items;
       }
     }
-    
+
     updateSupplierCardMetricsFromItems(supplierName, items);
   } catch (e) {
     console.error('Erro ao atualizar métricas do supplier:', e);
@@ -607,7 +616,7 @@ function buildReplacementPickerOptionsMarkup(item, cardIndex) {
       const pnText = escapeHtml(option.pn || 'N/A');
       const supplierText = escapeHtml(option.supplier || 'N/A');
       const descText = escapeHtml(option.tool_description || 'N/A');
-      
+
       return `<button type="button" class="replacement-dropdown-option" onclick="handleReplacementPickerSelect(${cardIndex}, ${item.id}, ${option.id})">
         <div class="replacement-option-grid">
           <span class="replacement-option-id">${idText}</span>
@@ -652,12 +661,12 @@ function getToolingItemForCard(card) {
 function getCardContainer(cardIndex) {
   // Tenta encontrar o card normal primeiro
   let card = document.getElementById(`card-${cardIndex}`);
-  
+
   // Se não encontrar, tenta no spreadsheet expandido
   if (!card) {
     card = document.querySelector(`.spreadsheet-card-container[data-item-index="${cardIndex}"]`);
   }
-  
+
   return card;
 }
 
@@ -751,6 +760,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   const commentDeleteDate = document.getElementById('commentDeleteDate');
   const commentDeleteText = document.getElementById('commentDeleteText');
   const commentDeleteConfirmBtn = document.getElementById('commentDeleteConfirmBtn');
+  const renameSupplierModal = document.getElementById('renameSupplierModal');
+  const renameSupplierInput = document.getElementById('renameSupplierInput');
+  const renameSupplierError = document.getElementById('renameSupplierError');
+  const renameSupplierSubtitle = document.getElementById('renameSupplierSubtitle');
 
   addToolingElements = {
     overlay: addOverlay,
@@ -784,6 +797,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     confirmButton: commentDeleteConfirmBtn
   };
 
+  renameSupplierElements = {
+    overlay: renameSupplierModal,
+    input: renameSupplierInput,
+    error: renameSupplierError,
+    subtitle: renameSupplierSubtitle,
+    confirmButton: null,
+    currentName: ''
+  };
+
   replacementTimelineElements = {
     overlay: replacementTimelineOverlay,
     list: replacementTimelineList,
@@ -798,6 +820,23 @@ document.addEventListener('DOMContentLoaded', async () => {
     replacementTimelineOverlay.addEventListener('click', (event) => {
       if (event.target === replacementTimelineOverlay) {
         closeReplacementTimelineOverlay();
+      }
+    });
+  }
+
+  if (renameSupplierModal) {
+    renameSupplierModal.addEventListener('click', (event) => {
+      if (event.target === renameSupplierModal) {
+        closeRenameSupplierModal();
+      }
+    });
+  }
+
+  if (renameSupplierInput) {
+    renameSupplierInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        confirmRenameSupplier();
       }
     });
   }
@@ -847,7 +886,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Função para trocar de aba
   function switchTab(tabName) {
     currentTab = tabName;
-    
+
     // Remove active de todos os botões e conteúdos
     tabButtons.forEach(btn => btn.classList.remove('active'));
     tabContents.forEach(content => content.classList.remove('active'));
@@ -1018,31 +1057,31 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   // Inicializa na primeira aba (Tooling)
   switchTab('tooling');
-  
+
   // Event listener global para auto-save ao sair do campo (blur)
   document.addEventListener('focusout', (e) => {
     const target = e.target;
     // Verifica se é um input/textarea/select com data-id e data-field
-    if ((target.matches('input[data-id][data-field]') || 
-         target.matches('textarea[data-id][data-field]') || 
-         target.matches('select[data-id][data-field]')) &&
-        !target.classList.contains('calculated')) {
-      
+    if ((target.matches('input[data-id][data-field]') ||
+      target.matches('textarea[data-id][data-field]') ||
+      target.matches('select[data-id][data-field]')) &&
+      !target.classList.contains('calculated')) {
+
       // IMPORTANTE: Ignora campos da spreadsheet (linha fechada)
       // pois eles são salvos pela função spreadsheetSave
-      const isSpreadsheetField = target.classList.contains('spreadsheet-input') || 
-                                  target.classList.contains('spreadsheet-select');
+      const isSpreadsheetField = target.classList.contains('spreadsheet-input') ||
+        target.classList.contains('spreadsheet-select');
       if (isSpreadsheetField) {
         return; // Não chama autoSaveTooling para campos da spreadsheet
       }
-      
+
       const id = target.getAttribute('data-id');
       if (id) {
         autoSaveTooling(parseInt(id), true); // true = salvamento imediato
       }
     }
   });
-  
+
   // Carrega dados iniciais
   await refreshReplacementIdOptions();
   await loadSuppliers();
@@ -1215,7 +1254,7 @@ document.addEventListener('keydown', (e) => {
 document.addEventListener('click', (e) => {
   const statusSearchWrapper = document.getElementById('statusSearchInputWrapper');
   const statusSearchBtn = document.getElementById('statusSearchBtn');
-  
+
   if (statusSearchWrapper && statusSearchWrapper.classList.contains('active')) {
     if (!statusSearchWrapper.contains(e.target) && e.target !== statusSearchBtn && !statusSearchBtn.contains(e.target)) {
       const input = document.getElementById('statusSupplierSearchInput');
@@ -1274,16 +1313,16 @@ async function toggleExpirationFilter(enabled) {
   if (badge) {
     badge.style.display = enabled ? 'flex' : 'none';
   }
-  
+
   // Recarrega suppliers do banco para atualizar contagens (considera análise concluída)
   try {
     suppliersData = await window.api.getSuppliersWithStats();
   } catch (e) {
     console.error('Erro ao recarregar suppliers:', e);
   }
-  
+
   applyExpirationFilter();
-  
+
   // Recarrega os cards do supplier selecionado para aplicar o filtro
   // A função displayTooling vai recalcular as métricas com os dados originais
   if (selectedSupplier) {
@@ -1353,7 +1392,7 @@ async function importForecastSupplier() {
     if (result.success) {
       showNotification(`Successfully updated ${result.updatedCount} records`);
       closeSupplierFilterOverlay();
-      
+
       // Reload data
       await loadSuppliers();
       await loadAnalytics();
@@ -1392,7 +1431,7 @@ async function importForecastManager() {
     if (result.success) {
       showNotification(`Successfully updated ${result.updatedCount} records`);
       closeSupplierFilterOverlay();
-      
+
       // Reload data
       await loadSuppliers();
       await loadAnalytics();
@@ -1417,16 +1456,16 @@ function showToast(message, type = 'success') {
   const toast = document.getElementById('toast');
   const toastMessage = document.getElementById('toastMessage');
   const toastIcon = toast.querySelector('.toast-icon i');
-  
+
   // Limpar timeout anterior se existir
   if (toastTimeout) {
     clearTimeout(toastTimeout);
     toastTimeout = null;
   }
-  
+
   // Remover classe show temporariamente para forçar re-render
   toast.classList.remove('show');
-  
+
   // Aguardar frame seguinte antes de mostrar novamente
   requestAnimationFrame(() => {
     // Definir ícone baseado no tipo
@@ -1440,10 +1479,10 @@ function showToast(message, type = 'success') {
       toastIcon.className = 'ph ph-info';
       toast.style.background = 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)';
     }
-    
+
     toastMessage.textContent = message;
     toast.classList.add('show');
-    
+
     toastTimeout = setTimeout(() => {
       toast.classList.remove('show');
       toastTimeout = null;
@@ -1457,12 +1496,14 @@ function updateSupplierDataButtons(enabled) {
   const importBtn = document.getElementById('importSupplierBtn');
   const commentBtn = document.getElementById('supplierCommentBtn');
   const selectModeBtn = document.getElementById('toggleSelectModeBtn');
-  
+  const renameBtn = document.getElementById('renameSupplierBtn');
+
   if (exportBtn) exportBtn.disabled = !enabled;
   if (importBtn) importBtn.disabled = !enabled;
   if (commentBtn) commentBtn.disabled = !enabled;
   if (selectModeBtn) selectModeBtn.disabled = !enabled;
-  
+  if (renameBtn) renameBtn.disabled = !enabled;
+
   // Se desabilitado, desativar modo de seleção
   if (!enabled && selectionModeActive) {
     toggleSelectionMode();
@@ -1475,17 +1516,17 @@ function openSupplierComments() {
     showNotification('Please select a supplier first', 'error');
     return;
   }
-  
+
   const modal = document.getElementById('supplierCommentsModal');
   const subtitle = document.getElementById('supplierCommentsSubtitle');
-  
+
   if (subtitle) {
     subtitle.textContent = currentSupplier;
   }
-  
+
   // Load existing comments/tasks from localStorage
   loadSupplierCommentsData();
-  
+
   if (modal) {
     modal.classList.add('active');
   }
@@ -1509,7 +1550,7 @@ function loadSupplierCommentsData() {
   const sqieInput = document.getElementById('sqieText');
   const plannerInput = document.getElementById('plannerText');
   const sourcingInput = document.getElementById('sourcingText');
-  
+
   if (!notesTextarea || !contactTextarea || !supplyContinuityInput || !sqieInput || !plannerInput || !sourcingInput) {
     return;
   }
@@ -1556,7 +1597,7 @@ function saveSupplierComments() {
   const sqieInput = document.getElementById('sqieText');
   const plannerInput = document.getElementById('plannerText');
   const sourcingInput = document.getElementById('sourcingText');
-  
+
   if (!notesTextarea || !contactTextarea || !supplyContinuityInput || !sqieInput || !plannerInput || !sourcingInput) {
     return;
   }
@@ -1586,7 +1627,7 @@ function toggleSelectionMode() {
   const toolingList = document.getElementById('toolingList');
   const exportBtn = document.getElementById('exportSupplierBtn');
   const spreadsheetCheckboxHeader = document.getElementById('spreadsheetCheckboxHeader');
-  
+
   if (selectionModeActive) {
     // Ativar modo de seleção
     selectedToolingIds.clear();
@@ -1599,7 +1640,7 @@ function toggleSelectionMode() {
     if (exportBtn) exportBtn.style.display = 'none';
     if (spreadsheetCheckboxHeader) spreadsheetCheckboxHeader.style.display = '';
     updateSelectionCounter();
-    
+
     // Re-renderizar spreadsheet se estiver no modo tabela
     if (currentViewMode === 'spreadsheet') {
       renderSpreadsheetView();
@@ -1615,13 +1656,13 @@ function toggleSelectionMode() {
     if (toolingList) toolingList.classList.remove('selection-mode');
     if (exportBtn) exportBtn.style.display = '';
     if (spreadsheetCheckboxHeader) spreadsheetCheckboxHeader.style.display = 'none';
-    
+
     // Re-renderizar spreadsheet se estiver no modo tabela
     if (currentViewMode === 'spreadsheet') {
       renderSpreadsheetView();
     }
   }
-  
+
   // Atualizar checkboxes nos cards
   updateCardCheckboxes();
 }
@@ -1629,11 +1670,11 @@ function toggleSelectionMode() {
 // Atualizar checkboxes visuais nos cards
 function updateCardCheckboxes() {
   const cards = document.querySelectorAll('.tooling-card');
-  
+
   cards.forEach(card => {
     const itemId = parseInt(card.dataset.itemId);
     let checkbox = card.querySelector('.card-selection-checkbox');
-    
+
     if (selectionModeActive) {
       if (!checkbox) {
         // Criar checkbox
@@ -1668,7 +1709,7 @@ function toggleCardSelection(itemId) {
   } else {
     selectedToolingIds.add(itemId);
   }
-  
+
   // Atualizar visual do checkbox
   const card = document.querySelector(`.tooling-card[data-item-id="${itemId}"]`);
   if (card) {
@@ -1677,7 +1718,7 @@ function toggleCardSelection(itemId) {
       checkbox.classList.toggle('selected', selectedToolingIds.has(itemId));
     }
   }
-  
+
   updateSelectionCounter();
 }
 
@@ -1704,13 +1745,13 @@ function deselectAllTooling() {
 // Alternar seleção de uma linha da tabela
 function toggleSpreadsheetRowSelection(event, itemId) {
   event.stopPropagation();
-  
+
   if (selectedToolingIds.has(itemId)) {
     selectedToolingIds.delete(itemId);
   } else {
     selectedToolingIds.add(itemId);
   }
-  
+
   updateSpreadsheetRowVisual(itemId);
   updateSpreadsheetSelectAllIcon();
   updateSelectionCounter();
@@ -1736,7 +1777,7 @@ function updateSpreadsheetRowVisual(itemId) {
 // Toggle selecionar todos na tabela
 function toggleSpreadsheetSelectAll() {
   const allSelected = toolingData.every(item => selectedToolingIds.has(item.id));
-  
+
   if (allSelected) {
     // Desselecionar todos
     selectedToolingIds.clear();
@@ -1746,7 +1787,7 @@ function toggleSpreadsheetSelectAll() {
       selectedToolingIds.add(item.id);
     });
   }
-  
+
   updateSpreadsheetCheckboxes();
   updateCardCheckboxes();
   updateSelectionCounter();
@@ -1758,7 +1799,7 @@ function updateSpreadsheetSelectAllIcon() {
   if (icon) {
     const allSelected = toolingData.length > 0 && toolingData.every(item => selectedToolingIds.has(item.id));
     const someSelected = selectedToolingIds.size > 0;
-    
+
     if (allSelected) {
       icon.className = 'ph ph-check-square';
     } else if (someSelected) {
@@ -1805,7 +1846,7 @@ async function exportSelectedItems() {
     showToast('Select at least one item to export', 'error');
     return;
   }
-  
+
   if (!currentSupplier) {
     showToast('Please select a supplier first', 'error');
     return;
@@ -1813,10 +1854,10 @@ async function exportSelectedItems() {
 
   try {
     showToast('Exporting selected items...', 'info');
-    
+
     const idsToExport = Array.from(selectedToolingIds);
     const result = await window.api.exportSupplierData(currentSupplier, idsToExport);
-    
+
     if (result.success) {
       showToast(`${idsToExport.length} items exported successfully!`, 'success');
       // Desativar modo de seleção após exportar
@@ -1840,12 +1881,12 @@ async function exportSupplierData() {
 
   try {
     showToast('Exporting supplier data...', 'info');
-    
+
     // Obter IDs dos cards atualmente visíveis/filtrados
     const filteredIds = toolingData.map(item => item.id);
-    
+
     const result = await window.api.exportSupplierData(currentSupplier, filteredIds);
-    
+
     if (result.success) {
       showToast('Data exported successfully!', 'success');
     } else if (result.cancelled) {
@@ -1897,9 +1938,9 @@ async function importSupplierData() {
 async function exportEmptyTemplate() {
   try {
     showToast('Exporting empty template...', 'info');
-    
+
     const result = await window.api.exportEmptyTemplate();
-    
+
     if (result.success) {
       showToast('Template exported successfully! Fill in the Supplier Name and tooling data.', 'success');
     } else if (result.cancelled) {
@@ -1916,9 +1957,9 @@ async function exportEmptyTemplate() {
 async function importNewSupplier() {
   try {
     showToast('Importing new supplier...', 'info');
-    
+
     const result = await window.api.importNewSupplier();
-    
+
     if (!result || !result.success) {
       if (result && result.cancelled) {
         showToast('Import cancelled', 'info');
@@ -1939,7 +1980,7 @@ async function importNewSupplier() {
 
     // Recarregar lista de suppliers e selecionar o novo
     await loadSuppliers();
-    
+
     // Selecionar o novo supplier automaticamente
     if (supplierName) {
       selectSupplier(null, supplierName);
@@ -1953,7 +1994,7 @@ async function importNewSupplier() {
 // Exibe cards de fornecedores no sidebar
 function displaySuppliers(suppliers) {
   const supplierList = document.getElementById('supplierList');
-  
+
   if (!suppliers || suppliers.length === 0) {
     supplierList.innerHTML = '<p style="color: #999; font-size: 12px; text-align: center;">No suppliers found</p>';
     updateStatusBar({ total: 0, expired_total: 0, expiring_two_years: 0 });
@@ -1968,10 +2009,10 @@ function displaySuppliers(suppliers) {
     const isActive = selectedSupplier === supplierNameRaw;
     // Usa APENAS ExpirationMetrics.fromItems() para calcular métricas
     const metrics = ExpirationMetrics.fromItems(supplier.items || []);
-    
+
     // Verificar se este supplier deve ser escondido pelo filtro de steps
     const isHiddenByStepsFilter = stepsFilteredSuppliers !== null && !stepsFilteredSuppliers.includes(supplierNameRaw);
-    
+
     return `
         <div class="supplier-card ${isActive ? 'active' : ''}" 
           data-supplier="${supplierNameHtml}" 
@@ -2011,18 +2052,18 @@ function displaySuppliers(suppliers) {
 
   // Adiciona event listeners para posicionar tooltips no modo compacto
   setupCompactTooltips();
-  
+
   syncStatusBarWithSuppliers();
 }
 
 // Configura tooltips para o modo compacto (responsivo)
 function setupCompactTooltips() {
   const supplierCards = document.querySelectorAll('.supplier-card');
-  
+
   supplierCards.forEach(card => {
     const tooltip = card.querySelector('.compact-tooltip');
     if (!tooltip) return;
-    
+
     card.addEventListener('mouseenter', (e) => {
       const rect = card.getBoundingClientRect();
       tooltip.style.top = `${rect.top}px`;
@@ -2062,10 +2103,10 @@ function handleSupplierSelection(supplierName, { sourceElement = null, forceRelo
     attachmentsContainer.style.display = 'block';
     currentSupplierName.textContent = normalizedName;
   }
-  
+
   // Habilitar botões de exportar/importar IMEDIATAMENTE
   updateSupplierDataButtons(true);
-  
+
   // Mostra área de tooling IMEDIATAMENTE (vazia)
   const toolingList = document.getElementById('toolingList');
   const emptyState = document.getElementById('emptyState');
@@ -2081,25 +2122,25 @@ function handleSupplierSelection(supplierName, { sourceElement = null, forceRelo
   if (shouldReload) {
     // Carrega tudo em background DEPOIS da UI responder
     setTimeout(() => {
-      loadAttachments(normalizedName).catch(err => {});
-      
+      loadAttachments(normalizedName).catch(err => { });
+
       // Verifica AMBOS campos de pesquisa
       const searchInput = document.getElementById('searchInput');
       const supplierSearchInput = document.getElementById('supplierSearchInput');
       const globalSearchValue = searchInput ? searchInput.value.trim() : '';
       const supplierSearchValue = supplierSearchInput ? supplierSearchInput.value.trim() : '';
-      
+
       const hasGlobalSearch = globalSearchValue.length >= 2;
       const hasSupplierSearch = supplierSearchValue.length >= 1;
-      
+
       // Pegar o filtro de steps se estiver ativo
       const stepsFilter = document.getElementById('stepsFilter');
       const selectedStep = stepsFilter ? stepsFilter.value : '';
-      
+
       if (hasGlobalSearch) {
         // Usa busca global que já filtra por supplier selecionado
         activeSearchTerm = globalSearchValue;
-        searchTooling(activeSearchTerm).catch(err => {});
+        searchTooling(activeSearchTerm).catch(err => { });
       } else if (hasSupplierSearch) {
         // Filtra por termo da barra lateral E supplier selecionado
         window.api.searchTooling(supplierSearchValue).then(allResults => {
@@ -2107,7 +2148,7 @@ function handleSupplierSelection(supplierName, { sourceElement = null, forceRelo
             const itemSupplier = String(item.supplier || '').trim();
             return itemSupplier === normalizedName;
           });
-          
+
           // Aplicar filtro de steps se estiver ativo
           if (selectedStep) {
             filteredResults = filteredResults.filter(item => {
@@ -2115,13 +2156,13 @@ function handleSupplierSelection(supplierName, { sourceElement = null, forceRelo
               return itemStep === selectedStep;
             });
           }
-          
+
           toolingData = filteredResults;
           displayTooling(filteredResults);
-        }).catch(err => {});
+        }).catch(err => { });
       } else {
         // Sem nenhuma busca, carrega todos do supplier
-        loadToolingBySupplier(normalizedName).catch(err => {});
+        loadToolingBySupplier(normalizedName).catch(err => { });
       }
     }, 0);
   }
@@ -2130,36 +2171,145 @@ function handleSupplierSelection(supplierName, { sourceElement = null, forceRelo
 // Seleciona fornecedor e exibe ferramentais
 function selectSupplier(evt, supplierName) {
   const cardElement = evt?.currentTarget || evt?.target?.closest('.supplier-card');
-  
+
   // Se clicar no supplier já selecionado, deseleciona
   if (selectedSupplier === supplierName) {
     selectedSupplier = null;
     currentSupplier = null;
-    
+
     // Remove classe active de todos os cards
     const cards = document.querySelectorAll('.supplier-card');
     cards.forEach(card => card.classList.remove('active'));
-    
+
     // Esconde os attachments e limpa a lista de ferramentais
     const attachmentsContainer = document.getElementById('attachmentsContainer');
     if (attachmentsContainer) {
       attachmentsContainer.style.display = 'none';
     }
-    
+
     const toolingList = document.getElementById('toolingList');
     const spreadsheetContainer = document.getElementById('spreadsheetContainer');
     const emptyState = document.getElementById('emptyState');
     if (toolingList) toolingList.style.display = 'none';
     if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
     if (emptyState) emptyState.style.display = 'flex';
-    
+
     // Desabilitar botões de exportar/importar
     updateSupplierDataButtons(false);
-    
+
     return;
   }
-  
+
   handleSupplierSelection(supplierName, { sourceElement: cardElement, forceReload: true });
+}
+
+async function promptRenameSupplier(currentName) {
+  const normalizedCurrent = typeof currentName === 'string' ? currentName.trim() : '';
+  if (!normalizedCurrent) {
+    showToast('Selecione um fornecedor antes de renomear.', 'error');
+    return;
+  }
+
+  openRenameSupplierModal(normalizedCurrent);
+}
+
+function openRenameSupplierModal(currentName) {
+  const { overlay, input, error, subtitle } = renameSupplierElements;
+  if (!overlay || !input) {
+    return;
+  }
+
+  renameSupplierElements.currentName = currentName;
+  if (subtitle) {
+    subtitle.textContent = currentName;
+  }
+
+  input.value = currentName;
+  if (error) {
+    error.classList.remove('active');
+  }
+
+  overlay.classList.add('active');
+  setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 0);
+}
+
+function closeRenameSupplierModal() {
+  const { overlay, input, error } = renameSupplierElements;
+  if (error) {
+    error.classList.remove('active');
+  }
+  if (input) {
+    input.value = '';
+  }
+  if (overlay) {
+    overlay.classList.remove('active');
+  }
+  renameSupplierElements.currentName = '';
+}
+
+async function confirmRenameSupplier() {
+  const { input, error } = renameSupplierElements;
+  const normalizedCurrent = renameSupplierElements.currentName || '';
+  if (!input || !normalizedCurrent) {
+    return;
+  }
+
+  const normalizedNew = input.value.trim();
+  if (!normalizedNew) {
+    if (error) {
+      error.classList.add('active');
+    }
+    return;
+  }
+
+  if (normalizedNew === normalizedCurrent) {
+    showToast('O nome do fornecedor não foi alterado.', 'info');
+    closeRenameSupplierModal();
+    return;
+  }
+
+  try {
+    const result = await window.api.renameSupplier(normalizedCurrent, normalizedNew);
+    if (!result || result.success !== true) {
+      showToast(result?.message || 'Erro ao renomear fornecedor.', 'error');
+      return;
+    }
+
+    try {
+      const oldKey = `supplier_comments_${normalizedCurrent}`;
+      const newKey = `supplier_comments_${normalizedNew}`;
+      if (oldKey !== newKey) {
+        const oldValue = localStorage.getItem(oldKey);
+        if (oldValue && !localStorage.getItem(newKey)) {
+          localStorage.setItem(newKey, oldValue);
+        }
+        if (oldValue) {
+          localStorage.removeItem(oldKey);
+        }
+      }
+    } catch (storageError) {
+    }
+
+    const wasSelected = selectedSupplier === normalizedCurrent;
+    if (wasSelected) {
+      selectedSupplier = null;
+      currentSupplier = null;
+    }
+
+    closeRenameSupplierModal();
+    await loadSuppliers();
+
+    if (wasSelected) {
+      selectSupplier(null, normalizedNew);
+    }
+
+    showToast(`Fornecedor renomeado para "${normalizedNew}".`, 'success');
+  } catch (error) {
+    showToast(error?.message || 'Erro ao renomear fornecedor.', 'error');
+  }
 }
 
 function initAttachmentsDragAndDrop() {
@@ -2361,7 +2511,7 @@ function handleCardDropzoneDragLeave(event, dropzone) {
   if (!isFileDrag(event)) return;
   event.preventDefault();
   event.stopPropagation();
-  
+
   // Only remove class if leaving the dropzone itself
   if (event.target === dropzone) {
     dropzone.classList.remove('drop-active');
@@ -2370,7 +2520,7 @@ function handleCardDropzoneDragLeave(event, dropzone) {
 
 async function handleCardDropzoneDrop(event, dropzone, itemId) {
   if (!isFileDrag(event)) return;
-  
+
   event.preventDefault();
   event.stopPropagation();
   dropzone.classList.remove('drop-active');
@@ -2401,7 +2551,7 @@ async function handleCardAttachmentFiles(files, itemId) {
       }
     }
   }
-  
+
   if (normalizedId === null || !toolingItem) {
     showNotification('Invalid tooling item.', 'error');
     return;
@@ -2585,17 +2735,17 @@ async function openAttachmentsFolder() {
 function openToolingAttachmentsFromSpreadsheet(itemId) {
   const itemIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
   if (itemIndex === -1) return;
-  
+
   const row = document.querySelector(`tr[data-id="${itemId}"]`);
   if (!row) return;
-  
+
   const isExpanded = row.classList.contains('row-expanded');
-  
+
   // Se não está expandida, expande primeiro
   if (!isExpanded) {
     toggleSpreadsheetRow(itemId, itemIndex);
   }
-  
+
   // Aguarda um pouco para a animação e depois muda para a aba attachments
   setTimeout(() => {
     // Muda para a aba de attachments
@@ -2630,11 +2780,11 @@ function getFileColor(fileName) {
     docx: '#2b579a',
     xls: '#217346',
     xlsx: '#217346',
-    jpg: '#ff6b6b',
-    jpeg: '#ff6b6b',
-    png: '#ff6b6b',
-    zip: '#ffa502',
-    rar: '#ffa502'
+    jpg: '#c8102e',
+    jpeg: '#c8102e',
+    png: '#c8102e',
+    zip: '#c8102e',
+    rar: '#c8102e'
   };
   return colorMap[ext] || '#666';
 }
@@ -2652,21 +2802,21 @@ async function uploadAttachment() {
     alert('Select a supplier first');
     return;
   }
-  
+
   try {
     const result = await window.api.uploadAttachment(currentSupplier);
-    
+
     // Se foi cancelado, apenas retorna silenciosamente
     if (!result || result.cancelled) {
       return;
     }
-    
+
     if (result.success) {
       await loadAttachments(currentSupplier);
       // Suporta resposta de múltiplos arquivos
       const message = result.message || 'File attached successfully!';
       showNotification(message);
-      
+
       // Mostra erros individuais se houver
       if (result.results) {
         const failures = result.results.filter(r => !r.success);
@@ -2696,7 +2846,7 @@ async function deleteAttachment(supplierName, fileName) {
   if (!confirm(`Are you sure you want to delete the file "${fileName}"?`)) {
     return;
   }
-  
+
   try {
     const result = await window.api.deleteAttachment(supplierName, fileName);
     if (result.success) {
@@ -2721,7 +2871,7 @@ async function deleteCardAttachmentFile(supplierName, fileName, itemId) {
   if (!confirm(`Are you sure you want to delete the file "${fileName}"?`)) {
     return;
   }
-  
+
   try {
     const result = await window.api.deleteAttachment(supplierName, fileName, itemId);
     if (result.success) {
@@ -2751,11 +2901,11 @@ async function loadToolingBySupplier(supplier) {
 
     // Mostrar skeleton loading
     showSkeletonLoading();
-    
+
     // Carregar dados
     let data = await window.api.getToolingBySupplier(supplier);
     await ensureReplacementIdOptions();
-    
+
     // Aplicar filtro de steps se estiver ativo
     const stepsFilter = document.getElementById('stepsFilter');
     const selectedStep = stepsFilter ? stepsFilter.value : '';
@@ -2765,9 +2915,9 @@ async function loadToolingBySupplier(supplier) {
         return itemStep === selectedStep;
       });
     }
-    
+
     toolingData = data;
-    
+
     // Busca IDs que têm incoming links de outros suppliers (são apontados por outros)
     const allIds = data.map(item => String(item.id));
     try {
@@ -2775,14 +2925,14 @@ async function loadToolingBySupplier(supplier) {
     } catch (e) {
       externalIncomingLinks = [];
     }
-    
+
     // Recalcula todas as expiration dates ao carregar
     await recalculateAllExpirationDates();
-    
+
     // Limpa filtros de coluna e ordenação ao trocar de supplier
     columnFilters = {};
     columnSort = { column: null, direction: null };
-    
+
     // Renderizar em chunks para não travar a UI
     // A função displayTooling já atualiza as métricas do supplier card internamente
     await displayToolingInChunks(toolingData);
@@ -2795,10 +2945,10 @@ async function loadToolingBySupplier(supplier) {
 function showSkeletonLoading() {
   const toolingList = document.getElementById('toolingList');
   const emptyState = document.getElementById('emptyState');
-  
+
   if (emptyState) emptyState.style.display = 'none';
   if (!toolingList) return;
-  
+
   toolingList.style.display = 'flex';
   toolingList.innerHTML = Array.from({ length: 6 }, () => `
     <div class="skeleton-card">
@@ -2825,10 +2975,10 @@ function hideSkeletonLoading() {
 async function displayToolingInChunks(data, chunkSize = 10) {
   // Usar a função displayTooling existente, mas de forma não-bloqueante
   hideSkeletonLoading();
-  
+
   // Pequeno delay para permitir que a UI atualize
   await new Promise(resolve => setTimeout(resolve, 0));
-  
+
   // Chamar displayTooling normalmente
   await displayTooling(data);
 }
@@ -2850,7 +3000,7 @@ async function searchTooling(term) {
       return;
     }
     await ensureReplacementIdOptions();
-    
+
     let filteredResults = results;
     if (selectedSupplier) {
       filteredResults = results.filter(item => {
@@ -2859,7 +3009,7 @@ async function searchTooling(term) {
         return itemSupplier === selected;
       });
     }
-    
+
     // Aplicar filtro de steps se estiver ativo
     const stepsFilter = document.getElementById('stepsFilter');
     const selectedStep = stepsFilter ? stepsFilter.value : '';
@@ -2869,7 +3019,7 @@ async function searchTooling(term) {
         return itemStep === selectedStep;
       });
     }
-    
+
     // A função displayTooling já atualiza as métricas do supplier card internamente
     await displayTooling(filteredResults);
     updateSearchIndicators();
@@ -2880,32 +3030,32 @@ async function searchTooling(term) {
 // Calcula status de vencimento
 function getExpirationStatus(expirationDate) {
   if (!expirationDate) return { class: 'ok', label: '' };
-  
+
   // Normaliza a string de data para formato ISO (YYYY-MM-DD)
   let normalizedDate = String(expirationDate).trim();
-  
+
   // Se estiver no formato DD/MM/YYYY, converte para YYYY-MM-DD
   const ddmmyyyyMatch = normalizedDate.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (ddmmyyyyMatch) {
     const [, day, month, year] = ddmmyyyyMatch;
     normalizedDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
   }
-  
+
   const expDate = new Date(normalizedDate);
-  
+
   // Verifica se a data é válida
   if (Number.isNaN(expDate.getTime())) {
     return { class: 'ok', label: '' };
   }
-  
+
   // Normaliza ambas as datas para meia-noite para comparação precisa
   const now = new Date();
   now.setHours(0, 0, 0, 0);
   expDate.setHours(0, 0, 0, 0);
-  
+
   const diffTime = expDate - now;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  
+
   if (diffDays < 0) {
     return { class: 'expired', label: 'Expirado' };
   } else if (diffDays <= 730) {
@@ -2935,9 +3085,9 @@ function calculateRemainingLife(item) {
 function calculatePercentageUsed(item) {
   const total = parseLocalizedNumber(item.tooling_life_qty) || 0;
   const produced = parseLocalizedNumber(item.produced) || 0;
-  
+
   if (total === 0) return 0;
-  
+
   const percentage = (produced / total) * 100;
   return Math.round(percentage * 10) / 10; // Arredonda para 1 casa decimal
 }
@@ -2946,36 +3096,36 @@ function calculatePercentageUsed(item) {
 function calculateLifecycle(cardIndex) {
   const card = getCardContainer(cardIndex);
   if (!card) return;
-  
+
   const itemId = card.getAttribute('data-item-id');
   const inputs = card.querySelectorAll(`[data-id="${itemId}"]`);
   let item = {};
-  
+
   inputs.forEach(input => {
     const field = input.getAttribute('data-field');
     item[field] = input.value;
   });
-  
+
   // Atualiza campos calculados
   const remainingInput = card.querySelector(`[data-field="remaining_tooling_life_pcs"]`);
   const percentInput = card.querySelector(`[data-field="percent_tooling_life"]`);
-  
+
   const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
   const produced = parseLocalizedNumber(item.produced) || 0;
   const remaining = toolingLife - produced;
   const percentValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
   const percent = toolingLife > 0 ? percentValue.toFixed(1) : '0.0';
-  
+
   if (remainingInput) {
     remainingInput.value = formatIntegerWithSeparators(remaining, { preserveEmpty: true });
     item.remaining_tooling_life_pcs = remaining;
   }
-  
+
   if (percentInput) {
     percentInput.value = percent + '%';
     item.percent_tooling_life = percent;
   }
-  
+
   // Atualiza o toolingData global
   const toolingIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
   if (toolingIndex !== -1) {
@@ -2984,36 +3134,36 @@ function calculateLifecycle(cardIndex) {
     toolingData[toolingIndex].remaining_tooling_life_pcs = remaining;
     toolingData[toolingIndex].percent_tooling_life = percent;
   }
-  
+
   // Atualiza barra de progresso interna (aba Data)
   const lifecycleProgressFill = card.querySelector('[data-lifecycle-progress-fill]');
 
   if (lifecycleProgressFill) {
     lifecycleProgressFill.style.width = percent + '%';
   }
-  
+
   // Atualiza barra de progresso externa (header)
   const externalProgressFill = card.querySelector('[data-progress-fill]');
   const externalProgressPercent = card.querySelector('[data-progress-percent]');
-  
+
   if (externalProgressFill) {
     externalProgressFill.style.width = percent + '%';
   }
-  
+
   if (externalProgressPercent) {
     externalProgressPercent.textContent = percent + '%';
   }
-  
+
   // Atualiza a barra de progresso na linha da spreadsheet
   updateSpreadsheetProgressBar(itemId);
-  
+
   // Sincroniza tooling_life_qty e produced com a linha da spreadsheet
   syncSpreadsheetFromExpandedCard(itemId, 'tooling_life_qty', toolingLife);
   syncSpreadsheetFromExpandedCard(itemId, 'produced', produced);
-  
+
   // Recalcula data de expiração
   calculateExpirationDate(cardIndex, item);
-  
+
   // Salva automaticamente
   autoSaveTooling(itemId);
 }
@@ -3025,7 +3175,7 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
   if (!card) {
     return;
   }
-  
+
   const itemId = card.getAttribute('data-item-id');
   let item = providedItem;
   if (!item) {
@@ -3036,20 +3186,20 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
       item[field] = input.value;
     });
   }
-  
+
   // Calcula remaining first se não estiver disponível
   const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
   const produced = parseLocalizedNumber(item.produced) || 0;
   const remaining = toolingLife - produced;
-  
+
   const expirationInput = card.querySelector(`[data-field="expiration_date"]`);
   if (!expirationInput) {
     return;
   }
-  
+
   const forecast = parseLocalizedNumber(item.annual_volume_forecast) || 0;
   const productionDateValue = item.date_remaining_tooling_life || '';
-  
+
   const formattedDate = calculateExpirationFromFormula({
     remaining,
     forecast,
@@ -3059,13 +3209,13 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
   if (formattedDate) {
     expirationInput.value = formattedDate;
     item.expiration_date = formattedDate;
-    
+
     // Atualiza o toolingData global
     const toolingIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
     if (toolingIndex !== -1) {
       toolingData[toolingIndex].expiration_date = formattedDate;
     }
-    
+
     // Atualizar header do card em tempo real
     const cardForUpdate = getCardContainer(cardIndex);
     if (cardForUpdate) {
@@ -3074,22 +3224,22 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
         expirationDisplay.textContent = formatDate(formattedDate);
       }
     }
-    
+
     // Atualiza a célula de expiração na linha da spreadsheet
     syncSpreadsheetExpirationCell(itemId);
-    
+
     // Atualiza os ícones de expiração (linha e card)
     updateExpirationIconsForItem(itemId);
   } else {
     expirationInput.value = '';
     item.expiration_date = '';
-    
+
     // Atualiza o toolingData global
     const toolingIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
     if (toolingIndex !== -1) {
       toolingData[toolingIndex].expiration_date = '';
     }
-    
+
     // Limpar header do card
     const cardForClear = getCardContainer(cardIndex);
     if (cardForClear) {
@@ -3098,14 +3248,14 @@ function calculateExpirationDate(cardIndex, providedItem = null, skipSave = fals
         expirationDisplay.textContent = '';
       }
     }
-    
+
     // Atualiza a célula de expiração na linha da spreadsheet
     syncSpreadsheetExpirationCell(itemId);
-    
+
     // Atualiza os ícones de expiração (linha e card)
     updateExpirationIconsForItem(itemId);
   }
-  
+
   // Salva automaticamente apenas se não for skipSave
   if (!skipSave) {
     autoSaveTooling(itemId);
@@ -3123,20 +3273,20 @@ function handleProducedChange(cardIndex) {
 function handleProductionDateChange(cardIndex) {
   const card = getCardContainer(cardIndex);
   if (!card) return;
-  
+
   const itemId = card.getAttribute('data-item-id');
   const productionDateInput = card.querySelector(`[data-field="date_remaining_tooling_life"]`);
-  
+
   // Atualiza o toolingData global com o novo valor
   const toolingIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
   const dateValue = productionDateInput ? productionDateInput.value || '' : '';
   if (toolingIndex !== -1 && productionDateInput) {
     toolingData[toolingIndex].date_remaining_tooling_life = dateValue;
   }
-  
+
   // Sincroniza date_remaining_tooling_life com a linha da spreadsheet
   syncSpreadsheetFromExpandedCard(itemId, 'date_remaining_tooling_life', dateValue);
-  
+
   // Recalcula a data de expiração
   calculateExpirationDate(cardIndex);
 }
@@ -3144,17 +3294,17 @@ function handleProductionDateChange(cardIndex) {
 // Atualiza a barra de progresso no spreadsheet (linha e card expandido)
 function updateSpreadsheetProgressBar(itemId) {
   if (!itemId) return;
-  
+
   // Encontra o item nos dados
   const item = toolingData.find(t => String(t.id) === String(itemId));
   if (!item) return;
-  
+
   // Calcula o percentual
   const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || Number(item.tooling_life_qty) || 0;
   const produced = Number(parseLocalizedNumber(item.produced)) || Number(item.produced) || 0;
   const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
   const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
-  
+
   // Atualiza a barra na linha do spreadsheet
   const row = document.querySelector(`#spreadsheetBody tr[data-id="${itemId}"]`);
   if (row) {
@@ -3163,7 +3313,7 @@ function updateSpreadsheetProgressBar(itemId) {
       progressFill.style.width = percentUsed + '%';
     }
   }
-  
+
   // Atualiza a barra no card expandido se estiver aberto
   const expandedCard = document.querySelector(`.spreadsheet-card-container[data-item-id="${itemId}"]`);
   if (expandedCard) {
@@ -3172,15 +3322,15 @@ function updateSpreadsheetProgressBar(itemId) {
     if (lifecycleProgressFill) {
       lifecycleProgressFill.style.width = percentUsed + '%';
     }
-    
+
     // Barra de progresso externa (header)
     const externalProgressFill = expandedCard.querySelector('[data-progress-fill]');
     const externalProgressPercent = expandedCard.querySelector('[data-progress-percent]');
-    
+
     if (externalProgressFill) {
       externalProgressFill.style.width = percentUsed + '%';
     }
-    
+
     if (externalProgressPercent) {
       externalProgressPercent.textContent = percentUsed + '%';
     }
@@ -3190,11 +3340,11 @@ function updateSpreadsheetProgressBar(itemId) {
 function handleForecastChange(cardIndex) {
   const card = getCardContainer(cardIndex);
   if (!card) return;
-  
+
   const itemId = card.getAttribute('data-item-id');
   const forecastInput = card.querySelector(`[data-field="annual_volume_forecast"]`);
   const forecastDateInput = card.querySelector(`[data-field="date_annual_volume"]`);
-  
+
   // Atualiza o toolingData global com o novo valor do forecast
   const toolingIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
   const forecastValue = forecastInput ? parseLocalizedNumber(forecastInput.value) || 0 : 0;
@@ -3204,12 +3354,12 @@ function handleForecastChange(cardIndex) {
       toolingData[toolingIndex].date_annual_volume = forecastDateInput.value || '';
     }
   }
-  
+
   // Sincroniza annual_volume_forecast com a linha da spreadsheet
   syncSpreadsheetFromExpandedCard(itemId, 'annual_volume_forecast', forecastValue);
-  
+
   calculateExpirationDate(cardIndex);
-  
+
   if (card) {
     triggerDateReminder(card, 'date_annual_volume');
   }
@@ -3221,7 +3371,7 @@ function handleStatusSelectChange(cardIndex, itemId, selectEl) {
     const card = getCardContainer(cardIndex);
     const previousStatus = card ? (card.dataset.status || '').trim().toLowerCase() : '';
     const newStatus = value.toLowerCase();
-    
+
     // Se estava obsolete e mudou para outro status, limpar replacement_tooling_id
     if (previousStatus === 'obsolete' && newStatus !== 'obsolete') {
       const replacementInput = card.querySelector('[data-field="replacement_tooling_id"]');
@@ -3229,10 +3379,10 @@ function handleStatusSelectChange(cardIndex, itemId, selectEl) {
         replacementInput.value = '';
       }
     }
-    
+
     updateCardHeaderStatus(cardIndex, value);
     updateCardStatusAttribute(cardIndex, value);
-    
+
     // Sincroniza status com a linha da spreadsheet
     syncSpreadsheetFromExpandedCard(itemId, 'status', value);
   }
@@ -3291,16 +3441,16 @@ function handleStepsSelectChange(cardIndex, itemId, selectEl) {
   if (selectEl) {
     const value = (selectEl.value || '').trim();
     updateCardHeaderSteps(cardIndex, value);
-    
+
     // Sincroniza steps com a linha da spreadsheet
     syncSpreadsheetFromExpandedCard(itemId, 'steps', value);
-    
+
     // Update step description label with description and responsible
     const descriptionLabel = document.getElementById(`stepDescription_${itemId}`);
     if (descriptionLabel) {
       const description = getStepDescription(value);
       const responsible = getStepResponsible(value);
-      
+
       if (description) {
         descriptionLabel.innerHTML = `<div style="color: #8b92a7; line-height: 1.4;">${description}<br><span style="font-size: 0.9em;">Responsible: ${responsible}</span></div>`;
         descriptionLabel.style.display = 'block';
@@ -3320,18 +3470,18 @@ async function handleAnalysisCompletedChange(itemId, isChecked) {
     // Atualiza o campo no banco de dados
     const value = isChecked ? 1 : 0;
     await window.api.updateTooling(itemId, { analysis_completed: value });
-    
+
     // Atualiza o item local
     const item = toolingData.find(t => t.id === itemId);
     if (item) {
       item.analysis_completed = value;
-      
+
       // Adiciona comentário automático se foi marcado
       if (isChecked) {
         const now = new Date();
-        const dateStr = now.toLocaleDateString('pt-BR', { 
-          day: '2-digit', 
-          month: '2-digit', 
+        const dateStr = now.toLocaleDateString('pt-BR', {
+          day: '2-digit',
+          month: '2-digit',
           year: 'numeric'
         });
         const commentText = 'Analysis completed - tooling reviewed and no revitalization required.';
@@ -3339,7 +3489,7 @@ async function handleAnalysisCompletedChange(itemId, isChecked) {
           date: dateStr,
           text: commentText
         };
-        
+
         // Adiciona ao array de comentários
         let comments = [];
         if (item.comments) {
@@ -3351,26 +3501,26 @@ async function handleAnalysisCompletedChange(itemId, isChecked) {
         }
         comments.push(newComment);
         item.comments = JSON.stringify(comments);
-        
+
         // Salva comentário no banco
         await window.api.updateTooling(itemId, { comments: item.comments });
-        
+
         // Atualiza UI dos comentários
         const commentsList = document.getElementById(`commentsList_${itemId}`);
         if (commentsList) {
           commentsList.innerHTML = buildCommentsListHTML(item.comments, itemId);
         }
       }
-      
+
       // Atualiza o ícone de expiração em todos os lugares
       updateExpirationIconsForItem(itemId);
-      
+
       // Atualiza métricas do card do supplier em tempo real (busca dados frescos do banco)
       if (selectedSupplier) {
         refreshSupplierCardMetricsFromDB(selectedSupplier);
       }
     }
-    
+
     showNotification(isChecked ? 'Analysis marked as completed' : 'Analysis marked as pending', 'success');
   } catch (error) {
     console.error('Error updating analysis completed:', error);
@@ -3381,11 +3531,11 @@ async function handleAnalysisCompletedChange(itemId, isChecked) {
 function updateExpirationIconsForItem(itemId) {
   const item = toolingData.find(t => String(t.id) === String(itemId));
   if (!item) return;
-  
+
   const classification = classifyToolingExpirationState(item);
   const isAnalysisCompleted = item.analysis_completed === 1;
   const hasExpirationDate = classification.expirationDate && classification.expirationDate !== '';
-  
+
   // Atualiza ícone na linha do spreadsheet
   const spreadsheetRow = document.querySelector(`#spreadsheetBody tr[data-id="${itemId}"]`);
   if (spreadsheetRow) {
@@ -3399,7 +3549,7 @@ function updateExpirationIconsForItem(itemId) {
       `;
     }
   }
-  
+
   // Atualiza ícone no card expandido (se estiver aberto)
   const cardContainers = document.querySelectorAll(`[data-item-id="${itemId}"]`);
   cardContainers.forEach(container => {
@@ -3470,7 +3620,7 @@ function updateCardStatusAttribute(cardIndex, statusValue) {
 function updateCardStatusIcon(card, normalizedStatus) {
   const statusIconContainer = card.querySelector('.card-status-icon');
   const isObsolete = normalizedStatus === 'obsolete';
-  
+
   if (isObsolete) {
     // Show obsolete icon
     if (statusIconContainer) {
@@ -3571,7 +3721,7 @@ function syncReplacementLinkControls(cardIndex, replacementId) {
   }
 
   syncReplacementPickerLabel(card, sanitizedValue);
-  
+
   // Atualiza o ícone de corrente (chain indicator)
   updateChainIndicatorForCard(card, sanitizedValue);
 }
@@ -3796,7 +3946,7 @@ async function openReplacementTimelineOverlay(startId) {
 
   // Resetar viewport transform ao abrir
   applyViewportTransform();
-  
+
   // Desenhar grid imediatamente ao abrir
   setTimeout(() => {
     drawReplacementGrid();
@@ -3814,7 +3964,7 @@ async function openReplacementTimelineOverlay(startId) {
 function closeReplacementTimelineOverlay() {
   const { overlay, gridCanvas, connectionsCanvas, list } = replacementTimelineElements;
   currentTimelineRootId = null;
-  
+
   // Reset viewport state
   graphViewportState = {
     scale: 1,
@@ -3827,15 +3977,15 @@ function closeReplacementTimelineOverlay() {
     dragStartX: 0,
     dragStartY: 0
   };
-  
+
   if (list) {
     list.style.transform = '';
   }
-  
+
   if (overlay) {
     overlay.classList.remove('active');
   }
-  
+
   // Limpar canvas ao fechar
   if (gridCanvas) {
     const ctx = gridCanvas.getContext('2d');
@@ -3884,7 +4034,7 @@ function renderReplacementTimeline(chain = []) {
     const isLastInChain = index === chain.length - 1;
     const badgeClass = isLastInChain ? 'timeline-status-active' : 'timeline-status-obsolete';
     const label = isLastInChain ? 'Active' : 'Obsolete';
-    
+
     const pn = escapeHtml(record?.pn || 'N/A');
     const description = escapeHtml(record?.tool_description || 'No description available.');
     const supplier = escapeHtml(record?.supplier || '—');
@@ -4008,7 +4158,7 @@ async function buildReplacementTimeline(startId) {
   // Agora ordenar a cadeia: encontrar a raiz (quem não é apontado por ninguém)
   // e seguir os links até o final
   const idsInChain = Array.from(allRecords.keys());
-  
+
   // Encontrar a raiz: o item cujo ID não aparece como replacement_tooling_id de nenhum outro
   const targetIds = new Set();
   for (const record of allRecords.values()) {
@@ -4017,7 +4167,7 @@ async function buildReplacementTimeline(startId) {
       targetIds.add(targetId);
     }
   }
-  
+
   let rootId = null;
   for (const id of idsInChain) {
     if (!targetIds.has(id)) {
@@ -4035,7 +4185,7 @@ async function buildReplacementTimeline(startId) {
   const orderedChain = [];
   const chainVisited = new Set();
   let currentId = rootId;
-  
+
   while (currentId && !chainVisited.has(currentId)) {
     const record = allRecords.get(currentId);
     if (!record) {
@@ -4117,36 +4267,36 @@ function updateCardUIAfterReorder(itemId, newStatus, newReplacementId) {
   if (!card) {
     return;
   }
-  
+
   const cardIndex = parseInt(card.id.replace('card-', ''), 10);
   if (isNaN(cardIndex)) {
     return;
   }
-  
+
   // Update status field and visual attributes
   const statusField = card.querySelector('[data-card-status]');
   if (statusField) {
     statusField.textContent = newStatus || 'N/A';
   }
-  
+
   // Update status dropdown/select
   const statusSelect = card.querySelector('select[data-field="status"]');
   if (statusSelect) {
     statusSelect.value = newStatus || '';
   }
-  
+
   // Update card status attributes and visibility
   updateCardStatusAttribute(cardIndex, newStatus);
-  
+
   // Update replacement link hidden input
   const replacementInput = card.querySelector('[data-field="replacement_tooling_id"]');
   if (replacementInput) {
     replacementInput.value = newReplacementId || '';
   }
-  
+
   // Update link controls
   syncReplacementLinkControls(cardIndex, newReplacementId || '');
-  
+
   // Update global toolingData
   const dataIndex = toolingData.findIndex(item => String(item.id) === String(itemId));
   if (dataIndex !== -1) {
@@ -4159,32 +4309,32 @@ function handleNodeDragStart(event) {
   if (event.target.closest('.timeline-item-action') || event.target.closest('button')) {
     return; // Não iniciar drag se clicar em botões
   }
-  
+
   event.preventDefault();
   const node = event.currentTarget;
-  
+
   graphViewportState.draggedNode = node;
   graphViewportState.dragStartX = event.clientX - parseFloat(node.style.left || 0);
   graphViewportState.dragStartY = event.clientY - parseFloat(node.style.top || 0);
-  
+
   node.classList.add('dragging-node');
-  
+
   document.addEventListener('mousemove', handleNodeDragMove);
   document.addEventListener('mouseup', handleNodeDragEnd);
 }
 
 function handleNodeDragMove(event) {
   if (!graphViewportState.draggedNode) return;
-  
+
   event.preventDefault();
   const node = graphViewportState.draggedNode;
-  
+
   const x = event.clientX - graphViewportState.dragStartX;
   const y = event.clientY - graphViewportState.dragStartY;
-  
+
   node.style.left = `${x}px`;
   node.style.top = `${y}px`;
-  
+
   // Redesenhar conexões
   const { list } = replacementTimelineElements;
   if (list) {
@@ -4198,7 +4348,7 @@ function handleNodeDragEnd(event) {
     graphViewportState.draggedNode.classList.remove('dragging-node');
     graphViewportState.draggedNode = null;
   }
-  
+
   document.removeEventListener('mousemove', handleNodeDragMove);
   document.removeEventListener('mouseup', handleNodeDragEnd);
 }
@@ -4206,11 +4356,11 @@ function handleNodeDragEnd(event) {
 function initGraphViewportControls() {
   const viewport = document.getElementById('replacementGraphViewport');
   if (!viewport) return;
-  
+
   // Limpar listeners anteriores
   viewport.removeEventListener('mousedown', handleViewportPanStart);
   viewport.removeEventListener('wheel', handleViewportZoom);
-  
+
   viewport.addEventListener('mousedown', handleViewportPanStart);
   viewport.addEventListener('wheel', handleViewportZoom);
 }
@@ -4218,29 +4368,29 @@ function initGraphViewportControls() {
 function handleViewportPanStart(event) {
   // Apenas pan se clicar no fundo (não em nodes)
   if (event.target.closest('.timeline-item')) return;
-  
+
   event.preventDefault();
   const viewport = event.currentTarget;
-  
+
   graphViewportState.isPanning = true;
   graphViewportState.panStartX = event.clientX - graphViewportState.offsetX;
   graphViewportState.panStartY = event.clientY - graphViewportState.offsetY;
-  
+
   viewport.classList.add('panning');
-  
+
   document.addEventListener('mousemove', handleViewportPanMove);
   document.addEventListener('mouseup', handleViewportPanEnd);
 }
 
 function handleViewportPanMove(event) {
   if (!graphViewportState.isPanning) return;
-  
+
   event.preventDefault();
   graphViewportState.offsetX = event.clientX - graphViewportState.panStartX;
   graphViewportState.offsetY = event.clientY - graphViewportState.panStartY;
-  
+
   applyViewportTransform();
-  
+
   // Redesenhar conexões durante pan
   const { list } = replacementTimelineElements;
   if (list) {
@@ -4255,21 +4405,21 @@ function handleViewportPanEnd(event) {
   if (viewport) {
     viewport.classList.remove('panning');
   }
-  
+
   document.removeEventListener('mousemove', handleViewportPanMove);
   document.removeEventListener('mouseup', handleViewportPanEnd);
 }
 
 function handleViewportZoom(event) {
   event.preventDefault();
-  
+
   const delta = -event.deltaY;
   const scaleChange = delta > 0 ? 1.1 : 0.9;
   const newScale = Math.max(0.3, Math.min(3, graphViewportState.scale * scaleChange));
-  
+
   graphViewportState.scale = newScale;
   applyViewportTransform();
-  
+
   // Redesenhar conexões com novo zoom
   const { list } = replacementTimelineElements;
   if (list) {
@@ -4284,7 +4434,7 @@ function handleViewportZoom(event) {
 function applyViewportTransform() {
   const { list, connectionsCanvas } = replacementTimelineElements;
   const transform = `translate(${graphViewportState.offsetX}px, ${graphViewportState.offsetY}px) scale(${graphViewportState.scale})`;
-  
+
   if (list) {
     list.style.transform = transform;
   }
@@ -4307,20 +4457,20 @@ function handleTimelineDragOver(event) {
     event.preventDefault();
   }
   event.dataTransfer.dropEffect = 'move';
-  
+
   const targetItem = event.currentTarget;
   if (timelineDraggedElement && timelineDraggedElement !== targetItem) {
     // Remove all existing indicators
     document.querySelectorAll('.timeline-item').forEach(item => {
       item.classList.remove('timeline-drop-before', 'timeline-drop-after');
     });
-    
+
     // Determine if we should insert before or after
     const list = targetItem.parentNode;
     const allItems = Array.from(list.querySelectorAll('.timeline-item'));
     const draggedIndex = allItems.indexOf(timelineDraggedElement);
     const targetIndex = allItems.indexOf(targetItem);
-    
+
     if (draggedIndex < targetIndex) {
       targetItem.classList.add('timeline-drop-after');
     } else {
@@ -4344,25 +4494,25 @@ function handleTimelineDrop(event) {
   if (event.preventDefault) {
     event.preventDefault();
   }
-  
+
   const targetItem = event.currentTarget;
   targetItem.classList.remove('timeline-drop-before', 'timeline-drop-after');
-  
+
   if (timelineDraggedElement && timelineDraggedElement !== targetItem) {
     const list = targetItem.parentNode;
     const allItems = Array.from(list.querySelectorAll('.timeline-item'));
     const draggedIndex = allItems.indexOf(timelineDraggedElement);
     const targetIndex = allItems.indexOf(targetItem);
-    
+
     if (draggedIndex < targetIndex) {
       list.insertBefore(timelineDraggedElement, targetItem.nextSibling);
     } else {
       list.insertBefore(timelineDraggedElement, targetItem);
     }
-    
+
     updateReplacementChainAfterReorder();
   }
-  
+
   return false;
 }
 
@@ -4384,7 +4534,7 @@ function drawReplacementGrid() {
   const rect = viewport.getBoundingClientRect();
   const width = rect.width;
   const height = rect.height;
-  
+
   gridCanvas.width = width;
   gridCanvas.height = height;
 
@@ -4422,7 +4572,7 @@ function drawReplacementConnections(chain = []) {
 
   const nodes = Array.from(list.querySelectorAll('.timeline-item'));
   console.log(`Desenhando conexões para ${nodes.length} nodes`);
-  
+
   if (nodes.length < 2) {
     console.log('Menos de 2 nodes, não há o que conectar');
     return;
@@ -4431,50 +4581,50 @@ function drawReplacementConnections(chain = []) {
   // Usar tamanho grande o suficiente para acomodar todos os nodes
   const width = 4000;
   const height = 4000;
-  
+
   connectionsCanvas.width = width;
   connectionsCanvas.height = height;
 
   const ctx = connectionsCanvas.getContext('2d');
   ctx.clearRect(0, 0, width, height);
-  
+
   for (let i = 0; i < nodes.length - 1; i++) {
     const from = nodes[i];
     const to = nodes[i + 1];
-    
+
     const fromLeft = parseFloat(from.style.left || 0);
     const fromTop = parseFloat(from.style.top || 0);
     const toLeft = parseFloat(to.style.left || 0);
     const toTop = parseFloat(to.style.top || 0);
-    
+
     const fromWidth = from.offsetWidth;
     const fromHeight = from.offsetHeight;
     const toWidth = to.offsetWidth;
-    
+
     const fromX = fromLeft + fromWidth / 2;
     const fromY = fromTop + fromHeight;
     const toX = toLeft + toWidth / 2;
     const toY = toTop;
 
-    console.log(`Conectando node ${i} (${fromX}, ${fromY}) -> node ${i+1} (${toX}, ${toY})`);
+    console.log(`Conectando node ${i} (${fromX}, ${fromY}) -> node ${i + 1} (${toX}, ${toY})`);
 
     // Desenhar linha com curva suave
-    ctx.strokeStyle = '#ff6b6b';
+    ctx.strokeStyle = '#c8102e';
     ctx.lineWidth = 4;
 
     ctx.beginPath();
     ctx.moveTo(fromX, fromY);
-    
+
     const controlOffset = Math.abs(toY - fromY) / 2;
     ctx.bezierCurveTo(
       fromX, fromY + controlOffset,
       toX, toY - controlOffset,
       toX, toY
     );
-    
+
     ctx.stroke();
   }
-  
+
   console.log('Conexões desenhadas com sucesso');
 }
 
@@ -4483,21 +4633,21 @@ async function updateReplacementChainAfterReorder() {
   if (!list) {
     return;
   }
-  
+
   const items = Array.from(list.querySelectorAll('.timeline-item'));
   const orderedIds = items.map(item => item.dataset.recordId).filter(Boolean);
   if (orderedIds.length === 0) {
     return;
   }
-  
+
   isReorderingTimeline = true;
-  
+
   try {
     // Update replacement links and status based on new order
     for (let i = 0; i < orderedIds.length; i++) {
       const currentId = orderedIds[i];
       const isLast = i === orderedIds.length - 1;
-      
+
       if (isLast) {
         // Last item: ACTIVE status and no replacement link
         await window.api.updateTooling(Number(currentId), {
@@ -4512,24 +4662,24 @@ async function updateReplacementChainAfterReorder() {
         });
       }
     }
-    
+
     showNotification('Cadeia reorganizada e salva com sucesso.', 'success');
-    
+
     // Update cards UI immediately
     for (let i = 0; i < orderedIds.length; i++) {
       const currentId = orderedIds[i];
       const isLast = i === orderedIds.length - 1;
       const nextId = isLast ? null : Number(orderedIds[i + 1]);
       const newStatus = isLast ? 'ACTIVE' : 'OBSOLETE';
-      
+
       updateCardUIAfterReorder(currentId, newStatus, nextId);
     }
-    
+
     // Rebuild timeline with updated data
     const rootId = orderedIds[0];
     const chain = await buildReplacementTimeline(rootId);
     renderReplacementTimeline(chain);
-    
+
   } catch (error) {
     showNotification('Erro ao atualizar a ordem da cadeia.', 'error');
   } finally {
@@ -4581,7 +4731,7 @@ function handleReplacementLinkButtonClick(event, buttonEl) {
   if (!buttonEl || buttonEl.disabled) {
     return;
   }
-  
+
   // Obtém o ID do target diretamente do botão
   const targetId = buttonEl.getAttribute('data-target-id');
   if (targetId) {
@@ -4596,7 +4746,7 @@ function handleReplacementLinkChipClick(event, buttonEl) {
   if (!buttonEl || buttonEl.disabled) {
     return;
   }
-  
+
   // Tenta encontrar o card (normal ou spreadsheet)
   const card = buttonEl.closest('.tooling-card') || buttonEl.closest('.spreadsheet-card-container');
   if (card) {
@@ -4613,18 +4763,18 @@ async function navigateToLinkedCard(targetId) {
 
   // Verifica se está no modo spreadsheet
   const isSpreadsheetMode = currentViewMode === 'spreadsheet';
-  
+
   if (isSpreadsheetMode) {
     // Modo Spreadsheet: procura pela linha da tabela
     let targetRow = document.querySelector(`tr[data-id="${normalizedId}"]`);
-    
+
     if (!targetRow) {
       const cardLoaded = await ensureCardLoadedById(normalizedId);
       if (!cardLoaded) {
         showNotification(`O card #${normalizedId} não foi encontrado. Verifique se o registro existe.`, 'warning');
         return;
       }
-      
+
       await new Promise(resolve => setTimeout(resolve, 400));
       targetRow = document.querySelector(`tr[data-id="${normalizedId}"]`);
     }
@@ -4637,7 +4787,7 @@ async function navigateToLinkedCard(targetId) {
     // Encontra o índice do item
     const item = toolingData.find(t => String(t.id) === String(normalizedId));
     const itemIndex = toolingData.indexOf(item);
-    
+
     if (itemIndex === -1) {
       showNotification(`Não foi possível encontrar o item #${normalizedId}.`, 'warning');
       return;
@@ -4656,7 +4806,7 @@ async function navigateToLinkedCard(targetId) {
         // Carrega anexos e calcula expiração
         loadCardAttachments(normalizedId).catch(err => {
         });
-        
+
         // Calcula expiração (se necessário)
         const cardContainer = detailRow.querySelector('.spreadsheet-card-container');
         if (cardContainer) {
@@ -4665,7 +4815,7 @@ async function navigateToLinkedCard(targetId) {
             calculateExpirationDate(itemIndex, null, true);
           }
         }
-        
+
         ensureSpreadsheetRowVisible(detailRow);
         flashSpreadsheetRowHighlight(detailRow);
       } else {
@@ -4673,7 +4823,7 @@ async function navigateToLinkedCard(targetId) {
         flashSpreadsheetRowHighlight(targetRow);
       }
     }, 150);
-    
+
   } else {
     // Modo Card: comportamento original
     let targetCard = document.querySelector(`.tooling-card[data-item-id="${normalizedId}"]`);
@@ -4683,7 +4833,7 @@ async function navigateToLinkedCard(targetId) {
         showNotification(`O card #${normalizedId} não foi encontrado. Verifique se o registro existe.`, 'warning');
         return;
       }
-      
+
       await new Promise(resolve => setTimeout(resolve, 400));
       targetCard = document.querySelector(`.tooling-card[data-item-id="${normalizedId}"]`);
       if (!targetCard) {
@@ -4708,30 +4858,30 @@ async function navigateToLinkedCard(targetId) {
         expandedCard.classList.remove('expanded');
       }
     }
-    
+
     const bodyLoaded = targetCard.getAttribute('data-body-loaded') === 'true';
     if (!bodyLoaded) {
       const itemId = targetCard.getAttribute('data-item-id');
       const item = toolingData.find(t => String(t.id) === String(itemId));
-      
+
       if (item) {
         const supplierContext = selectedSupplier || currentSupplier || '';
         const chainMembership = new Map();
         const bodyHTML = buildToolingCardBodyHTML(item, cardIndex, chainMembership, supplierContext);
-        
+
         targetCard.insertAdjacentHTML('beforeend', bodyHTML);
         targetCard.setAttribute('data-body-loaded', 'true');
         applyInitialThousandsMask(targetCard);
-        
+
         const dropzone = targetCard.querySelector('.card-attachments-dropzone');
         if (dropzone && itemId) {
           initCardAttachmentDragAndDrop(dropzone, itemId);
         }
       }
     }
-    
+
     targetCard.classList.add('expanded');
-    
+
     setTimeout(() => {
       calculateExpirationDate(cardIndex, null, true);
       const itemId = targetCard.getAttribute('data-item-id');
@@ -4740,7 +4890,7 @@ async function navigateToLinkedCard(targetId) {
         });
       }
     }, 0);
-    
+
     ensureCardVisible(targetCard);
     flashCardHighlight(targetCard);
   }
@@ -4758,12 +4908,12 @@ async function ensureCardLoadedById(cardId) {
 
   try {
     const record = await window.api.getToolingById(numericId);
-    
+
     if (!record) {
       return false;
     }
     const supplierName = String(record.supplier || '').trim();
-    
+
     if (!supplierName) {
       return false;
     }
@@ -4796,14 +4946,14 @@ function flashSpreadsheetRowHighlight(row) {
 
 function ensureSpreadsheetRowVisible(row) {
   if (!row) return;
-  
+
   setTimeout(() => {
     // Encontra a linha principal (não a detail row)
     let mainRow = row;
     if (row.classList.contains('spreadsheet-detail-row')) {
       mainRow = row.previousElementSibling;
     }
-    
+
     if (mainRow) {
       // Calcula a posição ideal considerando o header fixo
       const headerHeight = document.querySelector('.spreadsheet-table thead')?.offsetHeight || 50;
@@ -4827,11 +4977,11 @@ function triggerDateReminder(card, fieldName) {
 
 function restoreDateReminders(itemId) {
   const dateFields = ['date_remaining_tooling_life', 'date_annual_volume'];
-  
+
   dateFields.forEach(fieldName => {
     const storageKey = `dateReminder_${itemId}_${fieldName}`;
     const hasReminder = localStorage.getItem(storageKey);
-    
+
     if (hasReminder === 'active') {
       const input = document.querySelector(`[data-id="${itemId}"][data-field="${fieldName}"]`);
       if (input) {
@@ -4869,16 +5019,16 @@ function showDateHighlight(input) {
   }
 
   // Adiciona listener para remover o highlight quando o usuário alterar a data
-  const changeListener = function() {
+  const changeListener = function () {
     input.classList.remove('date-highlight');
     tooltip.classList.remove('active');
-    
+
     // Remove do localStorage
     if (itemId && fieldName) {
       const storageKey = `dateReminder_${itemId}_${fieldName}`;
       localStorage.removeItem(storageKey);
     }
-    
+
     // Remove o listener após usar
     input.removeEventListener('change', changeListener);
     delete input._dateChangeListener;
@@ -4919,41 +5069,41 @@ function collectCardDomValues(id) {
   }
   const values = {};
   const fieldPriority = {}; // Rastreia prioridade: 2=card expandido, 1=spreadsheet row, 0=outro
-  
+
   elements.forEach((element) => {
     const field = element.getAttribute('data-field');
     if (!field || typeof field !== 'string') {
       return;
     }
-    
+
     // Validar nome do campo
     const fieldName = field.trim();
     if (fieldName === '' || fieldName.length === 0) {
       return;
     }
-    
+
     // Ignorar campos calculados (como expiration_date)
     if (element.classList.contains('calculated')) {
       return;
     }
-    
+
     // Determinar prioridade do elemento
     // Card expandido (dentro de .spreadsheet-detail-row ou .tooling-card-body) tem prioridade máxima
     const isInExpandedCard = element.closest('.spreadsheet-detail-row') || element.closest('.tooling-card-body');
     const isInSpreadsheetRow = element.closest('tr[data-id]') && element.classList.contains('spreadsheet-input');
-    
+
     let priority = 0;
     if (isInExpandedCard) {
       priority = 2; // Prioridade máxima - card expandido
     } else if (isInSpreadsheetRow) {
       priority = 1; // Prioridade média - linha da spreadsheet
     }
-    
+
     // Só sobrescreve se tiver prioridade maior ou igual
     const currentPriority = fieldPriority[fieldName] ?? -1;
     if (priority >= currentPriority) {
       fieldPriority[fieldName] = priority;
-      
+
       if (element instanceof HTMLInputElement && element.type === 'checkbox') {
         values[fieldName] = element.checked ? '1' : '0';
       } else {
@@ -4961,7 +5111,7 @@ function collectCardDomValues(id) {
       }
     }
   });
-  
+
   return values;
 }
 
@@ -4993,7 +5143,7 @@ function buildCardPayloadFromDom(id) {
   if (!rawValues) {
     return null;
   }
-  
+
   // Adicionar comentários e expiration_date do toolingData ao payload
   // (expiration_date é calculado e tem classe 'calculated', então é ignorado pelo collectCardDomValues)
   const item = toolingData.find(item => Number(item.id) === Number(id));
@@ -5005,14 +5155,14 @@ function buildCardPayloadFromDom(id) {
       rawValues.expiration_date = item.expiration_date;
     }
   }
-  
+
   const serialized = serializeCardValues(rawValues);
   const snapshotKey = getSnapshotKey(id);
   const previousSnapshot = cardSnapshotStore.get(snapshotKey);
-  
+
   // Se não tem snapshot anterior, considera que há mudanças (primeiro salvamento)
   const hasChanges = previousSnapshot === undefined || previousSnapshot !== serialized;
-  
+
   return {
     payload: normalizeCardPayload(rawValues),
     serialized,
@@ -5062,18 +5212,18 @@ function autoSaveTooling(id, immediate = false) {
   if (isReorderingTimeline) {
     return;
   }
-  
+
   // Cancela timeout anterior se existir
   if (autoSaveTimeouts[id]) {
     clearTimeout(autoSaveTimeouts[id]);
   }
-  
+
   // Se immediate for true, salva imediatamente sem notificação
   if (immediate) {
     saveToolingQuietly(id);
     return;
   }
-  
+
   // Cria novo timeout para salvar após 1 segundo sem edição
   autoSaveTimeouts[id] = setTimeout(async () => {
     await saveToolingQuietly(id);
@@ -5198,7 +5348,7 @@ function computeLocalChainMembership(data, externalIncomingLinks = []) {
       incomingLookup.set(targetId, true);
     }
   });
-  
+
   // Adiciona incoming links externos (de outros suppliers)
   if (Array.isArray(externalIncomingLinks)) {
     externalIncomingLinks.forEach(id => {
@@ -5224,14 +5374,14 @@ async function computeChainMembershipAsync(data, targetMap, renderToken) {
   if (!Array.isArray(data) || data.length === 0) {
     return;
   }
-  
+
   // Fase 1: Construir lookup de incoming links em chunks
   const incomingLookup = new Map();
   const CHUNK_SIZE = 100; // Processar 100 items por vez
-  
+
   for (let i = 0; i < data.length; i += CHUNK_SIZE) {
     if (renderToken !== currentToolingRenderToken) return; // Cancelado
-    
+
     const chunk = data.slice(i, Math.min(i + CHUNK_SIZE, data.length));
     chunk.forEach((item) => {
       const targetId = sanitizeReplacementId(item?.replacement_tooling_id);
@@ -5239,28 +5389,28 @@ async function computeChainMembershipAsync(data, targetMap, renderToken) {
         incomingLookup.set(targetId, true);
       }
     });
-    
+
     // Yield para não travar a UI
     if (i + CHUNK_SIZE < data.length) {
       await new Promise(resolve => setTimeout(resolve, 0));
     }
   }
-  
+
   // Fase 2: Computar membership e atualizar ícones em chunks
   for (let i = 0; i < data.length; i += CHUNK_SIZE) {
     if (renderToken !== currentToolingRenderToken) return; // Cancelado
-    
+
     const chunk = data.slice(i, Math.min(i + CHUNK_SIZE, data.length));
     chunk.forEach((item) => {
       const itemId = String(item?.id || '').trim();
       if (!itemId) return;
-      
+
       const hasOutgoingLink = Boolean(sanitizeReplacementId(item?.replacement_tooling_id));
       const hasIncomingLink = incomingLookup.has(itemId);
       const inChain = hasOutgoingLink || hasIncomingLink;
-      
+
       targetMap.set(itemId, inChain);
-      
+
       // Atualizar ícone imediatamente se o card estiver renderizado
       const card = document.querySelector(`.tooling-card[data-item-id="${itemId}"]`);
       if (card) {
@@ -5269,7 +5419,7 @@ async function computeChainMembershipAsync(data, targetMap, renderToken) {
         enforceChainIndicatorRules(card);
       }
     });
-    
+
     // Yield para não travar a UI
     if (i + CHUNK_SIZE < data.length) {
       await new Promise(resolve => setTimeout(resolve, 0));
@@ -5311,7 +5461,7 @@ async function hydrateAttachmentBadges(items, renderToken, supplierName) {
 
   try {
     const counts = await window.api.getAttachmentsCountBatch(supplierSnapshot, itemIds);
-    
+
     if (supplierSnapshot !== (selectedSupplier || currentSupplier || '')) {
       return;
     }
@@ -5530,22 +5680,22 @@ function initThousandsMaskBehavior() {
 // Recalcula todas as expiration dates ao carregar os dados
 async function recalculateAllExpirationDates() {
   if (!toolingData || toolingData.length === 0) return;
-  
+
   const updates = [];
-  
+
   for (const item of toolingData) {
     const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
     const produced = parseLocalizedNumber(item.produced) || 0;
     const remaining = toolingLife - produced;
     const forecast = parseLocalizedNumber(item.annual_volume_forecast) || 0;
     const productionDate = item.date_remaining_tooling_life || '';
-    
+
     const newExpirationDate = calculateExpirationFromFormula({
       remaining,
       forecast,
       productionDate
     });
-    
+
     // Só atualiza se a data calculada for diferente da atual
     const currentExpiration = item.expiration_date || '';
     if (newExpirationDate !== currentExpiration) {
@@ -5556,7 +5706,7 @@ async function recalculateAllExpirationDates() {
       });
     }
   }
-  
+
   // Salva todas as atualizações no banco de dados em background
   if (updates.length > 0) {
     for (const update of updates) {
@@ -5570,6 +5720,46 @@ async function recalculateAllExpirationDates() {
   }
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+function calculateExpirationFromFormula({ remaining, forecast, productionDate }) {
+  if (!productionDate || !forecast || forecast <= 0) return null;
+
+  const [year, month, day] = productionDate.split('-').map(Number);
+  const base = new Date(year, month - 1, day); // força data local
+
+  if (isNaN(base)) return null;
+
+  const days = Math.round((remaining / forecast) * 365);
+  if (!isFinite(days)) return null;
+
+  base.setDate(base.getDate() + days);
+
+  const y = base.getFullYear();
+  const m = String(base.getMonth() + 1).padStart(2, '0');
+  const d = String(base.getDate()).padStart(2, '0');
+
+  return `${y}-${m}-${d}`;
+}
+
+
+
+
+/*
+//Função para calcular a data de expiração com base na fórmula: data_produced + (remaining/annual_volume*365)
 function calculateExpirationFromFormula({
   remaining,
   forecast,
@@ -5606,6 +5796,9 @@ function calculateExpirationFromFormula({
   return expirationDate.toISOString().split('T')[0];
 }
 
+*/
+
+
 function generateConfirmationCode(length = 3) {
   const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   let code = '';
@@ -5615,6 +5808,7 @@ function generateConfirmationCode(length = 3) {
   }
   return code;
 }
+
 
 function confirmDeleteTooling(id) {
   const overlay = document.getElementById('deleteConfirmOverlay');
@@ -5648,6 +5842,7 @@ function confirmDeleteTooling(id) {
     inputEl.focus();
   }, 50);
 }
+
 
 function cancelDeleteTooling() {
   const overlay = document.getElementById('deleteConfirmOverlay');
@@ -5721,7 +5916,7 @@ function populateAddToolingOwners() {
   list.innerHTML = '';
 
   // Get unique owners from responsiblesData (loaded from DB)
-  const uniqueOwners = Array.isArray(responsiblesData) 
+  const uniqueOwners = Array.isArray(responsiblesData)
     ? [...responsiblesData].sort((a, b) => a.localeCompare(b, 'pt-BR'))
     : [];
 
@@ -5771,7 +5966,7 @@ function closeAddToolingModal() {
   const forecastInput = document.getElementById('addToolingForecast');
   const productionDateInput = document.getElementById('addToolingProductionDate');
   const forecastDateInput = document.getElementById('addToolingForecastDate');
-  
+
   if (overlay) overlay.classList.remove('active');
   if (pnInput) pnInput.value = '';
   if (pnDescriptionInput) pnDescriptionInput.value = '';
@@ -5822,7 +6017,7 @@ function buildCommentsListHTML(commentsJson, itemId, filterText = null) {
   filteredComments = filteredComments.reverse();
 
   if (filteredComments.length === 0) {
-    const emptyMessage = filterText && filterText !== 'all' 
+    const emptyMessage = filterText && filterText !== 'all'
       ? 'No comments matching this filter'
       : 'No comments yet';
     return `<div class="comments-empty">${emptyMessage}</div>`;
@@ -5890,13 +6085,13 @@ function handleCommentKeydown(event, itemId) {
 function addComment(itemId) {
   const input = document.getElementById(`commentInput_${itemId}`);
   if (!input) return;
-  
+
   const text = input.value.trim();
   if (!text) return;
-  
+
   const item = toolingData.find(item => Number(item.id) === Number(itemId));
   if (!item) return;
-  
+
   let comments = [];
   if (item.comments) {
     try {
@@ -5908,25 +6103,25 @@ function addComment(itemId) {
       comments = [];
     }
   }
-  
+
   const now = new Date();
-  const dateStr = now.toLocaleString('pt-BR', { 
-    day: '2-digit', 
-    month: '2-digit', 
-    year: 'numeric', 
-    hour: '2-digit', 
-    minute: '2-digit' 
+  const dateStr = now.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
   });
-  
+
   comments.push({
     date: dateStr,
     text: text,
     initial: false
   });
-  
+
   item.comments = JSON.stringify(comments);
   input.value = '';
-  
+
   updateCommentsDisplay(itemId);
   autoSaveTooling(itemId, true);
 }
@@ -5934,7 +6129,7 @@ function addComment(itemId) {
 function editComment(itemId, commentIndex) {
   const item = toolingData.find(item => Number(item.id) === Number(itemId));
   if (!item) return;
-  
+
   let comments = [];
   if (item.comments) {
     try {
@@ -5946,29 +6141,29 @@ function editComment(itemId, commentIndex) {
       return;
     }
   }
-  
+
   if (commentIndex < 0 || commentIndex >= comments.length) return;
   if (comments[commentIndex].initial) return;
   if (comments[commentIndex].origin === 'import') {
     showNotification('Imported comments cannot be edited', 'info');
     return;
   }
-  
+
   const textElement = document.getElementById(`commentText_${itemId}_${commentIndex}`);
   if (!textElement) return;
-  
+
   const currentText = comments[commentIndex].text || '';
   const card = textElement.closest('.comment-card');
-  
+
   const editFieldHtml = `<textarea class="comment-edit-input" id="commentEditInput_${itemId}_${commentIndex}" rows="4" onkeydown="handleCommentEditKeydown(event, ${itemId}, ${commentIndex})">${escapeHtml(currentText)}</textarea>`;
   textElement.innerHTML = editFieldHtml;
-  
+
   const editInput = document.getElementById(`commentEditInput_${itemId}_${commentIndex}`);
   if (editInput) {
     editInput.focus();
     editInput.select();
   }
-  
+
   const actions = card.querySelector('.comment-actions');
   if (actions) {
     actions.innerHTML = `
@@ -5995,16 +6190,16 @@ function handleCommentEditKeydown(event, itemId, commentIndex) {
 function saveCommentEdit(itemId, commentIndex) {
   const editInput = document.getElementById(`commentEditInput_${itemId}_${commentIndex}`);
   if (!editInput) return;
-  
+
   const newText = editInput.value.trim();
   if (!newText) {
     showNotification('Comment cannot be empty', 'error');
     return;
   }
-  
+
   const item = toolingData.find(item => Number(item.id) === Number(itemId));
   if (!item) return;
-  
+
   let comments = [];
   if (item.comments) {
     try {
@@ -6016,23 +6211,23 @@ function saveCommentEdit(itemId, commentIndex) {
       return;
     }
   }
-  
+
   if (commentIndex < 0 || commentIndex >= comments.length) return;
-  
+
   // Atualiza o texto e a data do comentário
   const now = new Date();
-  const dateStr = now.toLocaleString('pt-BR', { 
-    day: '2-digit', 
-    month: '2-digit', 
-    year: 'numeric', 
-    hour: '2-digit', 
-    minute: '2-digit' 
+  const dateStr = now.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
   });
-  
+
   comments[commentIndex].text = newText;
   comments[commentIndex].date = dateStr;
   item.comments = JSON.stringify(comments);
-  
+
   updateCommentsDisplay(itemId);
   autoSaveTooling(itemId, true);
 }
@@ -6191,38 +6386,38 @@ function deleteComment(itemId, commentIndex) {
 function updateCommentsDisplay(itemId) {
   const item = toolingData.find(item => Number(item.id) === Number(itemId));
   if (!item) return;
-  
+
   const commentsList = document.getElementById(`commentsList_${itemId}`);
   if (!commentsList) return;
-  
+
   // Obter o filtro atual, se houver
   const filterBtn = document.getElementById(`commentsFilterBtn_${itemId}`);
   const currentFilter = filterBtn ? filterBtn.dataset.currentFilter : null;
-  
+
   commentsList.innerHTML = buildCommentsListHTML(item.comments || '', itemId, currentFilter);
 }
 
 function toggleCommentsFilterPopup(itemId) {
   const popup = document.getElementById(`commentsFilterPopup_${itemId}`);
   if (!popup) return;
-  
+
   // Fechar outros popups abertos
   document.querySelectorAll('.comments-filter-popup.active').forEach(p => {
     if (p.id !== `commentsFilterPopup_${itemId}`) {
       p.classList.remove('active');
     }
   });
-  
+
   popup.classList.toggle('active');
 }
 
 function applyCommentsFilter(itemId, filterText) {
   const item = toolingData.find(item => Number(item.id) === Number(itemId));
   if (!item) return;
-  
+
   const commentsList = document.getElementById(`commentsList_${itemId}`);
   if (!commentsList) return;
-  
+
   // Guardar filtro atual no botão
   const filterBtn = document.getElementById(`commentsFilterBtn_${itemId}`);
   if (filterBtn) {
@@ -6234,11 +6429,11 @@ function applyCommentsFilter(itemId, filterText) {
       filterBtn.classList.remove('filter-active');
     }
   }
-  
+
   // Fechar popup
   const popup = document.getElementById(`commentsFilterPopup_${itemId}`);
   if (popup) popup.classList.remove('active');
-  
+
   commentsList.innerHTML = buildCommentsListHTML(item.comments || '', itemId, filterText);
 }
 
@@ -6294,22 +6489,22 @@ async function submitAddToolingForm() {
   try {
     // Criar comentário inicial
     const now = new Date();
-    const dateStr = now.toLocaleString('pt-BR', { 
-      day: '2-digit', 
-      month: '2-digit', 
-      year: 'numeric', 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    const dateStr = now.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
     });
-    
+
     const initialComment = {
       date: dateStr,
       text: `Created with Tooling Life: ${formatIntegerWithSeparators(toolingLife)} pcs`,
       initial: true
     };
-    
+
     const commentsJson = JSON.stringify([initialComment]);
-    
+
     const payload = {
       pn,
       pn_description: pnDescription,
@@ -6345,7 +6540,7 @@ async function submitAddToolingForm() {
     await refreshReplacementIdOptions(true);
     await loadToolingBySupplier(supplier);
     await loadAttachments(supplier);
-    
+
     // Reaplicar filtro se estava ativo
     if (activeFilter.length >= 1) {
       await filterSuppliersAndTooling(activeFilter);
@@ -6391,54 +6586,54 @@ async function deleteToolingItem(id) {
 async function filterToolingByStep() {
   const stepsFilter = document.getElementById('stepsFilter');
   const selectedStep = stepsFilter ? stepsFilter.value : '';
-  
+
   console.log('Filtering by step:', selectedStep);
-  
+
   // Remover mensagem de "no steps" se existir
   const existingMsg = document.getElementById('noStepsMessage');
   if (existingMsg) existingMsg.remove();
-  
+
   if (!selectedStep) {
     // Sem filtro - limpar lista de suppliers filtrados
     stepsFilteredSuppliers = null;
-    
+
     // Mostrar todos os supplier cards e restaurar métricas originais
     const supplierCards = document.querySelectorAll('.supplier-card');
     supplierCards.forEach(card => {
       card.style.display = '';
     });
-    
+
     // Recarregar suppliers para restaurar os contadores originais
     await loadSuppliers();
-    
+
     // Recarregar tooling cards do supplier selecionado (sem filtro)
     if (selectedSupplier) {
       await loadToolingBySupplier(selectedSupplier);
     }
-    
+
     return;
   }
-  
+
   // COM filtro - filtrar suppliers e atualizar contadores
   try {
     // Buscar todos os suppliers com stats
     const allSuppliers = await window.api.getSuppliersWithStats();
     console.log('All suppliers:', allSuppliers.length);
-    
+
     // Para cada supplier, verificar se tem tooling com o step selecionado e calcular métricas
     const suppliersWithStep = [];
     const supplierMetrics = new Map();
-    
+
     for (const supplierObj of allSuppliers) {
       const supplierName = supplierObj.supplier || '';
       const supplierTooling = await window.api.getToolingBySupplier(supplierName);
-      
+
       // Filtrar tooling pelo step selecionado
       const filteredTooling = supplierTooling.filter(item => {
         const itemStep = String(item.steps || '').trim();
         return itemStep === selectedStep;
       });
-      
+
       if (filteredTooling.length > 0) {
         suppliersWithStep.push(supplierName);
         // Calcular métricas apenas dos itens filtrados
@@ -6446,12 +6641,12 @@ async function filterToolingByStep() {
         supplierMetrics.set(supplierName, metrics);
       }
     }
-    
+
     console.log('Suppliers with step:', suppliersWithStep);
-    
+
     // Salvar lista de suppliers filtrados globalmente
     stepsFilteredSuppliers = suppliersWithStep;
-    
+
     // Atualizar suppliers na sidebar (mostrar apenas os que têm o step e atualizar contadores)
     const supplierCards = document.querySelectorAll('.supplier-card');
     let visibleSuppliers = 0;
@@ -6460,14 +6655,14 @@ async function filterToolingByStep() {
       if (suppliersWithStep.includes(supplierName)) {
         card.style.display = '';
         visibleSuppliers++;
-        
+
         // Atualizar contadores com valores filtrados
         const metrics = supplierMetrics.get(supplierName);
         if (metrics) {
           const totalEl = card.querySelector('[data-metric="total"]');
           const expiredEl = card.querySelector('[data-metric="expired"]');
           const expiringEl = card.querySelector('[data-metric="expiring"]');
-          
+
           if (totalEl) totalEl.textContent = metrics.total;
           if (expiredEl) {
             expiredEl.textContent = metrics.expired;
@@ -6483,12 +6678,12 @@ async function filterToolingByStep() {
       }
     });
     console.log('Visible suppliers:', visibleSuppliers);
-    
+
     // Se tiver supplier selecionado, recarregar os tooling cards (já filtrados)
     if (selectedSupplier) {
       await loadToolingBySupplier(selectedSupplier);
     }
-    
+
   } catch (error) {
     console.error('Error filtering by step:', error);
   }
@@ -6542,22 +6737,22 @@ async function displayTooling(data) {
     const lifeB = parseLocalizedNumber(b.tooling_life_qty) || 0;
     const prodA = parseLocalizedNumber(a.produced) || 0;
     const prodB = parseLocalizedNumber(b.produced) || 0;
-    
+
     const percentA = lifeA > 0 ? ((prodA / lifeA) * 100) : 0;
     const percentB = lifeB > 0 ? ((prodB / lifeB) * 100) : 0;
-    
+
     return percentB - percentA;
   });
 
   cardSnapshotStore.clear();
   toolingData = sortedData;
-  
+
   // Atualiza métricas do supplier card com os dados ORIGINAIS (não filtrados)
   // para manter o Total correto e recalcular expired/expiring ignorando análise concluída
   if (selectedSupplier) {
     updateSupplierCardMetricsFromItems(selectedSupplier, data);
   }
-  
+
   // Se estiver no modo planilha, renderiza planilha ao invés de cards
   if (currentViewMode === 'spreadsheet') {
     toolingList.style.display = 'none';
@@ -6565,53 +6760,53 @@ async function displayTooling(data) {
     renderSpreadsheetView();
     return;
   }
-  
+
   // Modo cards - continua renderização normal
   toolingList.style.display = 'flex';
   if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
   toolingList.innerHTML = '<div class="loading-cards">Loading cards...</div>';
-  
+
   currentToolingRenderToken += 1;
   const renderToken = currentToolingRenderToken;
   const supplierContext = selectedSupplier || currentSupplier || '';
-  
+
   // Computa chain membership incluindo incoming links de outros suppliers
   const chainMembership = computeLocalChainMembership(sortedData, externalIncomingLinks);
-  
+
   // Limpa loading e começa render
   toolingList.innerHTML = '';
-  
+
   // CHUNK PEQUENO: cada card gera ~500 linhas de HTML!
   // 10 cards = ~5000 linhas por vez, não trava
   const CHUNK_SIZE = 10;
   let currentIndex = 0;
-  
+
   const renderNextChunk = () => {
     if (renderToken !== currentToolingRenderToken) {
       return; // Render foi cancelado
     }
-    
+
     const endIndex = Math.min(currentIndex + CHUNK_SIZE, sortedData.length);
     const chunk = sortedData.slice(currentIndex, endIndex);
-    
+
     // Gera apenas HEADERS (super leve!) - body carrega on-demand
     const htmlChunks = [];
     chunk.forEach((item, relativeIndex) => {
       const index = currentIndex + relativeIndex;
       htmlChunks.push(buildToolingCardHeaderHTML(item, index, chainMembership));
     });
-    
+
     // Insere tudo de uma vez
     toolingList.insertAdjacentHTML('beforeend', htmlChunks.join(''));
-    
+
     currentIndex = endIndex;
-    
+
     if (currentIndex < sortedData.length) {
       setTimeout(renderNextChunk, 0);
     } else {
       // Render completo - AGORA computa chain em background sem travar
       computeChainMembershipAsync(sortedData, chainMembership, renderToken);
-      
+
       // Hidrata dados em background
       setTimeout(() => {
         if (renderToken !== currentToolingRenderToken) return;
@@ -6619,7 +6814,7 @@ async function displayTooling(data) {
       }, 0);
     }
   };
-  
+
   renderNextChunk();
 }
 
@@ -6627,19 +6822,19 @@ async function displayTooling(data) {
 function toggleSidebar() {
   const sidebar = document.getElementById('sidebar');
   const toggleIcon = document.getElementById('sidebarToggleIcon');
-  
+
   if (!sidebar) return;
-  
+
   const willCollapse = !sidebar.classList.contains('collapsed');
-  
+
   // Aplica a classe de transição
   sidebar.classList.toggle('collapsed');
-  
+
   // Rotaciona o ícone via CSS transform após a transição
   if (toggleIcon) {
     toggleIcon.style.transform = willCollapse ? 'rotate(180deg)' : 'rotate(0deg)';
   }
-  
+
   // Salva estado no localStorage
   localStorage.setItem('sidebarCollapsed', willCollapse ? 'true' : 'false');
 }
@@ -6649,7 +6844,7 @@ function restoreSidebarState() {
   const sidebar = document.getElementById('sidebar');
   const toggleIcon = document.getElementById('sidebarToggleIcon');
   const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
-  
+
   if (sidebar && isCollapsed) {
     sidebar.classList.add('collapsed');
     if (toggleIcon) {
@@ -6662,27 +6857,27 @@ function restoreSidebarState() {
 function setViewMode(mode) {
   // Força sempre o modo planilha com linhas expansíveis
   currentViewMode = 'spreadsheet';
-  
+
   // Atualiza containers
   const toolingList = document.getElementById('toolingList');
   const spreadsheetContainer = document.getElementById('spreadsheetContainer');
   const emptyState = document.getElementById('emptyState');
   const floatingAddBtn = document.getElementById('floatingAddBtn');
-  
+
   // Esconde o botão flutuante de adicionar (usamos a linha de criação na planilha)
   if (floatingAddBtn) {
     floatingAddBtn.style.display = 'none';
   }
-  
+
   if (!toolingData || toolingData.length === 0) {
     if (toolingList) toolingList.style.display = 'none';
     if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
     if (emptyState) emptyState.style.display = 'flex';
     return;
   }
-  
+
   if (emptyState) emptyState.style.display = 'none';
-  
+
   // Sempre mostra apenas a planilha
   if (toolingList) toolingList.style.display = 'none';
   if (spreadsheetContainer) spreadsheetContainer.style.display = 'block';
@@ -6693,7 +6888,7 @@ function setViewMode(mode) {
 function renderSpreadsheetView() {
   const spreadsheetBody = document.getElementById('spreadsheetBody');
   if (!spreadsheetBody || !toolingData) return;
-  
+
   // Aplica filtro de expiração se estiver ativo
   let filteredData = toolingData;
   if (expirationFilterEnabled) {
@@ -6702,47 +6897,47 @@ function renderSpreadsheetView() {
       return classification.state === 'expired' || classification.state === 'warning';
     });
   }
-  
+
   // Aplica filtros de coluna
   filteredData = applyColumnFiltersToData(filteredData);
-  
+
   // Aplica ordenação
   filteredData = applySortToData(filteredData);
-  
+
   // Computa chain membership usando TODOS os dados (não apenas filtrados)
   // e inclui incoming links de outros suppliers
   const chainMembership = computeLocalChainMembership(toolingData, externalIncomingLinks);
-  
+
   // Gera as linhas da planilha
   const rows = filteredData.map(item => {
     const statusClass = getStatusClass(item.status);
     const statusOptionsHtml = buildSpreadsheetStatusOptions(item.status);
     const stepsOptionsHtml = buildSpreadsheetStepsOptions(item.steps);
-    
+
     // Formata valores numéricos para exibição com separador de milhares
     const toolingLifeDisplay = formatNumericForSpreadsheet(item.tooling_life_qty);
     const producedDisplay = formatNumericForSpreadsheet(item.produced);
     const forecastDisplay = formatNumericForSpreadsheet(item.annual_volume_forecast);
-    
+
     // Calcula expiration date e progresso
     const classification = classifyToolingExpirationState(item);
     const hasExpirationDate = classification.expirationDate && classification.expirationDate !== '';
     const expirationDateDisplay = hasExpirationDate ? formatDate(classification.expirationDate) : '';
     const isAnalysisCompleted = item.analysis_completed === 1;
     const expirationIconHtml = hasExpirationDate ? getSpreadsheetExpirationIcon(classification.state, isAnalysisCompleted) : '';
-    
+
     // Calcula progresso
     const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || Number(item.tooling_life_qty) || 0;
     const produced = Number(parseLocalizedNumber(item.produced)) || Number(item.produced) || 0;
     const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
     const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
-    
+
     // Verifica chain membership e anexos
     const membershipKey = String(item.id || '').trim();
     const hasChainMembership = chainMembership?.get(membershipKey) === true;
     const replacementIdValue = sanitizeReplacementId(item.replacement_tooling_id);
     const hasReplacementLink = replacementIdValue !== '';
-    
+
     const isSelected = selectedToolingIds.has(item.id);
     const checkboxHtml = selectionModeActive ? `
       <td class="col-checkbox">
@@ -6750,10 +6945,10 @@ function renderSpreadsheetView() {
           <i class="ph ${isSelected ? 'ph-check-square' : 'ph-square'}"></i>
         </div>
       </td>` : '';
-    
+
     // Encontra o índice do item para usar nas funções de card
     const itemIndex = toolingData.findIndex(t => t.id === item.id);
-    
+
     // Prepara informações para o tooltip do ID
     const tooltipPnDesc = item.pn_description ? escapeHtml(item.pn_description) : 'N/A';
     const tooltipSupplier = item.supplier ? escapeHtml(item.supplier) : 'N/A';
@@ -6761,7 +6956,7 @@ function renderSpreadsheetView() {
     const tooltipProdDate = item.date_remaining_tooling_life ? formatDate(item.date_remaining_tooling_life) : 'N/A';
     const tooltipVolDate = item.date_annual_volume ? formatDate(item.date_annual_volume) : 'N/A';
     const tooltipLastUpdate = item.last_update ? formatDate(item.last_update) : 'N/A';
-    
+
     return `
       <tr data-id="${item.id}" data-item-index="${itemIndex}" class="${isSelected ? 'row-selected' : ''}">
         ${checkboxHtml}
@@ -6832,12 +7027,12 @@ function renderSpreadsheetView() {
       </tr>
     `;
   }).join('');
-  
+
   spreadsheetBody.innerHTML = rows;
-  
+
   // Carrega contagem de anexos em background
   loadSpreadsheetAttachmentIcons(filteredData);
-  
+
   // Adiciona linha para novo ferramental no final
   const newRow = document.createElement('tr');
   newRow.className = 'spreadsheet-new-row';
@@ -6877,20 +7072,20 @@ function renderSpreadsheetView() {
     </td>
   `;
   spreadsheetBody.appendChild(newRow);
-  
+
   // Aplica máscara de milhares nos inputs numéricos
   const spreadsheetContainer = document.getElementById('spreadsheetContainer');
   if (spreadsheetContainer) {
     applyInitialThousandsMask(spreadsheetContainer);
   }
-  
+
   // Adiciona event listeners para salvar alterações dos campos da spreadsheet
   attachSpreadsheetFieldListeners();
-  
+
   // Atualiza indicadores visuais de filtros e ordenação
   updateFilterButtonIndicators();
   updateSortButtonIndicators();
-  
+
   // Adiciona listeners para os tooltips do ID
   initIdTooltips();
 }
@@ -6899,7 +7094,7 @@ function renderSpreadsheetView() {
 function attachSpreadsheetFieldListeners() {
   const spreadsheetBody = document.getElementById('spreadsheetBody');
   if (!spreadsheetBody) return;
-  
+
   // Inputs de texto e numéricos
   const inputs = spreadsheetBody.querySelectorAll('input.spreadsheet-input[data-field][data-id]:not(.spreadsheet-new-input)');
   inputs.forEach(input => {
@@ -6907,7 +7102,7 @@ function attachSpreadsheetFieldListeners() {
     input.addEventListener('blur', async () => {
       await spreadsheetSave(input);
     });
-    
+
     // Salva ao pressionar Enter
     input.addEventListener('keydown', async (e) => {
       if (e.key === 'Enter') {
@@ -6917,7 +7112,7 @@ function attachSpreadsheetFieldListeners() {
       }
     });
   });
-  
+
   // Selects (salvam imediatamente ao mudar)
   const selects = spreadsheetBody.querySelectorAll('select.spreadsheet-select[data-field][data-id]');
   selects.forEach(select => {
@@ -6930,12 +7125,12 @@ function attachSpreadsheetFieldListeners() {
 // Inicializa tooltips do ID
 function initIdTooltips() {
   const idCells = document.querySelectorAll('.id-with-tooltip');
-  
+
   idCells.forEach(cell => {
     cell.addEventListener('mouseenter', (event) => {
       const tooltip = cell.querySelector('.id-tooltip');
       if (!tooltip) return;
-      
+
       // Posiciona o tooltip baseado na posição do mouse
       const rect = cell.getBoundingClientRect();
       tooltip.style.left = `${rect.right + 10}px`;
@@ -6951,13 +7146,13 @@ let currentFilterPopupData = [];
 // Aplica filtros de coluna aos dados (suporta múltiplos valores por coluna)
 function applyColumnFiltersToData(data) {
   if (!data || Object.keys(columnFilters).length === 0) return data;
-  
+
   return data.filter(item => {
     for (const [column, selectedValues] of Object.entries(columnFilters)) {
       if (!selectedValues || !Array.isArray(selectedValues) || selectedValues.length === 0) continue;
-      
+
       let itemValue = String(item[column] || '').trim();
-      
+
       // Verifica se o valor do item está entre os selecionados
       if (!selectedValues.includes(itemValue)) {
         return false;
@@ -6970,7 +7165,7 @@ function applyColumnFiltersToData(data) {
 // Atualiza indicadores visuais nos botões de filtro e botão floating de limpar
 function updateFilterButtonIndicators() {
   let activeFilterCount = 0;
-  
+
   document.querySelectorAll('.column-filter-btn').forEach(btn => {
     const th = btn.closest('th');
     const column = th?.dataset?.filterable;
@@ -6981,7 +7176,7 @@ function updateFilterButtonIndicators() {
       btn.classList.remove('active');
     }
   });
-  
+
   // Atualiza o botão floating de limpar filtros
   const clearFilterBtn = document.getElementById('floatingClearFilterBtn');
   if (clearFilterBtn) {
@@ -6992,16 +7187,16 @@ function updateFilterButtonIndicators() {
 // Abre o popup de filtro para uma coluna
 function openColumnFilter(event, column) {
   event.stopPropagation();
-  
+
   const popup = document.getElementById('columnFilterPopup');
   const list = document.getElementById('columnFilterList');
   const title = document.getElementById('columnFilterPopupTitle');
   const searchInput = document.getElementById('columnFilterSearch');
-  
+
   if (!popup || !list || !toolingData) return;
-  
+
   currentFilterColumn = column;
-  
+
   // Define título baseado na coluna
   const columnTitles = {
     id: 'Filter by ID',
@@ -7015,10 +7210,10 @@ function openColumnFilter(event, column) {
     status: 'Filter by Status'
   };
   title.textContent = columnTitles[column] || 'Filter';
-  
+
   // Aplica todos os outros filtros (exceto o da coluna atual) para obter dados segmentados
   let segmentedData = toolingData;
-  
+
   // Aplica filtro de expiração se estiver ativo
   if (expirationFilterEnabled) {
     segmentedData = segmentedData.filter(item => {
@@ -7026,25 +7221,25 @@ function openColumnFilter(event, column) {
       return classification.state === 'expired' || classification.state === 'warning';
     });
   }
-  
+
   // Aplica filtros das outras colunas (não da coluna atual)
   for (const [filterColumn, selectedValues] of Object.entries(columnFilters)) {
     if (filterColumn === column) continue; // Pula a coluna atual
     if (!selectedValues || !Array.isArray(selectedValues) || selectedValues.length === 0) continue;
-    
+
     segmentedData = segmentedData.filter(item => {
       const itemValue = String(item[filterColumn] || '').trim();
       return selectedValues.includes(itemValue);
     });
   }
-  
+
   // Coleta valores únicos da coluna a partir dos dados segmentados
   const uniqueValues = new Set();
   segmentedData.forEach(item => {
     const value = String(item[column] || '').trim();
     if (value) uniqueValues.add(value);
   });
-  
+
   // Ordena valores
   const sortedValues = Array.from(uniqueValues).sort((a, b) => {
     const numA = parseFloat(a.replace(/[^\d.-]/g, ''));
@@ -7052,12 +7247,12 @@ function openColumnFilter(event, column) {
     if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
     return a.localeCompare(b);
   });
-  
+
   currentFilterPopupData = sortedValues;
-  
+
   // Valores atualmente selecionados para esta coluna
   const selectedValues = columnFilters[column] || [];
-  
+
   // Gera HTML das opções
   let optionsHtml = '';
   sortedValues.forEach((value, index) => {
@@ -7069,23 +7264,23 @@ function openColumnFilter(event, column) {
       </div>
     `;
   });
-  
+
   list.innerHTML = optionsHtml || '<div style="padding: 12px; color: #999; text-align: center;">No values found</div>';
-  
+
   // Limpa busca
   searchInput.value = '';
-  
+
   // Atualiza estado dos botões de ordenação no popup
   updatePopupSortButtons(column);
-  
+
   // Posiciona o popup próximo ao botão
   const btnRect = event.target.closest('.column-filter-btn').getBoundingClientRect();
   popup.style.top = `${btnRect.bottom + 4}px`;
   popup.style.left = `${Math.min(btnRect.left, window.innerWidth - 240)}px`;
-  
+
   // Abre o popup
   popup.classList.add('open');
-  
+
   // Adiciona listener para fechar ao clicar fora
   setTimeout(() => {
     document.addEventListener('click', handleClickOutsideFilterPopup);
@@ -7125,17 +7320,17 @@ function updatePopupSortButtons(column) {
 // Define a ordenação a partir do popup
 function setColumnSortFromPopup(direction) {
   if (!currentFilterColumn) return;
-  
+
   // Se já está nessa direção, remove a ordenação
   if (columnSort.column === currentFilterColumn && columnSort.direction === direction) {
     columnSort = { column: null, direction: null };
   } else {
     columnSort = { column: currentFilterColumn, direction };
   }
-  
+
   // Atualiza os botões do popup
   updatePopupSortButtons(currentFilterColumn);
-  
+
   // Atualiza indicadores nos headers
   updateSortButtonIndicators();
 }
@@ -7144,7 +7339,7 @@ function setColumnSortFromPopup(direction) {
 function filterColumnOptions() {
   const searchInput = document.getElementById('columnFilterSearch');
   const searchText = (searchInput?.value || '').toLowerCase();
-  
+
   document.querySelectorAll('.column-filter-option').forEach(option => {
     const value = option.dataset.value?.toLowerCase() || '';
     if (value.includes(searchText)) {
@@ -7172,23 +7367,23 @@ function clearAllFilterOptions() {
 // Aplica o filtro da coluna atual
 function applyColumnFilter() {
   if (!currentFilterColumn) return;
-  
+
   // Coleta valores selecionados
   const selectedValues = [];
   document.querySelectorAll('.column-filter-option input[type="checkbox"]:checked').forEach(cb => {
     selectedValues.push(cb.value);
   });
-  
+
   // Atualiza o filtro
   if (selectedValues.length > 0) {
     columnFilters[currentFilterColumn] = selectedValues;
   } else {
     delete columnFilters[currentFilterColumn];
   }
-  
+
   // Fecha o popup
   closeColumnFilter();
-  
+
   // Re-renderiza a planilha
   renderSpreadsheetView();
 }
@@ -7203,7 +7398,7 @@ function clearColumnFilters() {
 // Alterna a ordenação de uma coluna
 function toggleColumnSort(event, column) {
   event.stopPropagation();
-  
+
   if (columnSort.column === column) {
     // Se já está ordenando por esta coluna, alterna a direção ou remove
     if (columnSort.direction === 'asc') {
@@ -7216,32 +7411,32 @@ function toggleColumnSort(event, column) {
     // Nova coluna, começa com ascendente
     columnSort = { column, direction: 'asc' };
   }
-  
+
   renderSpreadsheetView();
 }
 
 // Aplica ordenação aos dados
 function applySortToData(data) {
   if (!data || !columnSort.column) return data;
-  
+
   const sortedData = [...data];
   const column = columnSort.column;
-  
+
   sortedData.sort((a, b) => {
     let valueA, valueB;
-    
+
     if (column === 'expiration') {
       // Ordena por data de expiração
       const classA = classifyToolingExpirationState(a);
       const classB = classifyToolingExpirationState(b);
       const dateA = classA.expirationDate ? new Date(classA.expirationDate) : null;
       const dateB = classB.expirationDate ? new Date(classB.expirationDate) : null;
-      
+
       // Itens sem data vão para o final
       if (!dateA && !dateB) return 0;
       if (!dateA) return 1;
       if (!dateB) return -1;
-      
+
       valueA = dateA.getTime();
       valueB = dateB.getTime();
     } else if (column === 'progress') {
@@ -7250,7 +7445,7 @@ function applySortToData(data) {
       const prodA = Number(parseLocalizedNumber(a.produced)) || Number(a.produced) || 0;
       const lifeB = Number(parseLocalizedNumber(b.tooling_life_qty)) || Number(b.tooling_life_qty) || 0;
       const prodB = Number(parseLocalizedNumber(b.produced)) || Number(b.produced) || 0;
-      
+
       valueA = lifeA > 0 ? (prodA / lifeA) * 100 : 0;
       valueB = lifeB > 0 ? (prodB / lifeB) * 100 : 0;
     } else if (column === 'id' || column === 'tooling_life_qty' || column === 'produced' || column === 'annual_volume_forecast') {
@@ -7265,21 +7460,21 @@ function applySortToData(data) {
       // Colunas de texto (pn, pn_description, tool_description, status)
       valueA = String(a[column] || '').toLowerCase();
       valueB = String(b[column] || '').toLowerCase();
-      
+
       if (columnSort.direction === 'asc') {
         return valueA.localeCompare(valueB);
       } else {
         return valueB.localeCompare(valueA);
       }
     }
-    
+
     if (columnSort.direction === 'asc') {
       return valueA - valueB;
     } else {
       return valueB - valueA;
     }
   });
-  
+
   return sortedData;
 }
 
@@ -7289,9 +7484,9 @@ function updateSortButtonIndicators() {
     const th = btn.closest('th');
     const column = th?.dataset?.sortable;
     const icon = btn.querySelector('i');
-    
+
     btn.classList.remove('sort-asc', 'sort-desc');
-    
+
     if (column && columnSort.column === column) {
       if (columnSort.direction === 'asc') {
         btn.classList.add('sort-asc');
@@ -7310,7 +7505,7 @@ function updateSortButtonIndicators() {
 async function loadSpreadsheetAttachmentIcons(data) {
   const supplierContext = selectedSupplier || currentSupplier || '';
   if (!supplierContext) return;
-  
+
   for (const item of data) {
     try {
       const attachments = await window.api.getAttachments(supplierContext, item.id);
@@ -7330,10 +7525,10 @@ async function loadSpreadsheetAttachmentIcons(data) {
 function toggleSpreadsheetRow(itemId, itemIndex) {
   const row = document.querySelector(`tr[data-id="${itemId}"]`);
   if (!row) return;
-  
+
   const expandBtn = row.querySelector('.spreadsheet-expand-btn');
   const isExpanded = row.classList.contains('row-expanded');
-  
+
   // Fecha todas as outras linhas expandidas primeiro
   const allExpandedRows = document.querySelectorAll('.spreadsheet-table tr.row-expanded');
   allExpandedRows.forEach(expandedRow => {
@@ -7341,7 +7536,7 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
       expandedRow.classList.remove('row-expanded');
       const btn = expandedRow.querySelector('.spreadsheet-expand-btn');
       if (btn) btn.innerHTML = '<i class="ph ph-caret-down"></i>';
-      
+
       // Remove a linha de detalhes
       const detailRow = expandedRow.nextElementSibling;
       if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
@@ -7367,12 +7562,12 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
       }
     }
   });
-  
+
   if (isExpanded) {
     // Fecha a linha atual
     row.classList.remove('row-expanded');
     if (expandBtn) expandBtn.innerHTML = '<i class="ph ph-caret-down"></i>';
-    
+
     // Remove a linha de detalhes
     const detailRow = row.nextElementSibling;
     if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
@@ -7396,17 +7591,17 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
     // Abre a linha atual
     row.classList.add('row-expanded');
     if (expandBtn) expandBtn.innerHTML = '<i class="ph ph-caret-up"></i>';
-    
+
     // Cria a linha de detalhes com o conteúdo do card
     const item = toolingData.find(t => String(t.id) === String(itemId));
     if (item) {
       const supplierContext = selectedSupplier || currentSupplier || '';
       const chainMembership = new Map();
       const bodyHTML = buildToolingCardBodyHTML(item, itemIndex, chainMembership, supplierContext);
-      
+
       // Conta o número de colunas
       const colCount = row.querySelectorAll('td').length;
-      
+
       // Cria a linha de detalhes
       const detailRow = document.createElement('tr');
       detailRow.className = 'spreadsheet-detail-row';
@@ -7418,25 +7613,25 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
           </div>
         </td>
       `;
-      
+
       // Insere após a linha atual
       row.after(detailRow);
-      
+
       // Inicializa o conteúdo do card
       const cardContainer = detailRow.querySelector('.spreadsheet-card-container');
       if (cardContainer) {
         populateCardDataListForSpreadsheet(itemIndex, cardContainer);
         applyInitialThousandsMask(cardContainer);
-        
+
         // Restaura reminders de data persistentes
         restoreDateReminders(itemId);
-        
+
         // Initialize drag and drop for attachment dropzone
         const dropzone = cardContainer.querySelector('.card-attachments-dropzone');
         if (dropzone) {
           initCardAttachmentDragAndDrop(dropzone, itemId);
         }
-        
+
         // Initialize step description and responsible
         const stepSelect = cardContainer.querySelector(`select[data-field="steps"][data-id="${itemId}"]`);
         if (stepSelect) {
@@ -7445,7 +7640,7 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
           if (descriptionLabel) {
             const description = getStepDescription(stepValue);
             const responsible = getStepResponsible(stepValue);
-            
+
             if (description) {
               descriptionLabel.innerHTML = `<div style="color: #8b92a7; line-height: 1.4;">${description}<br><span style="font-size: 0.9em;">Responsible: ${responsible}</span></div>`;
               descriptionLabel.style.display = 'block';
@@ -7457,7 +7652,7 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
             }
           }
         }
-        
+
         // Initialize carousel buttons state
         const track = cardContainer.querySelector('[data-carousel-track]');
         const prevBtn = cardContainer.querySelector('.carousel-nav-prev');
@@ -7469,12 +7664,12 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
           track.style.transform = 'translateX(0)';
           track.dataset.carouselIndex = '0';
         }
-        
+
         // Carrega dados do card em background
         setTimeout(() => {
           calculateExpirationDateForSpreadsheet(itemIndex, cardContainer, true);
-          loadCardAttachmentsForSpreadsheet(itemId, cardContainer).catch(err => {});
-          
+          loadCardAttachmentsForSpreadsheet(itemId, cardContainer).catch(err => { });
+
           // Cria snapshot inicial para detectar alterações
           const snapshotKey = getSnapshotKey(itemId);
           const values = collectCardDomValues(itemId);
@@ -7489,7 +7684,7 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
             }
             cardSnapshotStore.set(snapshotKey, serializeCardValues(values));
           }
-          
+
           // Scroll para mostrar a linha no topo com o card expandido visível
           const detailRow = row.nextElementSibling;
           if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
@@ -7511,7 +7706,7 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
 function populateCardDataListForSpreadsheet(index, container) {
   const suppliers = getSupplierOptions();
   const responsibles = getResponsibleOptions(toolingData);
-  
+
   const supplierList = container.querySelector(`#supplierList-${index}`);
   if (supplierList) {
     supplierList.innerHTML = suppliers
@@ -7532,10 +7727,10 @@ function calculateExpirationDateForSpreadsheet(index, container, skipSave) {
   // Reutiliza a lógica existente adaptada para container
   const item = toolingData[index];
   if (!item) return;
-  
+
   const classification = classifyToolingExpirationState(item);
   const expirationDate = classification.expirationDate || '';
-  
+
   // Atualiza o input de expiração se existir
   const expirationInput = container.querySelector(`input[data-field="expiration_date"][data-id="${item.id}"]`);
   if (expirationInput) {
@@ -7550,17 +7745,17 @@ async function loadCardAttachmentsForSpreadsheet(itemId, container) {
     const attachments = await window.api.getAttachments(supplierContext, itemId);
     const list = container.querySelector('.card-attachments-list');
     const empty = container.querySelector('.card-attachments-empty');
-    
+
     if (!list) return;
-    
+
     if (!attachments || attachments.length === 0) {
       if (empty) empty.style.display = 'flex';
       list.innerHTML = '';
       return;
     }
-    
+
     if (empty) empty.style.display = 'none';
-    
+
     list.innerHTML = attachments.map(att => `
       <div class="card-attachment-item">
         <div class="card-attachment-info">
@@ -7589,10 +7784,10 @@ async function loadCardAttachmentsForSpreadsheet(itemId, container) {
 function syncSpreadsheetRowFromCard(itemId) {
   const row = document.querySelector(`tr[data-id="${itemId}"]`);
   if (!row) return;
-  
+
   const item = toolingData.find(t => String(t.id) === String(itemId));
   if (!item) return;
-  
+
   // Atualiza os inputs na linha
   const fields = ['pn', 'pn_description', 'tool_description', 'tooling_life_qty', 'produced', 'date_remaining_tooling_life', 'annual_volume_forecast', 'date_annual_volume', 'status', 'steps'];
   fields.forEach(field => {
@@ -7613,7 +7808,7 @@ function syncSpreadsheetRowFromCard(itemId) {
       }
     }
   });
-  
+
   // Atualiza a expiração
   const classification = classifyToolingExpirationState(item);
   const expirationCell = row.querySelector('.spreadsheet-expiration');
@@ -7633,15 +7828,15 @@ function syncSpreadsheetRowFromCard(itemId) {
 function syncSpreadsheetExpirationCell(itemId) {
   const row = document.querySelector(`tr[data-id="${itemId}"]`);
   if (!row) return;
-  
+
   const item = toolingData.find(t => String(t.id) === String(itemId));
   if (!item) return;
-  
+
   // Usa diretamente o expiration_date do item (já atualizado)
   const expirationDateValue = item.expiration_date || '';
   const hasExpirationDate = expirationDateValue && expirationDateValue !== '';
   const expirationDateDisplay = hasExpirationDate ? formatDate(expirationDateValue) : '';
-  
+
   // Calcula o estado para ícone
   const expirationStatus = getExpirationStatus(expirationDateValue);
   const toolingLife = Number(parseLocalizedNumber(item.tooling_life_qty)) || 0;
@@ -7649,7 +7844,7 @@ function syncSpreadsheetExpirationCell(itemId) {
   const percentUsed = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
   const normalizedStatus = (item.status || '').toString().trim().toLowerCase();
   const isObsolete = normalizedStatus === 'obsolete';
-  
+
   let state = 'ok';
   if (isObsolete) {
     state = 'obsolete';
@@ -7658,10 +7853,10 @@ function syncSpreadsheetExpirationCell(itemId) {
   } else if (expirationStatus.class === 'warning') {
     state = 'warning';
   }
-  
+
   const isAnalysisCompleted = item.analysis_completed === 1;
   const expirationIconHtml = hasExpirationDate ? getSpreadsheetExpirationIcon(state, isAnalysisCompleted) : '';
-  
+
   const expirationCell = row.querySelector('.spreadsheet-expiration');
   if (expirationCell) {
     expirationCell.innerHTML = `
@@ -7675,30 +7870,30 @@ function syncSpreadsheetExpirationCell(itemId) {
 async function recalculateExpirationForSpreadsheet(itemId) {
   const item = toolingData.find(t => String(t.id) === String(itemId));
   if (!item) return;
-  
+
   // Calcula remaining
   const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
   const produced = parseLocalizedNumber(item.produced) || 0;
   const remaining = toolingLife - produced;
   const forecast = parseLocalizedNumber(item.annual_volume_forecast) || 0;
   const productionDate = item.date_remaining_tooling_life || '';
-  
+
   // Calcula a nova expiration_date
   const formattedDate = calculateExpirationFromFormula({
     remaining,
     forecast,
     productionDate
   });
-  
+
   // Atualiza o toolingData
   item.expiration_date = formattedDate || '';
-  
+
   // Atualiza a célula de expiração na spreadsheet
   syncSpreadsheetExpirationCell(itemId);
-  
+
   // Atualiza os ícones de expiração
   updateExpirationIconsForItem(itemId);
-  
+
   // Se o card expandido estiver aberto, atualiza o input de expiration_date
   const detailRow = document.querySelector(`.spreadsheet-detail-row[data-detail-for="${itemId}"]`);
   if (detailRow) {
@@ -7712,7 +7907,7 @@ async function recalculateExpirationForSpreadsheet(itemId) {
       cardHeader.textContent = formattedDate ? formatDate(formattedDate) : '';
     }
   }
-  
+
   // Salva no banco de dados (mesmo se vazio, para limpar valor anterior)
   try {
     await window.api.updateTooling(itemId, { expiration_date: formattedDate || '' });
@@ -7730,7 +7925,7 @@ async function spreadsheetCreateTooling() {
   const prodDateInput = document.getElementById('newToolingProdDate');
   const volumeInput = document.getElementById('newToolingVolume');
   const volDateInput = document.getElementById('newToolingVolDate');
-  
+
   // Validar campos obrigatórios
   const pn = pnInput ? pnInput.value.trim() : '';
   const desc = descInput ? descInput.value.trim() : '';;
@@ -7739,50 +7934,50 @@ async function spreadsheetCreateTooling() {
   const prodDate = prodDateInput ? prodDateInput.value : null;
   const volume = volumeInput ? parseLocalizedNumber(volumeInput.value) : 0;
   const volDate = volDateInput ? volDateInput.value : null;
-  
+
   // Verificar campos obrigatórios
   if (!pn) {
     showNotification('Informe o PN do ferramental.', 'error');
     if (pnInput) pnInput.focus();
     return;
   }
-  
+
   if (!currentSupplier) {
     showNotification('Selecione um fornecedor primeiro.', 'error');
     return;
   }
-  
+
   if (toolingLife <= 0) {
     showNotification('Informe a vida útil do ferramental.', 'error');
     if (lifeInput) lifeInput.focus();
     return;
   }
-  
+
   if (produced < 0) {
     showNotification('Valor de produção inválido.', 'error');
     if (producedInput) producedInput.focus();
     return;
   }
-  
+
   try {
     // Criar comentário inicial
     const now = new Date();
-    const dateStr = now.toLocaleString('pt-BR', { 
-      day: '2-digit', 
-      month: '2-digit', 
-      year: 'numeric', 
-      hour: '2-digit', 
-      minute: '2-digit' 
+    const dateStr = now.toLocaleString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
     });
-    
+
     const initialComment = {
       date: dateStr,
       text: `Created with Tooling Life: ${formatIntegerWithSeparators(toolingLife)} pcs`,
       initial: true
     };
-    
+
     const commentsJson = JSON.stringify([initialComment]);
-    
+
     const payload = {
       pn,
       pn_description: null,
@@ -7797,14 +7992,14 @@ async function spreadsheetCreateTooling() {
       status: 'ACTIVE',
       comments: commentsJson
     };
-    
+
     const result = await window.api.createTooling(payload);
-    
+
     if (!result || result.success !== true) {
       showNotification(result?.error || 'Não foi possível criar o ferramental.', 'error');
       return;
     }
-    
+
     // Limpar campos
     if (pnInput) pnInput.value = '';
     if (descInput) descInput.value = '';
@@ -7813,15 +8008,15 @@ async function spreadsheetCreateTooling() {
     if (prodDateInput) prodDateInput.value = '';
     if (volumeInput) volumeInput.value = '';
     if (volDateInput) volDateInput.value = '';
-    
+
     // Recarregar dados
     await loadSuppliers();
     await loadAnalytics();
     await refreshReplacementIdOptions(true);
     await loadToolingBySupplier(currentSupplier);
-    
+
     showNotification('Ferramental criado com sucesso!');
-    
+
   } catch (error) {
     console.error('Error creating tooling from spreadsheet:', error);
     showNotification('Erro ao criar ferramental', 'error');
@@ -7834,7 +8029,7 @@ function getSpreadsheetExpirationIcon(state, isAnalysisCompleted = false) {
   if (isAnalysisCompleted && (state === 'expired' || state === 'warning')) {
     return '<i class="ph ph-fill ph-clipboard-text expiration-icon analysis-completed" title="Analysis Completed"></i>';
   }
-  
+
   switch (state) {
     case 'expired':
       return '<i class="ph ph-fill ph-warning-circle expiration-icon expired" title="Expired"></i>';
@@ -7854,7 +8049,7 @@ function getCardExpirationIcon(state, isAnalysisCompleted = false) {
   if (isAnalysisCompleted && (state === 'expired' || state === 'warning')) {
     return '<i class="ph ph-fill ph-clipboard-text expiration-icon analysis-completed input-icon" title="Analysis Completed"></i>';
   }
-  
+
   switch (state) {
     case 'expired':
       return '<i class="ph ph-fill ph-warning-circle expiration-icon expired input-icon" title="Expired"></i>';
@@ -7872,12 +8067,12 @@ function getCardExpirationIcon(state, isAnalysisCompleted = false) {
 function buildSpreadsheetStatusOptions(currentStatus) {
   const normalizedCurrent = (currentStatus || '').toString().trim().toUpperCase();
   let options = '<option value=""></option>';
-  
+
   statusOptions.forEach(status => {
     const selected = status.toUpperCase() === normalizedCurrent ? 'selected' : '';
     options += `<option value="${escapeHtml(status)}" ${selected}>${escapeHtml(status)}</option>`;
   });
-  
+
   return options;
 }
 
@@ -7885,7 +8080,7 @@ function buildSpreadsheetStatusOptions(currentStatus) {
 function buildSpreadsheetStepsOptions(currentStep) {
   const normalizedCurrent = (currentStep || '').toString().trim();
   const steps = ['', '1', '2', '3', '4', '5', '6', '7'];
-  
+
   return steps.map(step => {
     const selected = step === normalizedCurrent ? 'selected' : '';
     return `<option value="${step}" ${selected}>${step}</option>`;
@@ -7953,11 +8148,11 @@ function syncExpandedCardFromSpreadsheet(itemId, field, value) {
   // Procura o card expandido (dentro de .spreadsheet-detail-row)
   const detailRow = document.querySelector(`.spreadsheet-detail-row[data-detail-for="${itemId}"]`);
   if (!detailRow) return;
-  
+
   // Encontra o input/select correspondente dentro do card expandido
   const targetElement = detailRow.querySelector(`[data-field="${field}"][data-id="${itemId}"]`);
   if (!targetElement) return;
-  
+
   // Atualiza o valor
   if (targetElement.tagName === 'SELECT') {
     targetElement.value = value || '';
@@ -7974,11 +8169,11 @@ function syncExpandedCardFromSpreadsheet(itemId, field, value) {
 function syncSpreadsheetFromExpandedCard(itemId, field, value) {
   const row = document.querySelector(`tr[data-id="${itemId}"]`);
   if (!row) return;
-  
+
   // Encontra o input/select correspondente na linha da spreadsheet
   const targetElement = row.querySelector(`[data-field="${field}"][data-id="${itemId}"].spreadsheet-input, [data-field="${field}"][data-id="${itemId}"].spreadsheet-select`);
   if (!targetElement) return;
-  
+
   // Atualiza o valor
   if (targetElement.tagName === 'SELECT') {
     targetElement.value = value || '';
@@ -7999,44 +8194,44 @@ async function spreadsheetSave(inputElement) {
   const id = inputElement.dataset.id;
   const field = inputElement.dataset.field;
   let value = inputElement.value;
-  
+
   if (!id || !field) return;
-  
+
   // Processa campos numéricos - remove formatação e converte para número
   if (numericSpreadsheetFields.includes(field)) {
     // Remove a máscara de milhares e converte para número
     const numValue = parseLocalizedNumber(value);
     value = numValue.toString();
   }
-  
+
   // Campos de data já vêm em formato ISO do input type="date"
   // Não precisa de conversão adicional
-  
+
   try {
     const now = new Date().toISOString();
     const updateData = { [field]: value, last_update: now };
     const updateResult = await window.api.updateTooling(id, updateData);
-    
+
     // Atualiza o item no array local
     const item = toolingData.find(t => String(t.id) === String(id));
     if (item) {
       item[field] = value;
       item.last_update = now;
-      
+
       // Atualiza os comentários se foram modificados pelo backend
       if (updateResult?.comments) {
         item.comments = updateResult.comments;
         updateCommentsDisplay(id);
       }
     }
-    
+
     // Atualiza o display do Last Update
     updateLastUpdateDisplay(id, now);
-    
+
     // Atualiza a barra de progresso se mudou tool_life_qty ou produced
     if (field === 'tooling_life_qty' || field === 'produced') {
       updateSpreadsheetProgressBar(id);
-      
+
       // Recalcula o remaining e atualiza no toolingData e card expandido
       const item = toolingData.find(t => String(t.id) === String(id));
       if (item) {
@@ -8045,11 +8240,11 @@ async function spreadsheetSave(inputElement) {
         const remaining = toolingLife - produced;
         const percentValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
         const percent = toolingLife > 0 ? percentValue.toFixed(1) : '0.0';
-        
+
         // Atualiza toolingData
         item.remaining_tooling_life_pcs = remaining;
         item.percent_tooling_life = percent;
-        
+
         // Sincroniza remaining e percent com o card expandido se estiver aberto
         const detailRow = document.querySelector(`.spreadsheet-detail-row[data-detail-for="${id}"]`);
         if (detailRow) {
@@ -8078,27 +8273,27 @@ async function spreadsheetSave(inputElement) {
         }
       }
     }
-    
+
     // Recalcula expiration_date quando campos relevantes mudam
     const expirationFields = ['tooling_life_qty', 'produced', 'annual_volume_forecast', 'date_remaining_tooling_life'];
     if (expirationFields.includes(field)) {
       await recalculateExpirationForSpreadsheet(id);
     }
-    
+
     // Feedback visual sutil
     inputElement.style.backgroundColor = '#e8f5e9';
     setTimeout(() => {
       inputElement.style.backgroundColor = '';
     }, 500);
-    
+
     // Atualiza classe do select de status se necessário
     if (field === 'status' && inputElement.tagName === 'SELECT') {
       inputElement.className = 'spreadsheet-select ' + getStatusClass(value);
     }
-    
+
     // Sincroniza com o card expandido se existir
     syncExpandedCardFromSpreadsheet(id, field, value);
-    
+
   } catch (error) {
     console.error('Error saving spreadsheet data:', error);
     inputElement.style.backgroundColor = '#ffebee';
@@ -8125,10 +8320,10 @@ function buildToolingCardHeaderHTML(item, index, chainMembership) {
   const membershipKey = String(item.id || '').trim();
   const hasChainMembership = chainMembership?.get(membershipKey) === true;
   const shouldShowChainIndicator = hasChainMembership;
-  
+
   let statusIconHtml = '';
   let statusIconClass = '';
-  
+
   if (classification.state === 'obsolete' || classification.state === 'obsolete-replaced') {
     statusIconHtml = '<i class="ph ph-fill ph-archive-box"></i>';
     statusIconClass = 'status-icon-obsolete';
@@ -8139,7 +8334,7 @@ function buildToolingCardHeaderHTML(item, index, chainMembership) {
     statusIconHtml = '<i class="ph ph-fill ph-warning"></i>';
     statusIconClass = 'status-icon-warning';
   }
-  
+
   return `
     <div class="tooling-card" id="card-${index}" data-item-id="${item.id}" data-status="${normalizedStatus}" data-replacement-id="${hasReplacementLink ? replacementIdValue : ''}" data-body-loaded="false" data-supplier="${escapeHtml(item.supplier || '')}" data-chain-member="${hasChainMembership ? 'true' : 'false'}" data-has-incoming-chain="${hasChainMembership && !hasReplacementLink ? 'true' : 'false'}">
       <div class="tooling-card-header" onclick="toggleCard(${index})">
@@ -8218,11 +8413,11 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
   const toolingLifeDisplay = formatIntegerWithSeparators(toolingLife, { preserveEmpty: true });
   const producedDisplay = formatIntegerWithSeparators(produced, { preserveEmpty: true });
   const forecastDisplay = hasForecast ? formatIntegerWithSeparators(forecast, { preserveEmpty: true }) : '';
-  
+
   const classification = classifyToolingExpirationState(item);
   let expirationDateValue = resolveToolingExpirationDate(item);
   const isAnalysisCompleted = item.analysis_completed === 1;
-  
+
   // Usa a função de ícone para dentro do input do card
   const expirationIconHtml = getCardExpirationIcon(classification.state, isAnalysisCompleted);
 
@@ -8240,7 +8435,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
     const parsed = parseLocalizedNumber(trimmed);
     return Number.isNaN(parsed) ? '' : parsed;
   })();
-  
+
   const statusOptionsMarkup = buildStatusOptionsMarkup(item.status);
   const normalizedStatus = (item.status || '').toString().trim().toLowerCase();
   const isObsolete = normalizedStatus === 'obsolete';
@@ -8254,7 +8449,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
   );
   const replacementEditorVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
   const lastUpdateDisplay = formatDateTime(item.last_update);
-  
+
   // Resto do body vem da função original buildToolingCardHTML...
   // Vou copiar só a parte do <div class="tooling-card-body"> em diante
   return `
@@ -8389,18 +8584,18 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                 <span class="detail-sublabel" id="stepDescription_${item.id}" data-step-description></span>
               </div>
               ${(() => {
-                const classification = classifyToolingExpirationState(item);
-                const showCheckbox = classification.state === 'expired' || classification.state === 'warning';
-                if (!showCheckbox) return '';
-                const isChecked = item.analysis_completed === 1;
-                return `
+      const classification = classifyToolingExpirationState(item);
+      const showCheckbox = classification.state === 'expired' || classification.state === 'warning';
+      if (!showCheckbox) return '';
+      const isChecked = item.analysis_completed === 1;
+      return `
               <div class="detail-item detail-item-full">
                 <label class="analysis-completed-checkbox">
                   <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
                   <span>Análise Concluída</span>
                 </label>
               </div>`;
-              })()}
+    })()}
               <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
                 <span class="detail-label">Replacement Tooling</span>
                 <div class="replacement-link-field">
@@ -8620,91 +8815,91 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
 }
 
 function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
-    // Calcula expiration_date se não existir
-    const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
-    const produced = parseLocalizedNumber(item.produced) || 0;
-    const remaining = toolingLife - produced;
-    const forecast = parseLocalizedNumber(item.annual_volume_forecast) || 0;
-    const hasForecast = String(item.annual_volume_forecast ?? '').trim() !== '';
-    const toolingLifeDisplay = formatIntegerWithSeparators(toolingLife, { preserveEmpty: true });
-    const producedDisplay = formatIntegerWithSeparators(produced, { preserveEmpty: true });
-    const forecastDisplay = hasForecast ? formatIntegerWithSeparators(forecast, { preserveEmpty: true }) : '';
-    
-    let expirationDateValue = normalizeExpirationDate(item.expiration_date, item.id);
+  // Calcula expiration_date se não existir
+  const toolingLife = parseLocalizedNumber(item.tooling_life_qty) || 0;
+  const produced = parseLocalizedNumber(item.produced) || 0;
+  const remaining = toolingLife - produced;
+  const forecast = parseLocalizedNumber(item.annual_volume_forecast) || 0;
+  const hasForecast = String(item.annual_volume_forecast ?? '').trim() !== '';
+  const toolingLifeDisplay = formatIntegerWithSeparators(toolingLife, { preserveEmpty: true });
+  const producedDisplay = formatIntegerWithSeparators(produced, { preserveEmpty: true });
+  const forecastDisplay = hasForecast ? formatIntegerWithSeparators(forecast, { preserveEmpty: true }) : '';
 
-    if (!expirationDateValue) {
-      const productionDateValue = item.date_remaining_tooling_life || '';
-      const calculatedExpiration = calculateExpirationFromFormula({
-        remaining,
-        forecast,
-        productionDate: productionDateValue
-      });
-      if (calculatedExpiration) {
-        expirationDateValue = calculatedExpiration;
-      }
+  let expirationDateValue = normalizeExpirationDate(item.expiration_date, item.id);
+
+  if (!expirationDateValue) {
+    const productionDateValue = item.date_remaining_tooling_life || '';
+    const calculatedExpiration = calculateExpirationFromFormula({
+      remaining,
+      forecast,
+      productionDate: productionDateValue
+    });
+    if (calculatedExpiration) {
+      expirationDateValue = calculatedExpiration;
     }
+  }
 
-    const expirationInputValue = expirationDateValue || '';
-    const expirationDisplay = formatDate(expirationInputValue);
+  const expirationInputValue = expirationDateValue || '';
+  const expirationDisplay = formatDate(expirationInputValue);
 
-    const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
-    const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
-    const remainingQty = remaining;
-    const remainingDisplay = formatIntegerWithSeparators(remainingQty, { preserveEmpty: true });
-    const lifecycleProgressPercent = Math.min(Math.max(percentUsedValue, 0), 100);
-    const amountBrlValue = (() => {
-      const raw = item.amount_brl;
-      if (raw === null || raw === undefined) {
-        return '';
-      }
-      const trimmed = String(raw).trim();
-      if (trimmed === '') {
-        return '';
-      }
-      const parsed = parseLocalizedNumber(trimmed);
-      return Number.isNaN(parsed) ? '' : parsed;
-    })();
-    const lastUpdateDisplay = formatDateTime(item.last_update);
-    const statusOptionsMarkup = buildStatusOptionsMarkup(item.status);
-    const normalizedStatus = (item.status || '').toString().trim().toLowerCase();
-    const isObsolete = normalizedStatus === 'obsolete';
-    const replacementIdValue = sanitizeReplacementId(item.replacement_tooling_id);
-    const hasReplacementLink = replacementIdValue !== '';
-    const membershipKey = String(item.id || '').trim();
-    const hasChainMembership = chainMembership?.get(membershipKey) === true;
-    const shouldShowChainIndicator = hasChainMembership;
-    const replacementPickerOptionsMarkup = buildReplacementPickerOptionsMarkup(item, index);
-    const replacementPickerLabel = escapeHtml(
-      hasReplacementLink
-        ? (getReplacementOptionLabelById(replacementIdValue) || `${replacementIdValue}`)
-        : DEFAULT_REPLACEMENT_PICKER_LABEL
-    );
-    const replacementChipVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
-    const replacementEditorVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
-    
-    // Calcula status de vencimento para ícone
-    const expirationStatus = getExpirationStatus(expirationInputValue);
-    let statusIconHtml = '';
-    let statusIconClass = '';
-    
-    // Verifica se está expirado por percentual de vida
-    const isExpiredByPercent = percentUsedValue >= 100;
-    const isObsoleteWithReplacement = isObsolete && hasReplacementLink;
-    
-    // Mostra ícone de status independente de estar em chain
-    // Não mostrar ícone de warning/expired se for OBSOLETE com replacement
-    if (isObsolete) {
-      statusIconHtml = '<i class="ph ph-fill ph-archive-box"></i>';
-      statusIconClass = 'status-icon-obsolete';
-    } else if (isExpiredByPercent || expirationStatus.class === 'expired') {
-      statusIconHtml = '<i class="ph ph-fill ph-warning-circle"></i>';
-      statusIconClass = 'status-icon-expired';
-    } else if (expirationStatus.class === 'warning') {
-      statusIconHtml = '<i class="ph ph-fill ph-warning"></i>';
-      statusIconClass = 'status-icon-warning';
+  const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
+  const percentUsed = toolingLife > 0 ? percentUsedValue.toFixed(1) : '0';
+  const remainingQty = remaining;
+  const remainingDisplay = formatIntegerWithSeparators(remainingQty, { preserveEmpty: true });
+  const lifecycleProgressPercent = Math.min(Math.max(percentUsedValue, 0), 100);
+  const amountBrlValue = (() => {
+    const raw = item.amount_brl;
+    if (raw === null || raw === undefined) {
+      return '';
     }
-    
-    return `
+    const trimmed = String(raw).trim();
+    if (trimmed === '') {
+      return '';
+    }
+    const parsed = parseLocalizedNumber(trimmed);
+    return Number.isNaN(parsed) ? '' : parsed;
+  })();
+  const lastUpdateDisplay = formatDateTime(item.last_update);
+  const statusOptionsMarkup = buildStatusOptionsMarkup(item.status);
+  const normalizedStatus = (item.status || '').toString().trim().toLowerCase();
+  const isObsolete = normalizedStatus === 'obsolete';
+  const replacementIdValue = sanitizeReplacementId(item.replacement_tooling_id);
+  const hasReplacementLink = replacementIdValue !== '';
+  const membershipKey = String(item.id || '').trim();
+  const hasChainMembership = chainMembership?.get(membershipKey) === true;
+  const shouldShowChainIndicator = hasChainMembership;
+  const replacementPickerOptionsMarkup = buildReplacementPickerOptionsMarkup(item, index);
+  const replacementPickerLabel = escapeHtml(
+    hasReplacementLink
+      ? (getReplacementOptionLabelById(replacementIdValue) || `${replacementIdValue}`)
+      : DEFAULT_REPLACEMENT_PICKER_LABEL
+  );
+  const replacementChipVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
+  const replacementEditorVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
+
+  // Calcula status de vencimento para ícone
+  const expirationStatus = getExpirationStatus(expirationInputValue);
+  let statusIconHtml = '';
+  let statusIconClass = '';
+
+  // Verifica se está expirado por percentual de vida
+  const isExpiredByPercent = percentUsedValue >= 100;
+  const isObsoleteWithReplacement = isObsolete && hasReplacementLink;
+
+  // Mostra ícone de status independente de estar em chain
+  // Não mostrar ícone de warning/expired se for OBSOLETE com replacement
+  if (isObsolete) {
+    statusIconHtml = '<i class="ph ph-fill ph-archive-box"></i>';
+    statusIconClass = 'status-icon-obsolete';
+  } else if (isExpiredByPercent || expirationStatus.class === 'expired') {
+    statusIconHtml = '<i class="ph ph-fill ph-warning-circle"></i>';
+    statusIconClass = 'status-icon-expired';
+  } else if (expirationStatus.class === 'warning') {
+    statusIconHtml = '<i class="ph ph-fill ph-warning"></i>';
+    statusIconClass = 'status-icon-warning';
+  }
+
+  return `
       <div class="tooling-card" id="card-${index}" data-item-id="${item.id}" data-status="${normalizedStatus}" data-replacement-id="${hasReplacementLink ? replacementIdValue : ''}" data-supplier="${escapeHtml(item.supplier || '')}" data-chain-member="${hasChainMembership ? 'true' : 'false'}" data-has-incoming-chain="${hasChainMembership && !hasReplacementLink ? 'true' : 'false'}">
         <div class="tooling-card-header" onclick="toggleCard(${index})">
           <div class="tooling-card-header-top">
@@ -8895,18 +9090,18 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                     <span class="detail-sublabel" id="stepDescription_${item.id}" data-step-description></span>
                   </div>
                   ${(() => {
-                    const classification = classifyToolingExpirationState(item);
-                    const showCheckbox = classification.state === 'expired' || classification.state === 'warning';
-                    if (!showCheckbox) return '';
-                    const isChecked = item.analysis_completed === 1;
-                    return `
+      const classification = classifyToolingExpirationState(item);
+      const showCheckbox = classification.state === 'expired' || classification.state === 'warning';
+      if (!showCheckbox) return '';
+      const isChecked = item.analysis_completed === 1;
+      return `
                   <div class="detail-item detail-item-full">
                     <label class="analysis-completed-checkbox">
                       <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
                       <span>Análise Concluída</span>
                     </label>
                   </div>`;
-                  })()}
+    })()}
                   <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
                     <span class="detail-label">Replacement Tooling</span>
                     <div class="replacement-link-field">
@@ -9122,10 +9317,10 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
 function getSupplierOptions() {
   return Array.isArray(suppliersData)
     ? [...new Set(
-        suppliersData
-          .map(item => String(item?.supplier || '').trim())
-          .filter(name => name.length > 0)
-      )].sort((a, b) => a.localeCompare(b, 'pt-BR'))
+      suppliersData
+        .map(item => String(item?.supplier || '').trim())
+        .filter(name => name.length > 0)
+    )].sort((a, b) => a.localeCompare(b, 'pt-BR'))
     : [];
 }
 
@@ -9198,7 +9393,7 @@ async function hydrateCardsAfterRender(sortedData, renderToken, supplierContext,
 
   primeCardSnapshots(sortedData);
   refreshCardCarouselState();
-  
+
   // Atualizar checkboxes se modo de seleção estiver ativo
   if (selectionModeActive) {
     updateCardCheckboxes();
@@ -9209,11 +9404,11 @@ async function hydrateCardsAfterRender(sortedData, renderToken, supplierContext,
 async function toggleAllCards() {
   const cards = document.querySelectorAll('.tooling-card');
   const expandBtn = document.getElementById('floatingExpandBtn');
-  
+
   if (!expandBtn) {
     return;
   }
-  
+
   if (cards.length === 0) {
     return;
   }
@@ -9223,7 +9418,7 @@ async function toggleAllCards() {
   for (let i = 0; i < cards.length; i++) {
     const card = cards[i];
     const isExpanded = card.classList.contains('expanded');
-    
+
     if (shouldExpand && !isExpanded) {
       card.classList.add('expanded');
       const cardIndex = parseInt(card.id.replace('card-', ''), 10);
@@ -9257,30 +9452,30 @@ async function toggleAllCards() {
 function navigateCarousel(cardIndex, direction) {
   // Tenta encontrar o card normal primeiro
   let card = document.getElementById(`card-${cardIndex}`);
-  
+
   // Se não encontrar, tenta no spreadsheet expandido
   if (!card) {
     card = document.querySelector(`.spreadsheet-card-container[data-item-index="${cardIndex}"]`);
   }
-  
+
   if (!card) return;
-  
+
   const track = card.querySelector('[data-carousel-track]');
   const carousel = card.querySelector('.tooling-details-carousel');
   const prevBtn = card.querySelector('.carousel-nav-prev');
   const nextBtn = card.querySelector('.carousel-nav-next');
   if (!track || !carousel) return;
-  
+
   const columns = Array.from(track.children);
-  
+
   // Get current carousel width (always fresh)
   const carouselWidth = carousel.offsetWidth;
   const gap = 14;
-  
+
   // Use stored index when available (fallback to transform parsing)
   let currentIndex = parseInt(track.dataset.carouselIndex || '0', 10);
   if (Number.isNaN(currentIndex)) currentIndex = 0;
-  
+
   if (!track.dataset.carouselIndex) {
     const currentTransform = getComputedStyle(track).transform;
     if (currentTransform !== 'none') {
@@ -9291,7 +9486,7 @@ function navigateCarousel(cardIndex, direction) {
       }
     }
   }
-  
+
   // Navigate
   if (direction === 'next') {
     currentIndex++;
@@ -9300,13 +9495,13 @@ function navigateCarousel(cardIndex, direction) {
     currentIndex--;
     if (currentIndex < 0) currentIndex = 0;
   }
-  
+
   // Calculate new position with current width
   const newX = -(currentIndex * (carouselWidth + gap));
-  
+
   track.style.transform = `translateX(${newX}px)`;
   track.dataset.carouselIndex = String(currentIndex);
-  
+
   // Update button states
   if (prevBtn) prevBtn.disabled = currentIndex === 0;
   if (nextBtn) nextBtn.disabled = currentIndex === columns.length - 1;
@@ -9366,7 +9561,7 @@ document.addEventListener('DOMContentLoaded', () => {
 function toggleCard(index) {
   const card = document.getElementById(`card-${index}`);
   const wasExpanded = card.classList.contains('expanded');
-  
+
   // Se está fechando o card, salva em background
   if (wasExpanded) {
     const itemId = card.getAttribute('data-item-id');
@@ -9376,34 +9571,34 @@ function toggleCard(index) {
     card.classList.remove('expanded');
   } else {
     // Está abrindo o card
-    
+
     // LAZY LOAD: Carrega body apenas se ainda não foi carregado
     const bodyLoaded = card.getAttribute('data-body-loaded') === 'true';
     if (!bodyLoaded) {
       const itemId = card.getAttribute('data-item-id');
       const item = toolingData.find(t => String(t.id) === String(itemId));
-      
+
       if (item) {
         // Gera o body completo agora
         const supplierContext = selectedSupplier || currentSupplier || '';
         const chainMembership = new Map(); // Já foi computado antes
         const bodyHTML = buildToolingCardBodyHTML(item, index, chainMembership, supplierContext);
-        
+
         // Insere o body no card
         card.insertAdjacentHTML('beforeend', bodyHTML);
         populateCardDataListForIndex(index);
         card.setAttribute('data-body-loaded', 'true');
         applyInitialThousandsMask(card);
-        
+
         // Restaura reminders de data persistentes
         restoreDateReminders(itemId);
-        
+
         // Initialize drag and drop for attachment dropzone
         const dropzone = card.querySelector('.card-attachments-dropzone');
         if (dropzone) {
           initCardAttachmentDragAndDrop(dropzone, itemId);
         }
-        
+
         // Initialize step description
         const stepSelect = card.querySelector(`select[data-field="steps"][data-id="${itemId}"]`);
         if (stepSelect) {
@@ -9417,9 +9612,9 @@ function toggleCard(index) {
         }
       }
     }
-    
+
     card.classList.add('expanded');
-    
+
     // Initialize carousel buttons state
     const track = card.querySelector('[data-carousel-track]');
     const prevBtn = card.querySelector('.carousel-nav-prev');
@@ -9431,7 +9626,7 @@ function toggleCard(index) {
       track.style.transform = 'translateX(0)'; // Reset to first column
       track.dataset.carouselIndex = '0';
     }
-    
+
     // Carrega dados do card em background, sem bloquear
     setTimeout(() => {
       calculateExpirationDate(index, null, true); // skipSave = true
@@ -9439,7 +9634,7 @@ function toggleCard(index) {
       if (itemId) {
         loadCardAttachments(itemId).catch(err => {
         });
-        
+
         // Cria snapshot inicial para detectar alterações
         const snapshotKey = getSnapshotKey(itemId);
         const values = collectCardDomValues(itemId);
@@ -9453,7 +9648,7 @@ function toggleCard(index) {
         }
       }
     }, 0);
-    
+
     ensureCardVisible(card);
   }
 }
@@ -9462,28 +9657,28 @@ function toggleCard(index) {
 function switchCardTab(cardIndex, tabName) {
   // Tenta encontrar o card normal primeiro
   let card = document.getElementById(`card-${cardIndex}`);
-  
+
   // Se não encontrar, tenta no spreadsheet expandido
   if (!card) {
     card = document.querySelector(`.spreadsheet-card-container[data-item-index="${cardIndex}"]`);
   }
-  
+
   if (!card) return;
-  
+
   // Atualiza botões das abas
   const tabs = card.querySelectorAll('.card-tab');
   tabs.forEach(tab => tab.classList.remove('active'));
-  const activeTab = Array.from(tabs).find(tab => 
+  const activeTab = Array.from(tabs).find(tab =>
     tab.getAttribute('onclick').includes(`'${tabName}'`)
   );
   if (activeTab) activeTab.classList.add('active');
-  
+
   // Atualiza conteúdo das abas
   const contents = card.querySelectorAll('.card-tab-content');
   contents.forEach(content => content.classList.remove('active'));
   const activeContent = card.querySelector(`.card-tab-content[data-tab="${tabName}"]`);
   if (activeContent) activeContent.classList.add('active');
-  
+
   // Carrega conteúdo específico da aba
   const itemId = card.getAttribute('data-item-id');
   if (itemId && tabName === 'attachments') {
@@ -9497,10 +9692,10 @@ function switchCardTab(cardIndex, tabName) {
 async function loadStepHistory(toolingId) {
   const timeline = document.getElementById(`stepTimeline-${toolingId}`);
   if (!timeline) return;
-  
+
   try {
     const history = await window.api.getStepHistory(toolingId);
-    
+
     if (!history || history.length === 0) {
       timeline.innerHTML = `
         <div class="step-tracking-empty">
@@ -9511,10 +9706,10 @@ async function loadStepHistory(toolingId) {
       `;
       return;
     }
-    
+
     // Build timeline HTML
     let html = '<div class="step-timeline-list">';
-    
+
     history.forEach((entry, index) => {
       const date = new Date(entry.changed_at);
       const formattedDate = date.toLocaleDateString('pt-BR', {
@@ -9526,11 +9721,11 @@ async function loadStepHistory(toolingId) {
         hour: '2-digit',
         minute: '2-digit'
       });
-      
+
       const oldStep = entry.old_step || 'Not set';
       const newStep = entry.new_step || 'Not set';
       const isFirst = index === 0;
-      
+
       html += `
         <div class="step-timeline-item ${isFirst ? 'latest' : ''}">
           <div class="step-timeline-marker">
@@ -9552,10 +9747,10 @@ async function loadStepHistory(toolingId) {
         </div>
       `;
     });
-    
+
     html += '</div>';
     timeline.innerHTML = html;
-    
+
   } catch (error) {
     console.error('[StepHistory] Error loading step history:', error);
     timeline.innerHTML = `
@@ -9576,20 +9771,20 @@ let clearStepHistoryState = {
 function clearStepHistory(toolingId) {
   const overlay = document.getElementById('clearStepHistoryOverlay');
   const descriptionEl = document.getElementById('clearStepItemDescription');
-  
+
   if (!overlay || !descriptionEl) return;
-  
+
   const item = toolingData.find(tool => String(tool.id) === String(toolingId));
   const descriptorParts = [];
   if (item?.pn) descriptorParts.push(item.pn);
   if (item?.tool_description) descriptorParts.push(item.tool_description);
   const descriptor = descriptorParts.join(' - ') || 'this tooling';
-  
+
   clearStepHistoryState = {
     toolingId,
     descriptor
   };
-  
+
   descriptionEl.textContent = descriptor;
   overlay.classList.add('active');
 }
@@ -9604,12 +9799,12 @@ function cancelClearStepHistory() {
 
 async function confirmClearStepHistory() {
   const { toolingId } = clearStepHistoryState;
-  
+
   if (!toolingId) {
     cancelClearStepHistory();
     return;
   }
-  
+
   try {
     await window.api.clearStepHistory(toolingId);
     loadStepHistory(toolingId);
@@ -9618,7 +9813,7 @@ async function confirmClearStepHistory() {
     console.error('[StepHistory] Error clearing step history:', error);
     showToast('Failed to clear step history', 'error');
   }
-  
+
   cancelClearStepHistory();
 }
 
@@ -9631,19 +9826,19 @@ function openClearAllStepHistoryModal() {
   const overlay = document.getElementById('clearAllStepHistoryOverlay');
   const codeEl = document.getElementById('clearAllStepsConfirmCode');
   const inputEl = document.getElementById('clearAllStepsConfirmInput');
-  
+
   if (!overlay || !codeEl || !inputEl) {
     console.error('[ClearAllStepHistory] Missing elements!');
     return;
   }
-  
+
   // Close the supplier menu overlay first
   closeSupplierFilterOverlay();
-  
+
   clearAllStepHistoryState.code = generateConfirmationCode();
   codeEl.textContent = clearAllStepHistoryState.code;
   inputEl.value = '';
-  
+
   overlay.classList.add('active');
   inputEl.focus();
 }
@@ -9651,7 +9846,7 @@ function openClearAllStepHistoryModal() {
 function cancelClearAllStepHistory() {
   const overlay = document.getElementById('clearAllStepHistoryOverlay');
   const inputEl = document.getElementById('clearAllStepsConfirmInput');
-  
+
   if (overlay) {
     overlay.classList.remove('active');
   }
@@ -9663,30 +9858,30 @@ function cancelClearAllStepHistory() {
 
 async function handleClearAllStepHistoryConfirmation() {
   const inputEl = document.getElementById('clearAllStepsConfirmInput');
-  
+
   if (!inputEl) {
     cancelClearAllStepHistory();
     return;
   }
-  
+
   const enteredCode = inputEl.value.trim().toUpperCase();
   const expectedCode = clearAllStepHistoryState.code.toUpperCase();
-  
+
   console.log('[ClearAllSteps] Entered:', enteredCode, 'Expected:', expectedCode);
-  
+
   if (enteredCode !== expectedCode) {
     inputEl.classList.add('error');
     inputEl.focus();
     setTimeout(() => inputEl.classList.remove('error'), 500);
     return;
   }
-  
+
   try {
     console.log('[ClearAllSteps] Calling API...');
     const result = await window.api.clearAllStepHistory();
     console.log('[ClearAllSteps] Result:', result);
-    showToast('All step checkboxes cleared successfully (steps preserved)', 'success');
-    
+    showToast('All steps cleared successfully', 'success');
+
     // Reload tooling data to reflect the changes
     if (selectedSupplier) {
       await loadToolingBySupplier(selectedSupplier);
@@ -9695,7 +9890,7 @@ async function handleClearAllStepHistoryConfirmation() {
     console.error('[StepHistory] Error clearing all step history:', error);
     showToast('Failed to clear all step history', 'error');
   }
-  
+
   cancelClearAllStepHistory();
 }
 
@@ -9748,16 +9943,16 @@ function findToolingItem(itemId) {
 function updateAttachmentCount(itemId, count) {
   const card = document.querySelector(`[data-item-id="${itemId}"]`);
   if (!card) return;
-  
+
   const topMeta = card.querySelector('.tooling-card-top-meta');
   if (!topMeta) return;
-  
+
   // Remove o contador existente
   const existingCounter = topMeta.querySelector('.tooling-attachment-count');
   if (existingCounter) {
     existingCounter.remove();
   }
-  
+
   // Se tem anexos, adiciona o contador antes do expand button
   if (count > 0) {
     const expandButton = topMeta.querySelector('.tooling-card-expand');
@@ -9780,12 +9975,12 @@ async function loadCardAttachments(itemId) {
     }
 
     const attachments = await window.api.getAttachments(toolingItem.supplier, normalizedId);
-    
+
     // Atualiza o contador no header do card
     updateAttachmentCount(normalizedId, attachments.length);
-    
+
     const container = document.getElementById(`cardAttachments-${normalizedId}`);
-    
+
     if (!container) {
       return;
     }
@@ -9798,7 +9993,7 @@ async function loadCardAttachments(itemId) {
     container.innerHTML = attachments.map(att => {
       const fileSize = (att.fileSize / 1024).toFixed(1);
       const uploadDate = new Date(att.uploadDate).toLocaleDateString('pt-BR');
-      
+
       return `
         <div class="card-attachment-item">
           <div class="card-attachment-info">
@@ -9838,7 +10033,7 @@ async function uploadCardAttachment(itemId) {
     }
 
     const result = await window.api.uploadAttachment(toolingItem.supplier, normalizedId);
-    
+
     if (result && result.success) {
       showNotification(result.message || 'Arquivo(s) anexado(s) com sucesso!');
       await loadCardAttachments(normalizedId);
@@ -9931,22 +10126,22 @@ async function saveToolingQuietly(id) {
       if (updateResult?.lastUpdateModified) {
         const now = new Date().toISOString();
         toolingData[index] = { ...toolingData[index], ...prepared.payload, last_update: now };
-        
+
         // Atualiza o display do Last Update em tempo real
         updateLastUpdateDisplay(id, now);
       } else {
         toolingData[index] = { ...toolingData[index], ...prepared.payload };
       }
-      
+
       if (updateResult?.comments) {
         updateCommentsDisplay(id);
       }
-      
+
       // Atualiza métricas do card do supplier em tempo real (busca dados frescos do banco)
       if (selectedSupplier) {
         refreshSupplierCardMetricsFromDB(selectedSupplier);
       }
-      
+
       // Sincroniza a linha da spreadsheet com os dados atualizados
       syncSpreadsheetRowFromCard(id);
     }
@@ -9973,16 +10168,16 @@ async function updateInterfaceAfterSave() {
     // Recarrega suppliers com estatísticas atualizadas
     const oldSuppliersData = suppliersData;
     suppliersData = await window.api.getSuppliersWithStats();
-    
+
     // Verifica se há filtro de busca de supplier ativo
     const supplierSearchInput = document.getElementById('supplierSearchInput');
     const supplierSearchTerm = supplierSearchInput ? supplierSearchInput.value.trim() : '';
-    
+
     if (supplierSearchTerm.length >= 1) {
       // Aplicar filtro na lista de suppliers e manter toolings filtrados
       const normalizedSearch = supplierSearchTerm.toLowerCase().trim();
       const matchingSuppliers = new Set();
-      
+
       // Busca em todos os toolings para saber quais suppliers têm match
       try {
         const allResults = await window.api.searchTooling(supplierSearchTerm);
@@ -9992,7 +10187,7 @@ async function updateInterfaceAfterSave() {
             matchingSuppliers.add(supplierName);
           }
         });
-        
+
         // Adiciona suppliers cujo nome contém o termo
         suppliersData.forEach(supplier => {
           const supplierName = String(supplier.supplier || '').toLowerCase();
@@ -10000,32 +10195,32 @@ async function updateInterfaceAfterSave() {
             matchingSuppliers.add(supplier.supplier);
           }
         });
-        
+
         // Filtra a lista de suppliers pela busca
-        let filteredSuppliers = suppliersData.filter(supplier => 
+        let filteredSuppliers = suppliersData.filter(supplier =>
           matchingSuppliers.has(supplier.supplier)
         );
-        
+
         // Aplica o filtro de expiração se estiver ativo
         if (expirationFilterEnabled) {
           filteredSuppliers = filteredSuppliers.filter(supplier => {
             return ExpirationMetrics.hasCriticalItems(supplier);
           });
         }
-        
+
         // Atualiza a lista de suppliers
         displaySuppliers(filteredSuppliers);
-        
+
         // Se há um supplier selecionado e ele está nos matching, atualiza seus toolings filtrados
         if (selectedSupplier && matchingSuppliers.has(selectedSupplier)) {
           const filteredResults = allResults.filter(item => {
             const itemSupplier = String(item.supplier || '').trim();
             return itemSupplier === selectedSupplier;
           });
-          
+
           // Atualiza apenas os dados sem recriar os cards (preserva cards expandidos)
           toolingData = filteredResults;
-          
+
           // Atualiza campos dos cards existentes sem recriar tudo
           filteredResults.forEach((item, index) => {
             const card = document.getElementById(`card-${index}`);
@@ -10041,7 +10236,7 @@ async function updateInterfaceAfterSave() {
       // Sem filtro: aplica apenas filtro de expiração
       applyExpirationFilter();
     }
-    
+
     // Atualiza a barra inferior com analytics
     const analytics = await window.api.getAnalytics();
     if (!Array.isArray(suppliersData) || suppliersData.length === 0) {
@@ -10057,11 +10252,11 @@ async function updateInterfaceAfterSave() {
 async function loadAnalytics() {
   try {
     const analytics = await window.api.getAnalytics();
-    
+
     // Calcula métricas usando a mesma lógica da barra inferior
     let expiredCount = 0;
     let expiringCount = 0;
-    
+
     if (Array.isArray(suppliersData) && suppliersData.length > 0) {
       const summary = suppliersData.reduce((acc, supplier) => {
         // Usa APENAS ExpirationMetrics.fromItems() para calcular métricas
@@ -10070,26 +10265,23 @@ async function loadAnalytics() {
         acc.expiring += metrics.expiring;
         return acc;
       }, { expired: 0, expiring: 0 });
-      
+
       expiredCount = summary.expired;
       expiringCount = summary.expiring;
     } else {
       expiredCount = analytics.expired_total || 0;
       expiringCount = analytics.expiring_two_years || 0;
     }
-    
+
     // Métricas principais
     document.getElementById('totalTooling').textContent = analytics.total || 0;
     document.getElementById('totalExpired').textContent = expiredCount;
     document.getElementById('totalExpiring').textContent = expiringCount;
     document.getElementById('totalSuppliers').textContent = analytics.suppliers || 0;
-    
-    // Top suppliers
-    displayTopSuppliers(suppliersData);
-    
+
     // Steps summary
     await displayStepsSummary();
-    
+
     if (!Array.isArray(suppliersData) || suppliersData.length === 0) {
       updateStatusBar(analytics);
     } else {
@@ -10099,114 +10291,92 @@ async function loadAnalytics() {
   }
 }
 
-function displayTopSuppliers(suppliers) {
-  const tableBody = document.querySelector('#topSuppliersTable tbody');
-  if (!tableBody || !suppliers) return;
-  
-  const sortedSuppliers = [...suppliers]
-    .sort((a, b) => ((b.items || []).length) - ((a.items || []).length))
-    .slice(0, 15);
-  
-  tableBody.innerHTML = sortedSuppliers.map(supplier => {
-    // Usa APENAS ExpirationMetrics.fromItems() para calcular métricas
-    const metrics = ExpirationMetrics.fromItems(supplier.items || []);
-    
-    return `
-      <tr>
-        <td>${escapeHtml(supplier.supplier)}</td>
-        <td><span class="table-number">${metrics.total}</span></td>
-        <td><span class="table-number table-number--expired">${metrics.expired}</span></td>
-        <td><span class="table-number table-number--warning">${metrics.expiring}</span></td>
-      </tr>
-    `;
-  }).join('');
-}
-
 async function displayStepsSummary() {
-  const tableBody = document.querySelector('#stepsSummaryTable tbody');
-  if (!tableBody) return;
-  
+  const container = document.getElementById('stepsColumnsContainer');
+  if (!container) return;
+
   // Todos os 7 steps fixos
   const allSteps = ['1', '2', '3', '4', '5', '6', '7'];
-  
-  // Mapeamento de Action (descrição de cada step)
-  const stepActions = {
-    '1': 'Control Data Update',
-    '2': 'Critical Tooling Identification',
-    '3': 'Supplier Validation Request',
-    '4': 'Critical Tooling Reassessment',
-    '5': 'On-Site Technical Analysis',
-    '6': 'Technical Confirmation',
-    '7': 'Supply Continuity Strategy'
+
+  // Mapeamento de título e descrição detalhada de cada step
+  const stepDescriptions = {
+    '1': {
+      title: 'Atualização dos Dados do Controle',
+      description: 'Atualizar os dados do controle de volume total produzido por ferramental e o volume anual do item.'
+    },
+    '2': {
+      title: 'Identificação de Ferramentais Críticos',
+      description: 'Identificar ferramentais com data de expiração prevista em até 2 anos.'
+    },
+    '3': {
+      title: 'Solicitação de Validação ao Fornecedor',
+      description: 'Enviar ao fornecedor as informações de volume total produzido e vida útil do ferramental para validação.'
+    },
+    '4': {
+      title: 'Reavaliação dos Ferramentais Críticos',
+      description: 'Reavaliar a lista de ferramentais em risco de expiração dentro dos próximos 2 anos.'
+    },
+    '5': {
+      title: 'Análise Técnica no Fornecedor in Loco',
+      description: 'Realizar visita técnica ao fornecedor para análise técnica dos ferramentais identificados como crítico.'
+    },
+    '6': {
+      title: 'Confirmação Técnica',
+      description: 'Retornar com a avaliação técnica da vida útil do ferramental para Supply Continuity para atualização do Controle.'
+    },
+    '7': {
+      title: 'Estratégia de Continuidade de Fornecimento',
+      description: 'Definir a Estratégia de Continuidade de Fornecimento do item para os ferramentais que irão expirar em até 2 anos com base na análise de risco versus viabilidade do negócio.'
+    }
   };
-  
-  // Mapeamento de Deadline (prazo de cada step)
-  const stepDeadlines = {
-    '1': 'September',
-    '2': 'September',
-    '3': 'October - January',
-    '4': 'October - January',
-    '5': 'December - March',
-    '6': 'December - March',
-    '7': 'April - June'
+
+  // Mapeamento de período de cada step
+  const stepPeriods = {
+    '1': 'Setembro',
+    '2': 'Setembro',
+    '3': 'Outubro a Janeiro',
+    '4': 'Outubro a Janeiro',
+    '5': 'Dezembro a Março',
+    '6': 'Dezembro a Março',
+    '7': 'Abril a Junho'
   };
-  
+
   // Mapeamento de Responsible (responsável de cada step)
   const stepResponsibles = {
     '1': 'Supply Continuity',
     '2': 'Supply Continuity',
     '3': 'Supply Continuity',
     '4': 'Supply Continuity',
-    '5': 'SQIE',
-    '6': 'SQIE',
+    '5': 'SQE',
+    '6': 'SQE',
     '7': 'Sourcing Manager'
   };
-  
+
   // Função para verificar se estamos no prazo
-  // Retorna: 'completed' (step deve estar zerado), 'current' (prazo atual), 'upcoming' (futuro)
   function getStepStatus(step, count) {
-    const currentMonth = new Date().getMonth(); // 0 = Janeiro, 11 = Dezembro
-    
-    // Ciclo anual do tooling management:
-    // Step 1-2: Julho-Setembro (período de atualização)
-    // Step 3-4: Outubro-Janeiro (validação com fornecedor)
-    // Step 5-6: Dezembro-Março (análise técnica)  
-    // Step 7: Abril-Junho (estratégia de continuidade)
-    
-    // Para cada step, definir: período ativo e período "atrasado"
-    // Mês atual: Novembro (10)
-    
-    // Usar ordem sequencial no ciclo (Julho = 0 do ciclo, Junho = 11 do ciclo)
-    // Converter mês do calendário para mês do ciclo (Julho = mês 6 vira posição 0)
+    const currentMonth = new Date().getMonth();
+
     function toCycleMonth(calendarMonth) {
-      // Julho(6) -> 0, Agosto(7) -> 1, ..., Junho(5) -> 11
       return (calendarMonth - 6 + 12) % 12;
     }
-    
+
     const cycleMonth = toCycleMonth(currentMonth);
-    
-    // Períodos em meses do ciclo (baseado em Julho = 0)
-    // Step 1-2: Jul-Set = ciclo 0-2
-    // Step 3-4: Out-Jan = ciclo 3-6
-    // Step 5-6: Dez-Mar = ciclo 5-8
-    // Step 7: Abr-Jun = ciclo 9-11
+
     const stepCyclePeriods = {
-      '1': { start: 0, end: 2 },   // Jul-Set
-      '2': { start: 0, end: 2 },   // Jul-Set
-      '3': { start: 3, end: 6 },   // Out-Jan
-      '4': { start: 3, end: 6 },   // Out-Jan
-      '5': { start: 5, end: 8 },   // Dez-Mar
-      '6': { start: 5, end: 8 },   // Dez-Mar
-      '7': { start: 9, end: 11 }   // Abr-Jun
+      // Mapping adjusted so steps 1 and 2 are only September (index 2)
+      '1': { start: 2, end: 2 },
+      '2': { start: 2, end: 2 },
+      '3': { start: 3, end: 6 },
+      '4': { start: 3, end: 6 },
+      '5': { start: 5, end: 8 },
+      '6': { start: 5, end: 8 },
+      '7': { start: 9, end: 11 }
     };
-    
+
     const period = stepCyclePeriods[step];
-    
     const isInPeriod = cycleMonth >= period.start && cycleMonth <= period.end;
     const isPastDeadline = cycleMonth > period.end;
-    const isBeforePeriod = cycleMonth < period.start;
-    
-    // Lógica de status:
+
     if (isPastDeadline) {
       return count > 0 ? 'behind' : 'completed';
     } else if (isInPeriod) {
@@ -10215,63 +10385,217 @@ async function displayStepsSummary() {
       return 'upcoming';
     }
   }
-  
+
   // Função para renderizar o indicador de status
-  function renderStatusIndicator(status, count) {
+  function renderStatusBadge(status) {
+    // Technical status labels as requested by user
     const statusConfig = {
-      'completed': { text: 'DONE', class: 'status-completed' },
-      'current': { text: 'NOW', class: 'status-current' },
-      'behind': { text: 'LATE', class: 'status-behind' },
-      'upcoming': { text: 'ON-GOING', class: 'status-upcoming' }
+      'completed': { text: 'Concluído', class: 'status-completed' },
+      'current': { text: 'Em Execução', class: 'status-current' },
+      'behind': { text: 'Atrasado', class: 'status-behind' },
+      'upcoming': { text: 'Não Iniciado', class: 'status-upcoming' }
     };
-    
+
     const config = statusConfig[status] || statusConfig['upcoming'];
     return `<span class="step-status-badge ${config.class}">${config.text}</span>`;
   }
-  
+
   try {
-    // Busca dados agregados dos steps
+    // Busca dados agregados dos steps (agora inclui suppliers)
     const stepsData = await window.api.getStepsSummary();
-    
+
     // Cria um mapa para fácil acesso
     const stepsMap = {};
     if (stepsData && stepsData.length > 0) {
       stepsData.forEach(item => {
-        stepsMap[item.steps] = item.count;
+        stepsMap[item.steps] = { count: item.count, suppliers: item.suppliers || [] };
       });
     }
-    
+
     // Calcula o total para as porcentagens
-    const totalWithSteps = allSteps.reduce((sum, step) => sum + (stepsMap[step] || 0), 0);
-    
+    const totalWithSteps = allSteps.reduce((sum, step) => sum + ((stepsMap[step]?.count) || 0), 0);
+
     // Gera array com todos os 7 steps
     const stepsArray = allSteps.map(step => {
-      const count = stepsMap[step] || 0;
+      const count = stepsMap[step]?.count || 0;
+      const suppliers = stepsMap[step]?.suppliers || [];
       return {
         steps: step,
-        action: stepActions[step],
+        description: stepDescriptions[step],
+        period: stepPeriods[step] || '',
         responsible: stepResponsibles[step],
-        deadline: stepDeadlines[step],
         count: count,
         percentage: totalWithSteps > 0 ? ((count / totalWithSteps) * 100).toFixed(1) : '0.0',
-        status: getStepStatus(step, count)
+        status: getStepStatus(step, count),
+        suppliers: suppliers
       };
     });
-    
-    tableBody.innerHTML = stepsArray.map(item => `
-      <tr>
-        <td><strong>${escapeHtml(item.steps)}</strong></td>
-        <td>${escapeHtml(item.action)}</td>
-        <td>${escapeHtml(item.responsible)}</td>
-        <td>${escapeHtml(item.deadline)}</td>
-        <td><span class="table-number">${item.count}</span></td>
-        <td><span class="table-number">${item.percentage}%</span></td>
-        <td>${renderStatusIndicator(item.status, item.count)}</td>
-      </tr>
-    `).join('');
-    
+
+    // Renderiza a matriz de meses (Gantt chart) abaixo das colunas
+    const timelineContainer = document.getElementById('stepsTimeline');
+    if (timelineContainer) {
+      const currentMonth = new Date().getMonth(); // 0=Jan .. 11=Dec
+
+      // Meses exibidos na matriz (Setembro a Junho)
+      const matrixMonths = [
+        { name: 'Setembro', cal: 8 },
+        { name: 'Outubro', cal: 9 },
+        { name: 'Novembro', cal: 10 },
+        { name: 'Dezembro', cal: 11 },
+        { name: 'Janeiro', cal: 0 },
+        { name: 'Fevereiro', cal: 1 },
+        { name: 'Março', cal: 2 },
+        { name: 'Abril', cal: 3 },
+        { name: 'Maio', cal: 4 },
+        { name: 'Junho', cal: 5 }
+      ];
+
+      // Definição dos grupos de steps e seus meses ativos
+      const stepGroups = [
+        { label: '1 e 2', months: [8] },                   // Setembro
+        { label: '3 e 4', months: [9, 10, 11, 0] },        // Outubro a Janeiro
+        { label: '5 e 6', months: [11, 0, 1, 2] },         // Dezembro a Março
+        { label: '7', months: [3, 4, 5] }              // Abril a Junho
+      ];
+
+      // Calcula progresso do dia no mês atual para a linha indicadora
+      const today = new Date();
+      const dayOfMonth = today.getDate();
+      const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+      const dayProgress = (dayOfMonth / daysInMonth).toFixed(4);
+
+      // Header da tabela
+      const headerCells = matrixMonths.map(m => {
+        const isCurrent = m.cal === currentMonth;
+        if (isCurrent) {
+          return `<th class="matrix-month-header matrix-month--current" style="--day-progress: ${dayProgress}">${m.name}</th>`;
+        }
+        return `<th class="matrix-month-header">${m.name}</th>`;
+      }).join('');
+
+      // Linhas da tabela — agrupa células ativas contíguas em colspan
+      const bodyRows = stepGroups.map(group => {
+        let cells = '';
+        let i = 0;
+        while (i < matrixMonths.length) {
+          const isActive = group.months.includes(matrixMonths[i].cal);
+          if (isActive) {
+            let span = 1;
+            while (i + span < matrixMonths.length && group.months.includes(matrixMonths[i + span].cal)) {
+              span++;
+            }
+            cells += `<td class="matrix-cell matrix-cell--active" colspan="${span}"></td>`;
+            i += span;
+          } else {
+            cells += `<td class="matrix-cell"></td>`;
+            i++;
+          }
+        }
+        return `<tr><td class="matrix-step-label">${group.label}</td>${cells}</tr>`;
+      }).join('');
+
+      timelineContainer.innerHTML = `
+        <table class="steps-matrix-table">
+          <thead>
+            <tr>
+              <th class="matrix-step-header">Steps</th>
+              ${headerCells}
+            </tr>
+          </thead>
+          <tbody>
+            ${bodyRows}
+          </tbody>
+        </table>
+      `;
+
+      // Ajusta a altura da linha indicadora (mês atual) para a altura do corpo da matriz
+      // Define variável CSS `--matrix-body-height` usada em style.css
+      try {
+        const tableEl = timelineContainer.querySelector('.steps-matrix-table');
+        if (tableEl) {
+          const tbodyEl = tableEl.querySelector('tbody');
+          const bodyHeight = tbodyEl ? tbodyEl.offsetHeight : 0;
+          tableEl.style.setProperty('--matrix-body-height', `${bodyHeight}px`);
+        }
+      } catch (e) {
+        // fail silently
+      }
+    }
+
+    // Renderiza 7 colunas
+    container.innerHTML = stepsArray.map(item => {
+      // Supplier cards HTML
+      const supplierCardsHtml = item.suppliers.length > 0
+        ? item.suppliers.map(s => `
+          <div class="step-supplier-card">
+            <span class="step-supplier-name">${escapeHtml(s.supplier)}</span>
+          </div>
+        `).join('')
+        : '<div class="step-no-suppliers">Nenhum fornecedor</div>';
+
+      return `
+        <div class="step-column" data-step="${item.steps}">
+          <div class="step-column-header">
+            <div class="step-column-number">${escapeHtml(item.steps)}</div>
+            ${renderStatusBadge(item.status)}
+          </div>
+          <div class="step-column-title">${escapeHtml(item.description?.title || '')}</div>
+          <div class="step-column-desc">${escapeHtml(item.description?.description || '')}</div>
+          <div class="step-column-meta">
+            <div class="step-column-meta-item">
+              <i class="ph ph-calendar-blank"></i>
+              <span>${escapeHtml(item.period)}</span>
+            </div>
+            <div class="step-column-meta-item">
+              <i class="ph ph-user"></i>
+              <span>${escapeHtml(item.responsible)}</span>
+            </div>
+          </div>
+          <div class="step-column-stats">
+            <div class="step-column-stat">
+              <span class="step-stat-value">${item.count}</span>
+              <span class="step-stat-label">Ferramentais</span>
+            </div>
+            <div class="step-column-stat">
+              <span class="step-stat-value">${item.percentage}%</span>
+              <span class="step-stat-label">do Total</span>
+            </div>
+          </div>
+          <div class="step-column-suppliers">
+            <div class="step-suppliers-list">
+              ${supplierCardsHtml}
+            </div>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    // Hover: destaca a linha correspondente na matriz de meses
+    const stepToGroupRow = {
+      '1': 0, '2': 0,
+      '3': 1, '4': 1,
+      '5': 2, '6': 2,
+      '7': 3
+    };
+
+    container.querySelectorAll('.step-column').forEach(col => {
+      const step = col.getAttribute('data-step');
+      const rowIdx = stepToGroupRow[step];
+      if (rowIdx === undefined) return;
+
+      col.addEventListener('mouseenter', () => {
+        const rows = timelineContainer ? timelineContainer.querySelectorAll('.steps-matrix-table tbody tr') : [];
+        if (rows[rowIdx]) rows[rowIdx].classList.add('matrix-row--highlight');
+      });
+
+      col.addEventListener('mouseleave', () => {
+        const rows = timelineContainer ? timelineContainer.querySelectorAll('.matrix-row--highlight') : [];
+        rows.forEach(el => el.classList.remove('matrix-row--highlight'));
+      });
+    });
+
   } catch (error) {
-    tableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: #f44;">Error loading steps data</td></tr>';
+    container.innerHTML = '<div class="no-steps-message"><i class="ph ph-warning"></i> Erro ao carregar dados das etapas</div>';
   }
 }
 
@@ -10302,7 +10626,7 @@ function updateStatusBar(analytics) {
   const statusTotal = document.getElementById('statusTotal');
   const statusExpired = document.getElementById('statusExpired');
   const statusExpiring = document.getElementById('statusExpiring');
-  
+
   if (statusTotal) {
     statusTotal.textContent = analytics.total || 0;
   }
@@ -10556,7 +10880,7 @@ function loadStatusOptionsFromStorage() {
         const normalized = parsed
           .map(item => (typeof item === 'string' ? item.trim() : ''))
           .filter(item => item.length > 0);
-        
+
         // Migração: garantir que ACTIVE está na lista se não estiver
         if (normalized.length > 0 && !normalized.includes('ACTIVE')) {
           normalized.unshift('ACTIVE'); // Adiciona no início
@@ -10564,7 +10888,7 @@ function loadStatusOptionsFromStorage() {
           localStorage.setItem(STATUS_STORAGE_KEY, JSON.stringify(normalized));
           return Array.from(new Set(normalized));
         }
-        
+
         if (normalized.length > 0) {
           return Array.from(new Set(normalized));
         }
@@ -10596,7 +10920,7 @@ async function filterSuppliersAndTooling(searchTerm) {
   const rawTerm = typeof searchTerm === 'string' ? searchTerm : '';
   const normalizedSearch = rawTerm.toLowerCase().trim();
   const requestId = ++supplierFilterRequestId;
-  
+
   if (!normalizedSearch) {
     applyExpirationFilter();
     if (selectedSupplier) {
@@ -10606,49 +10930,49 @@ async function filterSuppliersAndTooling(searchTerm) {
   }
 
   const matchingSuppliers = new Set();
-  
+
   try {
     const allResults = await window.api.searchTooling(rawTerm);
     if (requestId !== supplierFilterRequestId) {
       return;
     }
-    
+
     allResults.forEach(item => {
       const supplierName = String(item.supplier || '').trim();
       if (supplierName) {
         matchingSuppliers.add(supplierName);
       }
     });
-    
+
     suppliersData.forEach(supplier => {
       const supplierName = String(supplier.supplier || '').toLowerCase();
       if (supplierName.includes(normalizedSearch)) {
         matchingSuppliers.add(supplier.supplier);
       }
     });
-    
-    let filteredSuppliers = suppliersData.filter(supplier => 
+
+    let filteredSuppliers = suppliersData.filter(supplier =>
       matchingSuppliers.has(supplier.supplier)
     );
-    
+
     if (expirationFilterEnabled) {
       filteredSuppliers = filteredSuppliers.filter(supplier => {
         return ExpirationMetrics.hasCriticalItems(supplier);
       });
     }
-    
+
     if (requestId !== supplierFilterRequestId) {
       return;
     }
 
     displaySuppliers(filteredSuppliers);
-    
+
     if (selectedSupplier && matchingSuppliers.has(selectedSupplier)) {
       const filteredResults = allResults.filter(item => {
         const itemSupplier = String(item.supplier || '').trim();
         return itemSupplier === selectedSupplier;
       });
-      
+
       toolingData = filteredResults;
       displayTooling(filteredResults);
     }
@@ -10660,9 +10984,9 @@ async function filterSuppliersAndTooling(searchTerm) {
 function toggleStepsFilter() {
   const dropdown = document.getElementById('stepsFilterDropdown');
   const toggle = document.getElementById('stepsFilterToggle');
-  
+
   if (!dropdown || !toggle) return;
-  
+
   if (dropdown.style.display === 'none') {
     dropdown.style.display = 'block';
     toggle.classList.add('expanded');
@@ -10676,16 +11000,16 @@ function toggleStepsFilter() {
 function clearSupplierSearch() {
   const input = document.getElementById('supplierSearchInput');
   const clearBtn = document.getElementById('clearSupplierSearch');
-  
+
   if (input) {
     input.value = '';
   }
-  
+
   if (clearBtn) {
     clearBtn.style.display = 'none';
   }
   supplierSearchDebouncedHandler?.cancel?.();
-  
+
   filterSuppliersAndTooling('');
 }
 
@@ -10694,11 +11018,11 @@ function toggleStatusSearch() {
   const wrapper = document.getElementById('statusSearchInputWrapper');
   const input = document.getElementById('statusSupplierSearchInput');
   const btn = document.getElementById('statusSearchBtn');
-  
+
   if (!wrapper) return;
-  
+
   const isActive = wrapper.classList.contains('active');
-  
+
   if (isActive) {
     wrapper.classList.remove('active');
     input.value = '';
@@ -10712,14 +11036,14 @@ function toggleStatusSearch() {
 function clearStatusSearch() {
   const input = document.getElementById('statusSupplierSearchInput');
   const wrapper = document.getElementById('statusSearchInputWrapper');
-  
+
   if (input) {
     input.value = '';
   }
-  
+
   supplierSearchDebouncedHandler?.cancel?.();
   filterSuppliersAndTooling('');
-  
+
   if (wrapper) {
     wrapper.classList.remove('active');
   }
@@ -10731,9 +11055,9 @@ async function loadTodos(toolingId) {
   try {
     const todos = await window.api.getTodos(toolingId);
     const todosList = document.getElementById(`todosList-${toolingId}`);
-    
+
     if (!todosList) return;
-    
+
     todosList.innerHTML = todos.map(todo => `
       <div class="todo-item" data-todo-id="${todo.id}">
         <input type="checkbox" class="todo-checkbox" ${todo.completed ? 'checked' : ''} onchange="toggleTodo(${todo.id}, this.checked)">
@@ -10743,7 +11067,7 @@ async function loadTodos(toolingId) {
         </button>
       </div>
     `).join('');
-    
+
   } catch (error) {
   }
 }
@@ -10793,7 +11117,7 @@ const DEVTOOLS_ENABLED_KEY = 'devToolsEnabled';
 
 function toggleDevTools(enabled) {
   localStorage.setItem(DEVTOOLS_ENABLED_KEY, enabled ? 'true' : 'false');
-  
+
   if (enabled) {
     // Abre o DevTools
     if (window.api && window.api.openDevTools) {
@@ -10814,7 +11138,7 @@ function initDevToolsSwitch() {
   if (devToolsSwitch) {
     const enabled = localStorage.getItem(DEVTOOLS_ENABLED_KEY) === 'true';
     devToolsSwitch.checked = enabled;
-    
+
     // Se estiver habilitado, abre o DevTools ao iniciar
     if (enabled && window.api && window.api.openDevTools) {
       window.api.openDevTools();
@@ -10830,26 +11154,26 @@ function navigateSettingsCarousel(direction) {
   const carousel = document.getElementById('settingsCarousel');
   const cards = carousel ? carousel.querySelectorAll('.settings-card') : [];
   const totalCards = cards.length;
-  
+
   if (totalCards === 0) return;
-  
+
   // Calcular novo índice
   currentSettingsCarouselIndex += direction;
-  
+
   // Circular: voltar ao início ou fim
   if (currentSettingsCarouselIndex < 0) {
     currentSettingsCarouselIndex = totalCards - 1;
   } else if (currentSettingsCarouselIndex >= totalCards) {
     currentSettingsCarouselIndex = 0;
   }
-  
+
   updateSettingsCarouselPosition();
 }
 
 function goToSettingsCarouselSlide(index) {
   const carousel = document.getElementById('settingsCarousel');
   const cards = carousel ? carousel.querySelectorAll('.settings-card') : [];
-  
+
   if (index >= 0 && index < cards.length) {
     currentSettingsCarouselIndex = index;
     updateSettingsCarouselPosition();
@@ -10860,12 +11184,12 @@ function updateSettingsCarouselPosition() {
   const carousel = document.getElementById('settingsCarousel');
   const indicators = document.querySelectorAll('.carousel-dot');
   const cards = carousel ? carousel.querySelectorAll('.settings-card') : [];
-  
+
   if (!carousel || cards.length === 0) return;
-  
+
   // Verificar se está em modo mobile (carrossel ativo)
   const isMobile = window.innerWidth <= 1200;
-  
+
   if (isMobile) {
     // Scroll para o card ativo
     if (cards[currentSettingsCarouselIndex]) {
@@ -10875,7 +11199,7 @@ function updateSettingsCarouselPosition() {
         inline: 'start'
       });
     }
-    
+
     // Atualizar indicadores
     indicators.forEach((dot, index) => {
       if (index === currentSettingsCarouselIndex) {
@@ -10891,18 +11215,18 @@ function updateSettingsCarouselPosition() {
 function initSettingsCarouselScrollListener() {
   const carousel = document.getElementById('settingsCarousel');
   if (!carousel) return;
-  
+
   let scrollTimeout;
   carousel.addEventListener('scroll', () => {
     const isMobile = window.innerWidth <= 1200;
     if (!isMobile) return;
-    
+
     clearTimeout(scrollTimeout);
     scrollTimeout = setTimeout(() => {
       const cards = carousel.querySelectorAll('.settings-card');
       const scrollLeft = carousel.scrollLeft;
       const cardWidth = cards[0] ? cards[0].offsetWidth : 0;
-      
+
       if (cardWidth > 0) {
         const newIndex = Math.round(scrollLeft / cardWidth);
         if (newIndex !== currentSettingsCarouselIndex && newIndex >= 0 && newIndex < cards.length) {
@@ -10919,7 +11243,7 @@ function initSettingsCarouselScrollListener() {
       }
     }, 100);
   });
-  
+
   // Resetar posição quando sair do modo mobile
   window.addEventListener('resize', () => {
     const isMobile = window.innerWidth <= 1200;
