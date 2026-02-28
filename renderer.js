@@ -150,7 +150,7 @@ class ExpirationMetrics {
       // Total sempre conta todos os itens
       acc.total += 1;
 
-      // Ignora itens com análise concluída apenas para expired e expiring
+      // Ignora itens com Analise Concluida apenas para expired e expiring
       if (item.analysis_completed === 1) {
         return acc;
       }
@@ -572,7 +572,8 @@ async function refreshReplacementIdOptions(force = false) {
             pn: row?.pn || '',
             pn_description: row?.pn_description || '',
             supplier: row?.supplier || '',
-            tool_description: row?.tool_description || ''
+            tool_description: row?.tool_description || '',
+            status: row?.status || ''
           };
         })
         .filter(Boolean)
@@ -601,8 +602,20 @@ async function ensureReplacementIdOptions(force = false) {
 
 function buildReplacementPickerOptionsMarkup(item, cardIndex) {
   const currentNumericId = Number(item.id);
+  const getEffectiveStatus = (option) => {
+    const localItem = toolingData.find(tool => Number(tool.id) === Number(option.id));
+    const statusValue = localItem ? localItem.status : option.status;
+    return String(statusValue || '').trim().toLowerCase();
+  };
+
   const options = Array.isArray(replacementIdOptions)
-    ? replacementIdOptions.filter(option => option.id !== currentNumericId)
+    ? replacementIdOptions.filter(option => {
+      if (option.id === currentNumericId) {
+        return false;
+      }
+      // Keep replacement list synchronized with the current card status.
+      return getEffectiveStatus(option) !== 'obsolete';
+    })
     : [];
 
   const clearButton = `<button type="button" class="replacement-dropdown-option" onclick="handleReplacementPickerSelect(${cardIndex}, ${item.id}, '')">Clear selection</button>`;
@@ -1402,7 +1415,7 @@ async function toggleExpirationFilter(enabled) {
     badge.style.display = enabled ? 'flex' : 'none';
   }
 
-  // Recarrega suppliers do banco para atualizar contagens (considera análise concluída)
+  // Recarrega suppliers do banco para atualizar contagens (considera Analise Concluida)
   try {
     suppliersData = await window.api.getSuppliersWithStats();
   } catch (e) {
@@ -3460,8 +3473,18 @@ function handleStatusSelectChange(cardIndex, itemId, selectEl) {
     updateCardHeaderStatus(cardIndex, value);
     updateCardStatusAttribute(cardIndex, value);
 
+    const toolingIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
+    if (toolingIndex !== -1) {
+      toolingData[toolingIndex].status = value;
+    }
+
     // Sincroniza status com a linha da spreadsheet
     syncSpreadsheetFromExpandedCard(itemId, 'status', value);
+
+    if (replacementPickerOverlayState.overlay?.classList.contains('active') && replacementPickerOverlayState.list) {
+      const stubItem = { id: Number(replacementPickerOverlayState.itemId) || 0 };
+      replacementPickerOverlayState.list.innerHTML = buildReplacementPickerOptionsMarkup(stubItem, replacementPickerOverlayState.cardIndex);
+    }
   }
   autoSaveTooling(itemId, true);
 }
@@ -4108,9 +4131,10 @@ function renderReplacementTimeline(chain = []) {
 
   // Posicionar cards em layout vertical inicial
   list.innerHTML = chain.map((record, index) => {
-    const isLastInChain = index === chain.length - 1;
-    const badgeClass = isLastInChain ? 'timeline-status-active' : 'timeline-status-obsolete';
-    const label = isLastInChain ? 'Active' : 'Obsolete';
+    const effectiveStatus = getEffectiveToolingStatus(record);
+    const statusMeta = getTimelineStatusMeta(effectiveStatus);
+    const badgeClass = statusMeta.badgeClass;
+    const label = statusMeta.label;
 
     const pn = escapeHtml(record?.pn || 'N/A');
     const description = escapeHtml(record?.tool_description || 'No description available.');
@@ -6664,6 +6688,24 @@ async function filterToolingByStep() {
   await applyAdvancedSupplierFiltersAndRefresh();
 }
 
+function getEffectiveToolingStatus(record) {
+  const numericId = Number(record?.id);
+  if (Number.isFinite(numericId)) {
+    const cardElement = document.querySelector(`.tooling-card[data-item-id="${numericId}"]`);
+    const cardStatus = (cardElement?.dataset?.status || '').toString().trim();
+    if (cardStatus) {
+      return cardStatus;
+    }
+
+    const localRecord = (toolingData || []).find((item) => Number(item?.id) === numericId);
+    const localStatus = (localRecord?.status || '').toString().trim();
+    if (localStatus) {
+      return localStatus;
+    }
+  }
+  return record?.status || '';
+}
+
 // Exibe ferramentais na interface (cards expansíveis)
 async function displayTooling(data) {
   const toolingList = document.getElementById('toolingList');
@@ -6687,7 +6729,7 @@ async function displayTooling(data) {
   let filteredData = data;
   if (expirationFilterEnabled) {
     filteredData = data.filter(item => {
-      // Ignora itens com análise concluída
+      // Ignora itens com Analise Concluida
       if (item.analysis_completed === 1) {
         return false;
       }
@@ -6723,7 +6765,7 @@ async function displayTooling(data) {
   toolingData = sortedData;
 
   // Atualiza métricas do supplier card com os dados ORIGINAIS (não filtrados)
-  // para manter o Total correto e recalcular expired/expiring ignorando análise concluída
+  // para manter o Total correto e recalcular expired/expiring ignorando Analise Concluida
   if (selectedSupplier) {
     updateSupplierCardMetricsFromItems(selectedSupplier, data);
   }
@@ -8439,6 +8481,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
   const classification = classifyToolingExpirationState(item);
   let expirationDateValue = resolveToolingExpirationDate(item);
   const isAnalysisCompleted = item.analysis_completed === 1;
+  const showAnalysisCompletedCheckbox = classification.state === 'expired' || classification.state === 'warning';
 
   // Usa a função de ícone para dentro do input do card
   const expirationIconHtml = getCardExpirationIcon(classification.state, isAnalysisCompleted);
@@ -8555,7 +8598,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   <input type="date" class="detail-input" value="${item.date_annual_volume || ''}" data-field="date_annual_volume" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
                 </div>
               </div>
-              <div class="detail-item detail-item-full">
+              <div class="${showAnalysisCompletedCheckbox ? 'detail-item' : 'detail-item detail-item-full'}">
                 <span class="detail-label">
                   Expiration (Calculated)
                   <i class="ph ph-info tooltip-icon" title="Formula: Production Date + ((Remaining ÷ Annual Volume) × 365) days" role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
@@ -8565,6 +8608,13 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   <input type="date" class="detail-input calculated with-icon" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
                 </div>
               </div>
+              ${showAnalysisCompletedCheckbox ? `
+              <div class="detail-item">
+                <label class="analysis-completed-checkbox">
+                  <input type="checkbox" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
+                  <span>An&aacute;lise Conclu&iacute;da</span>
+                </label>
+              </div>` : ''}
             </div>
             
             <!-- Column 2: Identification -->
@@ -8605,19 +8655,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                 </select>
                 <span class="detail-sublabel" id="stepDescription_${item.id}" data-step-description></span>
               </div>
-              ${(() => {
-      const classification = classifyToolingExpirationState(item);
-      const showCheckbox = classification.state === 'expired' || classification.state === 'warning';
-      if (!showCheckbox) return '';
-      const isChecked = item.analysis_completed === 1;
-      return `
-              <div class="detail-item detail-item-full">
-                <label class="analysis-completed-checkbox">
-                  <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
-                  <span>Análise Concluída</span>
-                </label>
-              </div>`;
-    })()}
+              
               <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
                 <span class="detail-label">Replacement Tooling</span>
                 <div class="replacement-link-field">
@@ -8898,6 +8936,9 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
   );
   const replacementChipVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
   const replacementEditorVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
+  const analysisClassification = classifyToolingExpirationState(item);
+  const isAnalysisCompleted = item.analysis_completed === 1;
+  const showAnalysisCompletedCheckbox = analysisClassification.state === 'expired' || analysisClassification.state === 'warning';
 
   // Calcula status de vencimento para ícone
   const expirationStatus = getExpirationStatus(expirationInputValue);
@@ -9060,7 +9101,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                       <input type="date" class="detail-input" value="${item.date_annual_volume || ''}" data-field="date_annual_volume" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
                     </div>
                   </div>
-                  <div class="detail-item detail-item-full">
+                  <div class="${showAnalysisCompletedCheckbox ? 'detail-item' : 'detail-item detail-item-full'}">
                     <span class="detail-label">
                       Expiration (Calculated)
                       <i class="ph ph-info tooltip-icon" title="Formula: Production Date + ((Remaining ÷ Annual Volume) × 365) days" role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
@@ -9074,6 +9115,13 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                     <input type="date" class="detail-input calculated" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
                     `}
                   </div>
+                  ${showAnalysisCompletedCheckbox ? `
+                  <div class="detail-item">
+                    <label class="analysis-completed-checkbox">
+                      <input type="checkbox" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
+                      <span>An&aacute;lise Conclu&iacute;da</span>
+                    </label>
+                  </div>` : ''}
                 </div>
                 
                 <!-- Column 2: Identification -->
@@ -9111,19 +9159,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                     </select>
                     <span class="detail-sublabel" id="stepDescription_${item.id}" data-step-description></span>
                   </div>
-                  ${(() => {
-      const classification = classifyToolingExpirationState(item);
-      const showCheckbox = classification.state === 'expired' || classification.state === 'warning';
-      if (!showCheckbox) return '';
-      const isChecked = item.analysis_completed === 1;
-      return `
-                  <div class="detail-item detail-item-full">
-                    <label class="analysis-completed-checkbox">
-                      <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
-                      <span>Análise Concluída</span>
-                    </label>
-                  </div>`;
-    })()}
+                  
                   <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
                     <span class="detail-label">Replacement Tooling</span>
                     <div class="replacement-link-field">
