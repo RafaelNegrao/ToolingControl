@@ -93,6 +93,7 @@ let stepsInfoElements = {
 };
 
 let expirationFilterEnabled = false;
+let toolingLifeChangeFilterEnabled = false;
 let stepsFilteredSuppliers = null; // Lista de suppliers filtrados por step (null = sem filtro)
 let columnFilters = {}; // Armazena os filtros de coluna ativos
 let columnSort = { column: null, direction: null }; // Armazena a ordenação atual (column: 'expiration' ou 'progress', direction: 'asc' ou 'desc')
@@ -753,6 +754,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   const supplierSearchInput = document.getElementById('supplierSearchInput');
   const clearSupplierSearchBtn = document.getElementById('clearSupplierSearch');
   const expirationFilterSwitch = document.getElementById('expirationFilterSwitch');
+  const toolingLifeChangeFilterSwitch = document.getElementById('toolingLifeChangeFilterSwitch');
   const supplierMenuBtn = document.getElementById('supplierMenuBtn');
   const supplierFilterOverlay = document.getElementById('supplierFilterOverlay');
   const commentDeleteOverlay = document.getElementById('commentDeleteOverlay');
@@ -1023,6 +1025,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  if (toolingLifeChangeFilterSwitch) {
+    toolingLifeChangeFilterSwitch.addEventListener('change', async (e) => {
+      await toggleToolingLifeChangeFilter(e.target.checked);
+    });
+  }
+
   // Listener para o botão de filtro de expiração - abre o modal
   const expirationFilterBtn = document.getElementById('expirationFilterBtn');
   const expirationFilterOverlay = document.getElementById('expirationFilterOverlay');
@@ -1269,7 +1277,11 @@ document.addEventListener('click', (e) => {
 async function loadSuppliers() {
   try {
     suppliersData = await window.api.getSuppliersWithStats();
-    applyExpirationFilter();
+    if (hasActiveAdvancedFilters()) {
+      await applyAdvancedSupplierFiltersAndRefresh();
+    } else {
+      applyExpirationFilter();
+    }
     populateAddToolingSuppliers();
     await loadResponsibles();
   } catch (error) {
@@ -1291,7 +1303,83 @@ async function loadResponsibles() {
   }
 }
 
+function getActiveStepFilters() {
+  return Array.from(document.querySelectorAll('input[data-steps-filter]:checked'))
+    .map(input => String(input.value || '').trim())
+    .filter(Boolean);
+}
+
+function hasActiveAdvancedFilters() {
+  return toolingLifeChangeFilterEnabled || getActiveStepFilters().length > 0;
+}
+
+function hasToolingLifeChange(item) {
+  return Boolean(getLatestToolingLifeChange(item));
+}
+
+function applyActiveToolingFiltersToData(data) {
+  let filtered = Array.isArray(data) ? [...data] : [];
+  const activeSteps = getActiveStepFilters();
+
+  if (activeSteps.length > 0) {
+    filtered = filtered.filter(item => activeSteps.includes(String(item.steps || '').trim()));
+  }
+
+  if (toolingLifeChangeFilterEnabled) {
+    filtered = filtered.filter(item => hasToolingLifeChange(item));
+  }
+
+  return filtered;
+}
+
+async function applyAdvancedSupplierFiltersAndRefresh() {
+  if (!hasActiveAdvancedFilters()) {
+    stepsFilteredSuppliers = null;
+    applyExpirationFilter();
+    if (selectedSupplier) {
+      await loadToolingBySupplier(selectedSupplier);
+    }
+    return;
+  }
+
+  try {
+    const allSuppliers = await window.api.getSuppliersWithStats();
+    const filteredSuppliers = [];
+
+    for (const supplierObj of allSuppliers) {
+      const supplierName = String(supplierObj?.supplier || '').trim();
+      if (!supplierName) continue;
+
+      const supplierTooling = await window.api.getToolingBySupplier(supplierName);
+      const filteredTooling = applyActiveToolingFiltersToData(supplierTooling);
+      if (filteredTooling.length > 0) {
+        filteredSuppliers.push({ ...supplierObj, items: filteredTooling });
+      }
+    }
+
+    stepsFilteredSuppliers = filteredSuppliers.map(s => String(s.supplier || ''));
+
+    const suppliersToDisplay = expirationFilterEnabled
+      ? filteredSuppliers.filter(supplier => ExpirationMetrics.hasCriticalItems(supplier))
+      : filteredSuppliers;
+
+    displaySuppliers(suppliersToDisplay);
+  } catch (error) {
+    console.error('Error applying advanced filters:', error);
+  }
+
+  if (selectedSupplier) {
+    await loadToolingBySupplier(selectedSupplier);
+  }
+}
+
 function applyExpirationFilter() {
+  if (hasActiveAdvancedFilters()) {
+    // Quando filtros avançados estão ativos (steps/tooling-life), usa pipeline dedicado.
+    applyAdvancedSupplierFiltersAndRefresh().catch(() => { });
+    return;
+  }
+
   if (!suppliersData) {
     displaySuppliers([]);
     return;
@@ -1328,6 +1416,11 @@ async function toggleExpirationFilter(enabled) {
   if (selectedSupplier) {
     await loadToolingBySupplier(selectedSupplier);
   }
+}
+
+async function toggleToolingLifeChangeFilter(enabled) {
+  toolingLifeChangeFilterEnabled = Boolean(enabled);
+  await applyAdvancedSupplierFiltersAndRefresh();
 }
 
 async function clearExpirationFilter() {
@@ -2906,15 +2999,7 @@ async function loadToolingBySupplier(supplier) {
     let data = await window.api.getToolingBySupplier(supplier);
     await ensureReplacementIdOptions();
 
-    // Aplicar filtro de steps se estiver ativo
-    const stepsFilter = document.getElementById('stepsFilter');
-    const selectedStep = stepsFilter ? stepsFilter.value : '';
-    if (selectedStep) {
-      data = data.filter(item => {
-        const itemStep = String(item.steps || '').trim();
-        return itemStep === selectedStep;
-      });
-    }
+    data = applyActiveToolingFiltersToData(data);
 
     toolingData = data;
 
@@ -3010,15 +3095,7 @@ async function searchTooling(term) {
       });
     }
 
-    // Aplicar filtro de steps se estiver ativo
-    const stepsFilter = document.getElementById('stepsFilter');
-    const selectedStep = stepsFilter ? stepsFilter.value : '';
-    if (selectedStep) {
-      filteredResults = filteredResults.filter(item => {
-        const itemStep = String(item.steps || '').trim();
-        return itemStep === selectedStep;
-      });
-    }
+    filteredResults = applyActiveToolingFiltersToData(filteredResults);
 
     // A função displayTooling já atualiza as métricas do supplier card internamente
     await displayTooling(filteredResults);
@@ -6584,109 +6661,7 @@ async function deleteToolingItem(id) {
 
 // Filtra tooling por Step (global - suppliers e tooling cards)
 async function filterToolingByStep() {
-  const stepsFilter = document.getElementById('stepsFilter');
-  const selectedStep = stepsFilter ? stepsFilter.value : '';
-
-  console.log('Filtering by step:', selectedStep);
-
-  // Remover mensagem de "no steps" se existir
-  const existingMsg = document.getElementById('noStepsMessage');
-  if (existingMsg) existingMsg.remove();
-
-  if (!selectedStep) {
-    // Sem filtro - limpar lista de suppliers filtrados
-    stepsFilteredSuppliers = null;
-
-    // Mostrar todos os supplier cards e restaurar métricas originais
-    const supplierCards = document.querySelectorAll('.supplier-card');
-    supplierCards.forEach(card => {
-      card.style.display = '';
-    });
-
-    // Recarregar suppliers para restaurar os contadores originais
-    await loadSuppliers();
-
-    // Recarregar tooling cards do supplier selecionado (sem filtro)
-    if (selectedSupplier) {
-      await loadToolingBySupplier(selectedSupplier);
-    }
-
-    return;
-  }
-
-  // COM filtro - filtrar suppliers e atualizar contadores
-  try {
-    // Buscar todos os suppliers com stats
-    const allSuppliers = await window.api.getSuppliersWithStats();
-    console.log('All suppliers:', allSuppliers.length);
-
-    // Para cada supplier, verificar se tem tooling com o step selecionado e calcular métricas
-    const suppliersWithStep = [];
-    const supplierMetrics = new Map();
-
-    for (const supplierObj of allSuppliers) {
-      const supplierName = supplierObj.supplier || '';
-      const supplierTooling = await window.api.getToolingBySupplier(supplierName);
-
-      // Filtrar tooling pelo step selecionado
-      const filteredTooling = supplierTooling.filter(item => {
-        const itemStep = String(item.steps || '').trim();
-        return itemStep === selectedStep;
-      });
-
-      if (filteredTooling.length > 0) {
-        suppliersWithStep.push(supplierName);
-        // Calcular métricas apenas dos itens filtrados
-        const metrics = ExpirationMetrics.fromItems(filteredTooling);
-        supplierMetrics.set(supplierName, metrics);
-      }
-    }
-
-    console.log('Suppliers with step:', suppliersWithStep);
-
-    // Salvar lista de suppliers filtrados globalmente
-    stepsFilteredSuppliers = suppliersWithStep;
-
-    // Atualizar suppliers na sidebar (mostrar apenas os que têm o step e atualizar contadores)
-    const supplierCards = document.querySelectorAll('.supplier-card');
-    let visibleSuppliers = 0;
-    supplierCards.forEach(card => {
-      const supplierName = card.dataset.supplier || '';
-      if (suppliersWithStep.includes(supplierName)) {
-        card.style.display = '';
-        visibleSuppliers++;
-
-        // Atualizar contadores com valores filtrados
-        const metrics = supplierMetrics.get(supplierName);
-        if (metrics) {
-          const totalEl = card.querySelector('[data-metric="total"]');
-          const expiredEl = card.querySelector('[data-metric="expired"]');
-          const expiringEl = card.querySelector('[data-metric="expiring"]');
-
-          if (totalEl) totalEl.textContent = metrics.total;
-          if (expiredEl) {
-            expiredEl.textContent = metrics.expired;
-            expiredEl.classList.toggle('expired', metrics.expired > 0);
-          }
-          if (expiringEl) {
-            expiringEl.textContent = metrics.expiring;
-            expiringEl.classList.toggle('critical', metrics.expiring > 0);
-          }
-        }
-      } else {
-        card.style.display = 'none';
-      }
-    });
-    console.log('Visible suppliers:', visibleSuppliers);
-
-    // Se tiver supplier selecionado, recarregar os tooling cards (já filtrados)
-    if (selectedSupplier) {
-      await loadToolingBySupplier(selectedSupplier);
-    }
-
-  } catch (error) {
-    console.error('Error filtering by step:', error);
-  }
+  await applyAdvancedSupplierFiltersAndRefresh();
 }
 
 // Exibe ferramentais na interface (cards expansíveis)
@@ -6885,6 +6860,43 @@ function setViewMode(mode) {
 }
 
 // Renderiza a visualização de planilha
+function getLatestToolingLifeChange(item) {
+  if (!item || !item.comments) return null;
+
+  let commentsArray = [];
+  try {
+    commentsArray = Array.isArray(item.comments) ? item.comments : JSON.parse(item.comments);
+  } catch (_) {
+    commentsArray = [];
+  }
+  if (!Array.isArray(commentsArray) || commentsArray.length === 0) return null;
+
+  for (let i = commentsArray.length - 1; i >= 0; i -= 1) {
+    const entry = commentsArray[i];
+    const text = String(entry?.text || '');
+    if (!text) continue;
+
+    const lines = text.split(/\r?\n/);
+    for (let j = lines.length - 1; j >= 0; j -= 1) {
+      const line = String(lines[j] || '').trim();
+      const match = line.match(/^(?:Tooling Life \(qty\)|Tooling Life Qty|Tooling Life),\s*(.+?)\s*-->\s*(.+)$/i);
+      if (!match) continue;
+
+      const oldValue = Number(parseLocalizedNumber(match[1]));
+      const newValue = Number(parseLocalizedNumber(match[2]));
+      if (!Number.isFinite(oldValue) || !Number.isFinite(newValue) || oldValue === newValue) {
+        return null;
+      }
+
+      const direction = newValue > oldValue ? 'up' : 'down';
+      const title = `Tooling Life ${direction === 'up' ? 'increased' : 'decreased'}: ${match[1]} -> ${match[2]}`;
+      return { direction, title };
+    }
+  }
+
+  return null;
+}
+
 function renderSpreadsheetView() {
   const spreadsheetBody = document.getElementById('spreadsheetBody');
   if (!spreadsheetBody || !toolingData) return;
@@ -6937,6 +6949,14 @@ function renderSpreadsheetView() {
     const hasChainMembership = chainMembership?.get(membershipKey) === true;
     const replacementIdValue = sanitizeReplacementId(item.replacement_tooling_id);
     const hasReplacementLink = replacementIdValue !== '';
+    const toolingLifeChange = getLatestToolingLifeChange(item);
+    const toolingLifeChangeIconHtml = toolingLifeChange ? `
+          <span class="spreadsheet-icon-info" title="${escapeHtml(toolingLifeChange.title)}">
+            <span class="tooling-life-change-icon ${toolingLifeChange.direction}">
+              <i class="ph ${toolingLifeChange.direction === 'up' ? 'ph-arrow-up' : 'ph-arrow-down'}"></i>
+            </span>
+          </span>
+        ` : '';
 
     const isSelected = selectedToolingIds.has(item.id);
     const checkboxHtml = selectionModeActive ? `
@@ -7012,6 +7032,7 @@ function renderSpreadsheetView() {
           </div>
         </td>
         <td class="spreadsheet-icons">
+          ${toolingLifeChangeIconHtml}
           <span class="spreadsheet-icon-chain" ${hasChainMembership ? '' : 'hidden'} title="Replacement chain" onclick="event.stopPropagation(); openReplacementTimelineOverlay(${item.id})">
             <i class="ph ph-git-branch"></i>
           </span>
@@ -7616,6 +7637,7 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
 
       // Insere após a linha atual
       row.after(detailRow);
+      requestAnimationFrame(() => detailRow.classList.add('is-open'));
 
       // Inicializa o conteúdo do card
       const cardContainer = detailRow.querySelector('.spreadsheet-card-container');
@@ -10252,13 +10274,38 @@ async function updateInterfaceAfterSave() {
 async function loadAnalytics() {
   try {
     const analytics = await window.api.getAnalytics();
+    const stepChangeAverage = await window.api.getStepChangeAverage();
+
+    // Usa snapshot fresco para cálculos globais dos cards (não depende de filtro ativo na UI)
+    let suppliersSnapshot = Array.isArray(suppliersData) && suppliersData.length > 0
+      ? suppliersData
+      : [];
+    if (suppliersSnapshot.length === 0) {
+      try {
+        const freshSuppliers = await window.api.getSuppliersWithStats();
+        if (Array.isArray(freshSuppliers)) {
+          suppliersSnapshot = freshSuppliers;
+        }
+      } catch (error) {
+        // fallback silencioso para suppliersData já carregado
+      }
+    }
+
+    const allItems = suppliersSnapshot.flatMap(supplier => Array.isArray(supplier.items) ? supplier.items : []);
+    const toolingLifeChangeTotals = allItems.reduce((acc, item) => {
+      const change = getLatestToolingLifeChange(item);
+      if (!change) return acc;
+      if (change.direction === 'up') acc.increase += 1;
+      if (change.direction === 'down') acc.decrease += 1;
+      return acc;
+    }, { increase: 0, decrease: 0 });
 
     // Calcula métricas usando a mesma lógica da barra inferior
     let expiredCount = 0;
     let expiringCount = 0;
 
-    if (Array.isArray(suppliersData) && suppliersData.length > 0) {
-      const summary = suppliersData.reduce((acc, supplier) => {
+    if (suppliersSnapshot.length > 0) {
+      const summary = suppliersSnapshot.reduce((acc, supplier) => {
         // Usa APENAS ExpirationMetrics.fromItems() para calcular métricas
         const metrics = ExpirationMetrics.fromItems(supplier.items || []);
         acc.expired += metrics.expired;
@@ -10278,6 +10325,16 @@ async function loadAnalytics() {
     document.getElementById('totalExpired').textContent = expiredCount;
     document.getElementById('totalExpiring').textContent = expiringCount;
     document.getElementById('totalSuppliers').textContent = analytics.suppliers || 0;
+    document.getElementById('totalToolingLifeIncrease').textContent = toolingLifeChangeTotals.increase;
+    document.getElementById('totalToolingLifeDecrease').textContent = toolingLifeChangeTotals.decrease;
+    const avgStepChangeElement = document.getElementById('avgStepChangeInterval');
+    if (avgStepChangeElement) {
+      const avgDays = stepChangeAverage?.avgDays;
+      const intervalsCount = stepChangeAverage?.intervalsCount || 0;
+      avgStepChangeElement.textContent = (intervalsCount > 0 && Number.isFinite(avgDays))
+        ? `${avgDays.toFixed(1)} d`
+        : 'N/A';
+    }
 
     // Steps summary
     await displayStepsSummary();
@@ -10480,12 +10537,13 @@ async function displayStepsSummary() {
       const bodyRows = allSteps.map(step => {
         const months = stepMonthMap[step] || [];
         const stepObj = stepsArray.find(s => s.steps === step) || {};
-        // build supplier cards for bar (name | count cards)
-          const supplierBarHtml = (stepObj.suppliers || []).map(s =>
-           `<div class="suppliers-bar-item" data-supplier="${escapeHtml(s.supplier)}">
-              ${escapeHtml(s.supplier)}
-            </div>`
-          ).join('');
+        const suppliersCount = (stepObj.suppliers || []).length;
+        const supplierBarHtml = suppliersCount > 0
+          ? `<button type="button" class="matrix-info-btn" data-step="${escapeHtml(step)}" title="Show ${suppliersCount} supplier(s)">
+               <i class="ph ph-info"></i>
+               <span class="matrix-info-count">${suppliersCount}</span>
+             </button>`
+          : '';
 
         let cells = '';
         let i = 0;
@@ -10496,10 +10554,8 @@ async function displayStepsSummary() {
             while (i + span < matrixMonths.length && months.includes(matrixMonths[i + span].cal)) {
               span++;
             }
-            // attach data-step and data-suppliers (pipe-separated) to the bar for later listeners
-            const suppliersDataAttr = escapeHtml((stepObj.suppliers || []).map(s => s.supplier).join('|'));
             cells += `<td class="matrix-cell matrix-cell--active" colspan="${span}">
-                        <div class="suppliers-bar" data-step="${escapeHtml(step)}" data-suppliers="${suppliersDataAttr}">${supplierBarHtml}</div>
+                        <div class="suppliers-bar" data-step="${escapeHtml(step)}">${supplierBarHtml}</div>
                       </td>`;
             i += span;
           } else {
@@ -10537,27 +10593,44 @@ async function displayStepsSummary() {
         // fail silently
       }
 
-      // --- Hook: adiciona listeners nas barras de fornecedores ---
+      // --- Hook: clique no ícone "i" para abrir o balão com suppliers ---
       try {
         const bars = timelineContainer.querySelectorAll('.suppliers-bar');
         bars.forEach(bar => {
           const step = bar.getAttribute('data-step');
-          const suppliersAttr = bar.getAttribute('data-suppliers') || '';
-          const suppliersList = suppliersAttr ? suppliersAttr.split('|').map(s => s) : [];
-
-          // Hover immediate: destacar barra e aumentar card de step correspondente
-          bar.addEventListener('mouseenter', (e) => {
-            // highlight corresponding step column only (do not add hover class to bar itself)
-            const stepCol = document.querySelector(`.step-column[data-step="${step}"]`);
-            if (stepCol) stepCol.classList.add('step-column--hovered');
-
-            // no tooltip or bar hover effects when moving over supplier items
+          bar.addEventListener('mouseenter', () => {
+            const stepCol = container.querySelector(`.step-column[data-step="${step}"]`);
+            const allStepCols = container.querySelectorAll('.step-column');
+            allStepCols.forEach(col => {
+              if (col === stepCol) {
+                col.classList.add('step-column-highlight');
+                col.classList.remove('step-column-dimmed');
+              } else {
+                col.classList.remove('step-column-highlight');
+                col.classList.add('step-column-dimmed');
+              }
+            });
+            bar.classList.add('bar-hover-active');
           });
 
-          bar.addEventListener('mouseleave', (e) => {
-            // clear only step column highlight
-            const stepCol = document.querySelector(`.step-column[data-step="${step}"]`);
-            if (stepCol) stepCol.classList.remove('step-column--hovered');
+          bar.addEventListener('mouseleave', () => {
+            const allStepCols = container.querySelectorAll('.step-column');
+            allStepCols.forEach(col => {
+              col.classList.remove('step-column-highlight');
+              col.classList.remove('step-column-dimmed');
+            });
+            bar.classList.remove('bar-hover-active');
+          });
+        });
+
+        const infoButtons = timelineContainer.querySelectorAll('.matrix-info-btn');
+        infoButtons.forEach(btn => {
+          btn.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const step = btn.getAttribute('data-step');
+            const stepObj = stepsArray.find(s => String(s.steps) === String(step));
+            const suppliers = Array.isArray(stepObj?.suppliers) ? stepObj.suppliers : [];
+            showSuppliersTooltip(btn, suppliers);
           });
         });
       } catch (e) {
@@ -10631,53 +10704,88 @@ async function displayStepsSummary() {
   }
 }
 
-// Mostra um tooltip com a lista de fornecedores para a barra (posicionado acima da barra)
-function showSuppliersTooltip(barEl, suppliersList) {
-  // remove tooltip anterior
-  const prev = document.querySelector('.suppliers-tooltip');
-  if (prev) prev.remove();
-
+// Mostra um balão saindo do ícone com a lista de suppliers do step
+function showSuppliersTooltip(anchorEl, suppliersList) {
+  const previous = document.querySelector('.matrix-suppliers-modal');
+  if (previous) previous.remove();
   if (!Array.isArray(suppliersList) || suppliersList.length === 0) return;
 
-  const tooltip = document.createElement('div');
-  tooltip.className = 'suppliers-tooltip';
+  const modal = document.createElement('div');
+  modal.className = 'matrix-suppliers-modal';
+  modal.innerHTML = `
+    <div class="matrix-modal-header">
+      <div class="matrix-modal-title">Suppliers (${suppliersList.length})</div>
+      <button type="button" class="matrix-modal-close" aria-label="Close"><i class="ph ph-x"></i></button>
+    </div>
+    <div class="matrix-modal-list"></div>
+  `;
 
-  const title = document.createElement('div');
-  title.className = 'suppliers-tooltip-title';
-  title.textContent = 'Suppliers';
-  tooltip.appendChild(title);
-
-  const list = document.createElement('div');
-  list.className = 'suppliers-tooltip-list';
-  suppliersList.forEach(name => {
-    const item = document.createElement('div');
-    item.className = 'suppliers-tooltip-item';
-    item.textContent = name;
-    list.appendChild(item);
-  });
-  tooltip.appendChild(list);
-
-  document.body.appendChild(tooltip);
-
-  // position
-  const rect = barEl.getBoundingClientRect();
-  // temporarily make visible to measure
-  tooltip.style.opacity = '0';
-  requestAnimationFrame(() => {
-    const ttRect = tooltip.getBoundingClientRect();
-    let left = rect.left + (rect.width / 2) - (ttRect.width / 2);
-    left = Math.max(8, Math.min(left, window.innerWidth - ttRect.width - 8));
-    let top = rect.top - ttRect.height - 8;
-    if (top < 8) top = rect.bottom + 8; // fallback below
-    tooltip.style.left = `${left}px`;
-    tooltip.style.top = `${top}px`;
-    tooltip.style.opacity = '1';
+  const listEl = modal.querySelector('.matrix-modal-list');
+  suppliersList.forEach(supplierEntry => {
+    const supplierName = escapeHtml(String(supplierEntry?.supplier || 'N/A'));
+    const supplierItems = Array.isArray(supplierEntry?.items) ? supplierEntry.items : [];
+    const metrics = ExpirationMetrics.fromItems(supplierItems);
+    const row = document.createElement('div');
+    row.className = 'matrix-supplier-row';
+    row.innerHTML = `
+      <div class="matrix-supplier-name">${supplierName}</div>
+      <div class="matrix-supplier-stats">
+        <span class="matrix-stat matrix-stat--total">Total: <strong class="matrix-stat-val">${metrics.total}</strong></span>
+        <span class="matrix-stat matrix-stat--expired">Expired: <strong class="matrix-stat-val">${metrics.expired}</strong></span>
+        <span class="matrix-stat matrix-stat--expiring">Expiring: <strong class="matrix-stat-val">${metrics.expiring}</strong></span>
+      </div>
+    `;
+    listEl.appendChild(row);
   });
 
-  // remove on scroll or resize to avoid orphaned tooltips
-  function removeTooltip() { const t = document.querySelector('.suppliers-tooltip'); if (t) t.remove(); window.removeEventListener('scroll', removeTooltip); window.removeEventListener('resize', removeTooltip); }
-  window.addEventListener('scroll', removeTooltip, { passive: true });
-  window.addEventListener('resize', removeTooltip);
+  document.body.appendChild(modal);
+
+  const anchorRect = anchorEl.getBoundingClientRect();
+  const modalWidth = modal.offsetWidth;
+  const modalHeight = modal.offsetHeight;
+  let left = anchorRect.left + (anchorRect.width / 2) - (modalWidth / 2);
+  left = Math.max(8, Math.min(left, window.innerWidth - modalWidth - 8));
+
+  let top = anchorRect.top - modalHeight - 12;
+  let arrowClass = 'arrow-bottom';
+  if (top < 8) {
+    top = anchorRect.bottom + 12;
+    arrowClass = 'arrow-top';
+  }
+  modal.classList.add(arrowClass);
+  modal.style.left = `${left}px`;
+  modal.style.top = `${top}px`;
+
+  const arrowLeft = Math.max(14, Math.min(modalWidth - 14, (anchorRect.left + anchorRect.width / 2) - left));
+  modal.style.setProperty('--arrow-left', `${arrowLeft}px`);
+
+  const closeModal = () => {
+    const current = document.querySelector('.matrix-suppliers-modal');
+    if (current) current.remove();
+    document.removeEventListener('mousedown', onOutsideClick, true);
+    document.removeEventListener('keydown', onEscape, true);
+  };
+  const onOutsideClick = (event) => {
+    if (!modal.contains(event.target) && !anchorEl.contains(event.target)) {
+      closeModal();
+    }
+  };
+  const onEscape = (event) => {
+    if (event.key === 'Escape') closeModal();
+  };
+
+  const closeBtn = modal.querySelector('.matrix-modal-close');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      closeModal();
+    });
+  }
+
+  setTimeout(() => {
+    document.addEventListener('mousedown', onOutsideClick, true);
+    document.addEventListener('keydown', onEscape, true);
+  }, 0);
 }
 
 function syncStatusBarWithSuppliers() {
@@ -11334,4 +11442,3 @@ function initSettingsCarouselScrollListener() {
     }
   });
 }
-

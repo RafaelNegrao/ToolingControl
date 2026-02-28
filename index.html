@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html>
 
 <head>
@@ -68,21 +68,6 @@
             <button class="supplier-menu-btn" id="supplierMenuBtn" type="button" title="Export/Import options">
               <i class="ph ph-dots-three-vertical"></i>
             </button>
-            <button class="sidebar-toggle-btn" id="sidebarToggleBtn" onclick="toggleSidebar()" title="Toggle sidebar">
-              <i class="ph ph-caret-left" id="sidebarToggleIcon"></i>
-            </button>
-          </div>
-          <div class="steps-filter-container">
-            <select id="stepsFilter" class="steps-filter-select" onchange="filterToolingByStep()">
-              <option value="">All Steps</option>
-              <option value="1">1 - Control Data Update</option>
-              <option value="2">2 - Critical Tooling Identification</option>
-              <option value="3">3 - Supplier Validation Request</option>
-              <option value="4">4 - Critical Tooling Reassessment</option>
-              <option value="5">5 - On-Site Technical Analysis</option>
-              <option value="6">6 - Technical Confirmation</option>
-              <option value="7">7 - Supply Continuity Strategy</option>
-            </select>
           </div>
           <div class="supplier-list scrollable" id="supplierList">
             <!-- Cards de fornecedores serão inseridos aqui -->
@@ -224,6 +209,7 @@
             <div class="replacement-picker-body scrollable" data-replacement-overlay-list>
               <!-- Options injected dynamically -->
             </div>
+            <div class="replacement-picker-footer">Obsolete tooling is not listed.</div>
           </div>
         </div>
 
@@ -672,7 +658,7 @@
 
       <!-- Expiration Filter Modal -->
       <div class="modal-overlay" id="expirationFilterOverlay">
-        <div class="modal-card modal-card-small">
+        <div class="modal-card modal-card-small modal-card-filters">
           <div class="modal-icon">
             <i class="ph ph-funnel"></i>
           </div>
@@ -686,6 +672,46 @@
               <input type="checkbox" id="expirationFilterSwitch" class="expiration-switch">
               <span class="expiration-slider"></span>
             </label>
+            <label class="filter-option-item">
+              <div class="filter-option-info">
+                <span class="filter-option-label">Show only Tooling Life changes (↑/↓)</span>
+                <span class="filter-option-desc">Only toolings with increase or decrease in Tooling Life</span>
+              </div>
+              <input type="checkbox" id="toolingLifeChangeFilterSwitch" class="expiration-switch">
+              <span class="expiration-slider"></span>
+            </label>
+            <div class="filter-option-divider"></div>
+            <div class="filter-option-group-title">Steps</div>
+            <div id="stepsFilterInline" class="steps-filter-inline-row">
+              <label class="steps-inline-option">
+                <input type="checkbox" value="1" data-steps-filter onchange="filterToolingByStep()">
+                <span>1</span>
+              </label>
+              <label class="steps-inline-option">
+                <input type="checkbox" value="2" data-steps-filter onchange="filterToolingByStep()">
+                <span>2</span>
+              </label>
+              <label class="steps-inline-option">
+                <input type="checkbox" value="3" data-steps-filter onchange="filterToolingByStep()">
+                <span>3</span>
+              </label>
+              <label class="steps-inline-option">
+                <input type="checkbox" value="4" data-steps-filter onchange="filterToolingByStep()">
+                <span>4</span>
+              </label>
+              <label class="steps-inline-option">
+                <input type="checkbox" value="5" data-steps-filter onchange="filterToolingByStep()">
+                <span>5</span>
+              </label>
+              <label class="steps-inline-option">
+                <input type="checkbox" value="6" data-steps-filter onchange="filterToolingByStep()">
+                <span>6</span>
+              </label>
+              <label class="steps-inline-option">
+                <input type="checkbox" value="7" data-steps-filter onchange="filterToolingByStep()">
+                <span>7</span>
+              </label>
+            </div>
           </div>
           <div class="modal-actions">
             <button class="btn-secondary" type="button" onclick="closeExpirationFilterOverlay()">Close</button>
@@ -879,8 +905,7 @@
       <div class="tab-content" id="tab-analytics">
         <!-- header removed per user request -->
         <div class="content-body" style="padding: 0; overflow: hidden; display: flex; flex-direction: column;">
-          <div class="analytics-grid"
-            style="grid-template-columns: repeat(4, 1fr); padding: 20px 20px 0 20px; gap: 20px; flex-shrink: 0;">
+          <div class="analytics-grid" style="padding: 20px 20px 0 20px; gap: 20px; flex-shrink: 0;">
             <div class="metric-card">
               <div class="metric-icon">
                 <i class="ph ph-wrench"></i>
@@ -915,6 +940,33 @@
               <div class="metric-content">
                 <h3>Fornecedores</h3>
                 <p class="metric-value" id="totalSuppliers">0</p>
+              </div>
+            </div>
+            <div class="metric-card metric-card--active">
+              <div class="metric-icon">
+                <i class="ph ph-trend-up"></i>
+              </div>
+              <div class="metric-content">
+                <h3>Aumento de Tooling Life</h3>
+                <p class="metric-value" id="totalToolingLifeIncrease">0</p>
+              </div>
+            </div>
+            <div class="metric-card metric-card--expired">
+              <div class="metric-icon">
+                <i class="ph ph-trend-down"></i>
+              </div>
+              <div class="metric-content">
+                <h3>Reducao de Tooling Life</h3>
+                <p class="metric-value" id="totalToolingLifeDecrease">0</p>
+              </div>
+            </div>
+            <div class="metric-card metric-card--info">
+              <div class="metric-icon">
+                <i class="ph ph-timer"></i>
+              </div>
+              <div class="metric-content">
+                <h3>Media entre Steps</h3>
+                <p class="metric-value" id="avgStepChangeInterval">N/A</p>
               </div>
             </div>
           </div>
@@ -978,15 +1030,6 @@
                     <span class="meta-value">On demand</span>
                   </div>
                 </div>
-              </section>
-
-              <section class="settings-card">
-                <h3>Data</h3>
-                <p class="settings-description">Reload data whenever there is a new reference file.</p>
-                <button class="btn-primary" id="reloadData">
-                  <i class="ph ph-arrow-clockwise"></i>
-                  Reload Data
-                </button>
               </section>
 
               <section class="settings-card settings-card--tech">
@@ -1193,3 +1236,4 @@
 </body>
 
 </html>
+

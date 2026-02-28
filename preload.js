@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('api', {
   getUniqueResponsibles: () => ipcRenderer.invoke('get-unique-responsibles'),
   getAnalytics: () => ipcRenderer.invoke('get-analytics'),
   getStepsSummary: () => ipcRenderer.invoke('get-steps-summary'),
+  getStepSuppliersMetrics: (step) => ipcRenderer.invoke('get-step-suppliers-metrics', step),
+  getStepChangeAverage: () => ipcRenderer.invoke('get-step-change-average'),
   updateTooling: (id, data) => ipcRenderer.invoke('update-tooling', id, data),
   createTooling: (data) => ipcRenderer.invoke('create-tooling', data),
   deleteTooling: (id) => ipcRenderer.invoke('delete-tooling', id),

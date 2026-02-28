@@ -1030,6 +1030,7 @@ function checkAndAddColumns() {
     { name: 'comments', type: 'TEXT' },
     { name: 'todos', type: 'TEXT' },
     { name: 'stim_tooling_management', type: 'TEXT' },
+    { name: 'invoice', type: 'TEXT' },
     { name: 'vpcr', type: 'TEXT' },
     { name: 'replacement_tooling_id', type: 'INTEGER' },
     { name: 'analysis_completed', type: 'INTEGER' }
@@ -1718,7 +1719,11 @@ ipcMain.handle('get-tooling-by-replacement-id', async (event, replacementId) => 
 ipcMain.handle('get-all-tooling-ids', async () => {
   return new Promise((resolve, reject) => {
     db.all(
-      'SELECT id, pn, pn_description, supplier, tool_description FROM ferramental ORDER BY id ASC',
+      `SELECT id, pn, pn_description, supplier, tool_description, status, replacement_tooling_id
+       FROM ferramental
+       WHERE UPPER(TRIM(COALESCE(status, ''))) != 'OBSOLETE'
+         AND (replacement_tooling_id IS NULL OR TRIM(CAST(replacement_tooling_id AS TEXT)) = '')
+       ORDER BY id ASC`,
       [],
       (err, rows) => {
         if (err) {
@@ -1848,19 +1853,15 @@ ipcMain.handle('get-steps-summary', async () => {
         return;
       }
 
-      // Second query: suppliers per step
+      // Second query: get all tools mapped to their supplier and step 
       db.all(`
-        SELECT 
-          steps,
-          supplier,
-          COUNT(*) as count
+        SELECT *
         FROM ferramental
         WHERE steps IS NOT NULL 
           AND TRIM(steps) != '' 
           AND TRIM(steps) != '0'
           AND supplier IS NOT NULL
           AND TRIM(supplier) != ''
-        GROUP BY steps, supplier
         ORDER BY CAST(steps AS INTEGER), supplier COLLATE NOCASE
       `, [], (err2, supplierRows) => {
         if (err2) {
@@ -1868,24 +1869,68 @@ ipcMain.handle('get-steps-summary', async () => {
           return;
         }
 
-        // Build a map of suppliers per step
+        // Build a map of suppliers per step with their items
         const suppliersMap = {};
-        (supplierRows || []).forEach(sr => {
-          if (!suppliersMap[sr.steps]) {
-            suppliersMap[sr.steps] = [];
+        (supplierRows || []).forEach(item => {
+          if (!suppliersMap[item.steps]) {
+            suppliersMap[item.steps] = {};
           }
-          suppliersMap[sr.steps].push({ supplier: sr.supplier, count: sr.count });
+
+          const supplierName = String(item.supplier || '').trim();
+          if (!suppliersMap[item.steps][supplierName]) {
+            suppliersMap[item.steps][supplierName] = {
+              supplier: supplierName,
+              items: []
+            };
+          }
+          suppliersMap[item.steps][supplierName].items.push(item);
         });
 
         // Merge suppliers into step rows
-        const result = (rows || []).map(row => ({
-          steps: row.steps,
-          count: row.count,
-          suppliers: suppliersMap[row.steps] || []
-        }));
+        const result = (rows || []).map(row => {
+          // map the obj to array
+          const stepSuppliersMap = suppliersMap[row.steps] || {};
+          const suppliersArr = Object.values(stepSuppliersMap);
+
+          return {
+            steps: row.steps,
+            count: row.count,
+            suppliers: suppliersArr
+          };
+        });
 
         resolve(result);
       });
+    });
+  });
+});
+
+// handler que retorna métricas (total/expired/expiring) por fornecedor para um passo
+ipcMain.handle('get-step-suppliers-metrics', async (event, step) => {
+  return new Promise((resolve, reject) => {
+    db.all(`
+      SELECT supplier,
+             COUNT(*) as total,
+             SUM(CASE
+                    WHEN ((percent_tooling_life IS NOT NULL AND CAST(percent_tooling_life AS REAL) >= 100.0)
+                          OR (tooling_life_qty > 0 AND produced >= tooling_life_qty))
+                         AND NOT (UPPER(status) = 'OBSOLETE' AND replacement_tooling_id IS NOT NULL AND replacement_tooling_id != '')
+                    THEN 1 ELSE 0 END) as expired,
+             SUM(CASE
+                    WHEN NOT ((percent_tooling_life IS NOT NULL AND CAST(percent_tooling_life AS REAL) >= 100.0)
+                          OR (tooling_life_qty > 0 AND produced >= tooling_life_qty))
+                         AND expiration_date IS NOT NULL
+                         AND julianday(expiration_date) - julianday('now') > 0
+                         AND julianday(expiration_date) - julianday('now') <= 730
+                         AND NOT (UPPER(status) = 'OBSOLETE' AND replacement_tooling_id IS NOT NULL AND replacement_tooling_id != '')
+                    THEN 1 ELSE 0 END) as expiring
+      FROM ferramental
+      WHERE steps = ?
+        AND supplier IS NOT NULL AND TRIM(supplier) != ''
+      GROUP BY supplier
+    `, [step], (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows || []);
     });
   });
 });
@@ -3570,6 +3615,45 @@ ipcMain.handle('clear-all-step-history', async () => {
     console.error('[IPC] Error clearing all step history:', err);
     throw err;
   }
+});
+
+ipcMain.handle('get-step-change-average', async () => {
+  return new Promise((resolve, reject) => {
+    const query = `
+      SELECT
+        AVG(diff_days) AS avg_days,
+        COUNT(*) AS intervals_count
+      FROM (
+        SELECT
+          tooling_id,
+          (julianday(changed_at) - julianday(prev_changed_at)) AS diff_days
+        FROM (
+          SELECT
+            tooling_id,
+            changed_at,
+            LAG(changed_at) OVER (
+              PARTITION BY tooling_id
+              ORDER BY datetime(changed_at) ASC
+            ) AS prev_changed_at
+          FROM step_history
+        ) ranked
+        WHERE prev_changed_at IS NOT NULL
+      ) intervals
+    `;
+
+    db.get(query, [], (err, row) => {
+      if (err) {
+        console.error('[StepHistory] Error getting average step change interval:', err);
+        reject(err);
+        return;
+      }
+
+      resolve({
+        avgDays: row?.avg_days !== null && row?.avg_days !== undefined ? Number(row.avg_days) : null,
+        intervalsCount: row?.intervals_count ? Number(row.intervals_count) : 0
+      });
+    });
+  });
 });
 
 // Window control handlers
