@@ -1263,6 +1263,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     closeAllReplacementPickers();
     closeReplacementPickerOverlay();
+    closeAllStepsDropdowns();
     // Fechar barra de pesquisa do status bar
     const statusSearchWrapper = document.getElementById('statusSearchInputWrapper');
     if (statusSearchWrapper && statusSearchWrapper.classList.contains('active')) {
@@ -3537,6 +3538,101 @@ function getStepResponsible(stepValue) {
   return responsibles[stepValue] || '';
 }
 
+function buildStepOptionsMarkup(currentStep) {
+  const normalizedCurrent = (currentStep || '').toString().trim();
+  const stepValues = ['1', '2', '3', '4', '5', '6', '7'];
+
+  let options = `<option value="" ${!normalizedCurrent ? 'selected' : ''}></option>`;
+  options += stepValues.map((step) => {
+    const selected = normalizedCurrent === step ? 'selected' : '';
+    return `<option value="${step}" ${selected}>${escapeHtml(step)}</option>`;
+  }).join('');
+
+  return options;
+}
+
+function buildStepsDropdownOptionsMarkup(currentStep, cardIndex, itemId) {
+  const normalizedCurrent = (currentStep || '').toString().trim();
+  const stepValues = ['1', '2', '3', '4', '5', '6', '7'];
+
+  return stepValues.map((step) => {
+    const description = getStepDescription(step);
+    const isSelected = normalizedCurrent === step ? ' is-selected' : '';
+    return `<button type="button" class="steps-dropdown-option${isSelected}" data-step-value="${step}" onclick="selectStepsDropdownOption(event, ${cardIndex}, ${itemId}, '${step}')">
+      <span class="steps-option-number">${escapeHtml(step)}</span>
+      <span class="steps-option-description">${escapeHtml(description)}</span>
+    </button>`;
+  }).join('');
+}
+
+function closeAllStepsDropdowns(exceptDropdown = null) {
+  document.querySelectorAll('[data-steps-dropdown]').forEach((dropdown) => {
+    if (exceptDropdown && dropdown === exceptDropdown) {
+      return;
+    }
+    const panel = dropdown.querySelector('[data-steps-dropdown-panel]');
+    const trigger = dropdown.querySelector('[data-steps-dropdown-button]');
+    if (panel) {
+      panel.hidden = true;
+    }
+    if (trigger) {
+      trigger.classList.remove('is-open');
+    }
+  });
+}
+
+function toggleStepsDropdown(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  const trigger = event?.currentTarget;
+  const dropdown = trigger?.closest('[data-steps-dropdown]');
+  if (!dropdown) {
+    return;
+  }
+  const panel = dropdown.querySelector('[data-steps-dropdown-panel]');
+  if (!panel) {
+    return;
+  }
+  const willOpen = panel.hidden;
+  closeAllStepsDropdowns(dropdown);
+  panel.hidden = !willOpen;
+  trigger.classList.toggle('is-open', willOpen);
+}
+
+function selectStepsDropdownOption(event, cardIndex, itemId, stepValue) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  const dropdown = event?.currentTarget?.closest('[data-steps-dropdown]');
+  if (!dropdown) {
+    return;
+  }
+
+  const hiddenSelect = dropdown.querySelector(`select[data-field="steps"][data-id="${itemId}"]`);
+  if (!hiddenSelect) {
+    return;
+  }
+
+  const normalizedValue = (stepValue || '').toString().trim();
+  hiddenSelect.value = normalizedValue;
+
+  const valueLabel = dropdown.querySelector('[data-steps-dropdown-value]');
+  if (valueLabel) {
+    valueLabel.textContent = normalizedValue;
+  }
+
+  dropdown.querySelectorAll('.steps-dropdown-option').forEach((option) => {
+    const isActive = String(option.getAttribute('data-step-value') || '') === normalizedValue;
+    option.classList.toggle('is-selected', isActive);
+  });
+
+  handleStepsSelectChange(cardIndex, itemId, hiddenSelect);
+  closeAllStepsDropdowns();
+}
+
 function handleStepsSelectChange(cardIndex, itemId, selectEl) {
   if (selectEl) {
     const value = (selectEl.value || '').trim();
@@ -3544,23 +3640,6 @@ function handleStepsSelectChange(cardIndex, itemId, selectEl) {
 
     // Sincroniza steps com a linha da spreadsheet
     syncSpreadsheetFromExpandedCard(itemId, 'steps', value);
-
-    // Update step description label with description and responsible
-    const descriptionLabel = document.getElementById(`stepDescription_${itemId}`);
-    if (descriptionLabel) {
-      const description = getStepDescription(value);
-      const responsible = getStepResponsible(value);
-
-      if (description) {
-        descriptionLabel.innerHTML = `<div style="color: #8b92a7; line-height: 1.4;">${description}<br><span style="font-size: 0.9em;">Responsible: ${responsible}</span></div>`;
-        descriptionLabel.style.display = 'block';
-        descriptionLabel.style.textAlign = 'left';
-        descriptionLabel.style.marginTop = '4px';
-      } else {
-        descriptionLabel.textContent = '';
-        descriptionLabel.style.display = 'none';
-      }
-    }
   }
   autoSaveTooling(itemId, true);
 }
@@ -7696,27 +7775,6 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
           initCardAttachmentDragAndDrop(dropzone, itemId);
         }
 
-        // Initialize step description and responsible
-        const stepSelect = cardContainer.querySelector(`select[data-field="steps"][data-id="${itemId}"]`);
-        if (stepSelect) {
-          const stepValue = stepSelect.value;
-          const descriptionLabel = document.getElementById(`stepDescription_${itemId}`);
-          if (descriptionLabel) {
-            const description = getStepDescription(stepValue);
-            const responsible = getStepResponsible(stepValue);
-
-            if (description) {
-              descriptionLabel.innerHTML = `<div style="color: #8b92a7; line-height: 1.4;">${description}<br><span style="font-size: 0.9em;">Responsible: ${responsible}</span></div>`;
-              descriptionLabel.style.display = 'block';
-              descriptionLabel.style.textAlign = 'left';
-              descriptionLabel.style.marginTop = '4px';
-            } else {
-              descriptionLabel.textContent = '';
-              descriptionLabel.style.display = 'none';
-            }
-          }
-        }
-
         // Initialize carousel buttons state
         const track = cardContainer.querySelector('[data-carousel-track]');
         const prevBtn = cardContainer.querySelector('.carousel-nav-prev');
@@ -8610,6 +8668,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
               </div>
               ${showAnalysisCompletedCheckbox ? `
               <div class="detail-item">
+                <span class="detail-label">An&aacute;lise Conclu&iacute;da</span>
                 <label class="analysis-completed-checkbox">
                   <input type="checkbox" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
                   <span>An&aacute;lise Conclu&iacute;da</span>
@@ -8643,17 +8702,18 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   Steps
                   <i class="ph ph-info tooltip-icon" title="View all management steps" role="button" tabindex="0" onclick="openStepsInfoModal(event)" onkeydown="handleStepsInfoIconKey(event)"></i>
                 </span>
-                <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)">
-                  <option value="" ${!item.steps ? 'selected' : ''}></option>
-                  <option value="1" ${item.steps === '1' ? 'selected' : ''}>1</option>
-                  <option value="2" ${item.steps === '2' ? 'selected' : ''}>2</option>
-                  <option value="3" ${item.steps === '3' ? 'selected' : ''}>3</option>
-                  <option value="4" ${item.steps === '4' ? 'selected' : ''}>4</option>
-                  <option value="5" ${item.steps === '5' ? 'selected' : ''}>5</option>
-                  <option value="6" ${item.steps === '6' ? 'selected' : ''}>6</option>
-                  <option value="7" ${item.steps === '7' ? 'selected' : ''}>7</option>
-                </select>
-                <span class="detail-sublabel" id="stepDescription_${item.id}" data-step-description></span>
+                <div class="steps-dropdown" data-steps-dropdown>
+                  <select class="detail-input steps-hidden-select" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)" tabindex="-1" aria-hidden="true">
+                    ${buildStepOptionsMarkup(item.steps)}
+                  </select>
+                  <button type="button" class="detail-input steps-dropdown-trigger" data-steps-dropdown-button onclick="toggleStepsDropdown(event)">
+                    <span data-steps-dropdown-value>${item.steps || ''}</span>
+                    <i class="ph ph-caret-down"></i>
+                  </button>
+                  <div class="steps-dropdown-panel" data-steps-dropdown-panel hidden>
+                    ${buildStepsDropdownOptionsMarkup(item.steps, index, item.id)}
+                  </div>
+                </div>
               </div>
               
               <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
@@ -9117,6 +9177,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                   </div>
                   ${showAnalysisCompletedCheckbox ? `
                   <div class="detail-item">
+                    <span class="detail-label">An&aacute;lise Conclu&iacute;da</span>
                     <label class="analysis-completed-checkbox">
                       <input type="checkbox" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
                       <span>An&aacute;lise Conclu&iacute;da</span>
@@ -9147,17 +9208,18 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                   </div>
                   <div class="detail-item">
                     <span class="detail-label">Steps</span>
-                    <select class="detail-input" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)">
-                      <option value="" ${!item.steps ? 'selected' : ''}></option>
-                      <option value="1" ${item.steps === '1' ? 'selected' : ''}>1</option>
-                      <option value="2" ${item.steps === '2' ? 'selected' : ''}>2</option>
-                      <option value="3" ${item.steps === '3' ? 'selected' : ''}>3</option>
-                      <option value="4" ${item.steps === '4' ? 'selected' : ''}>4</option>
-                      <option value="5" ${item.steps === '5' ? 'selected' : ''}>5</option>
-                      <option value="6" ${item.steps === '6' ? 'selected' : ''}>6</option>
-                      <option value="7" ${item.steps === '7' ? 'selected' : ''}>7</option>
-                    </select>
-                    <span class="detail-sublabel" id="stepDescription_${item.id}" data-step-description></span>
+                    <div class="steps-dropdown" data-steps-dropdown>
+                      <select class="detail-input steps-hidden-select" data-field="steps" data-id="${item.id}" onchange="handleStepsSelectChange(${index}, ${item.id}, this)" tabindex="-1" aria-hidden="true">
+                        ${buildStepOptionsMarkup(item.steps)}
+                      </select>
+                      <button type="button" class="detail-input steps-dropdown-trigger" data-steps-dropdown-button onclick="toggleStepsDropdown(event)">
+                        <span data-steps-dropdown-value>${item.steps || ''}</span>
+                        <i class="ph ph-caret-down"></i>
+                      </button>
+                      <div class="steps-dropdown-panel" data-steps-dropdown-panel hidden>
+                        ${buildStepsDropdownOptionsMarkup(item.steps, index, item.id)}
+                      </div>
+                    </div>
                   </div>
                   
                   <div class="detail-item detail-item-full obsolete-link-field ${hasReplacementLink ? 'has-link' : ''}" data-obsolete-link ${replacementEditorVisibilityAttr}>
@@ -9657,17 +9719,6 @@ function toggleCard(index) {
           initCardAttachmentDragAndDrop(dropzone, itemId);
         }
 
-        // Initialize step description
-        const stepSelect = card.querySelector(`select[data-field="steps"][data-id="${itemId}"]`);
-        if (stepSelect) {
-          const stepValue = stepSelect.value;
-          const descriptionLabel = document.getElementById(`stepDescription_${itemId}`);
-          if (descriptionLabel) {
-            const description = getStepDescription(stepValue);
-            descriptionLabel.textContent = description;
-            descriptionLabel.style.display = description ? 'block' : 'none';
-          }
-        }
       }
     }
 
