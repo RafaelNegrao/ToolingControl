@@ -230,22 +230,20 @@
               <div class="comments-modal-grid">
                 <!-- Left column: messages and new message input -->
                 <div class="comments-column">
+                  <!-- General notes removed -->
+
                   <div class="comments-list scrollable" id="commentsList">
                     <!-- Mensagens serão renderizadas aqui -->
                   </div>
 
-                  <div class="new-message-wrap">
-                    <textarea id="newSupplierMessage" class="message-input"
+                  <div class="new-message-wrap"
+                    style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">
+                    <textarea id="newSupplierMessage" class="comments-textarea"
                       placeholder="Adicionar ação a ser tomada..."></textarea>
-                    <div class="new-message-meta">
-                      <label for="newSupplierDate">Data (você deve inserir):</label>
-                      <input type="date" id="newSupplierDate" class="comments-input" />
-                    </div>
-                    <div class="new-message-actions">
-                      <button class="btn btn-secondary" type="button"
-                        onclick="closeSupplierCommentsModal()">Fechar</button>
+                    <div class="new-message-controls" style="display: flex; gap: 8px; align-items: stretch;">
+                      <input type="date" id="newSupplierDate" class="comments-input" style="width: auto; flex: 1;" />
                       <button class="btn btn-primary" id="addSupplierMessageBtn" type="button"
-                        onclick="addSupplierMessage()">+ Adicionar</button>
+                        onclick="addSupplierMessage()" style="white-space: nowrap;">+ Adicionar</button>
                     </div>
                   </div>
                 </div>
@@ -253,7 +251,7 @@
                 <!-- Right column: responsáveis -->
                 <aside class="responsibles-column">
                   <h4 class="responsibles-title">Responsáveis</h4>
-                  <div class="comment-field-group">
+                  <div class="comment-field-group" style="flex: 1;">
                     <label for="supplierContactText">Supplier Contact</label>
                     <textarea class="comments-textarea" id="supplierContactText"
                       placeholder="Name, email, phone..."></textarea>
@@ -515,12 +513,12 @@
           <div class="comment-delete-actions">
             <button type="button" class="comment-delete-btn cancel" onclick="closeCommentDeleteModal()">
               <i class="ph ph-arrow-counter-clockwise"></i>
-              <span>Keep comment</span>
+              <span>Cancel</span>
             </button>
             <button type="button" class="comment-delete-btn confirm" id="commentDeleteConfirmBtn"
               onclick="confirmCommentDelete()">
               <i class="ph ph-trash"></i>
-              <span>Delete comment</span>
+              <span>Delete</span>
             </button>
           </div>
         </div>
@@ -1236,4 +1234,3 @@
 </body>
 
 </html>
-

@@ -77,6 +77,7 @@ let isReorderingTimeline = false;
 
 let attachmentsDragCounter = 0;
 let attachmentsData = [];
+let supplierMessages = []; // messages/actions added in supplier comments modal
 let activeSearchTerm = '';
 const dateReminderTimers = new Map();
 let expirationInfoElements = {
@@ -1218,8 +1219,10 @@ document.addEventListener('click', (event) => {
   if (event.target.closest('[data-replacement-picker]')) {
     return;
   }
+  // Fecha apenas os replacement pickers embutidos (dropdowns nos cards).
   closeAllReplacementPickers();
-  closeReplacementPickerOverlay();
+  // NÃO fecha o replacement picker overlay (modal). O usuário pediu que o modal
+  // só seja fechado pelo botão 'X', portanto não chamar closeReplacementPickerOverlay() aqui.
 });
 
 // Fecha overlay com tecla ESC
@@ -1651,20 +1654,19 @@ function loadSupplierCommentsData() {
     return;
   }
 
-  const notesTextarea = document.getElementById('supplierNotesText');
   const contactTextarea = document.getElementById('supplierContactText');
   const supplyContinuityInput = document.getElementById('supplyContinuityText');
   const sqieInput = document.getElementById('sqieText');
   const plannerInput = document.getElementById('plannerText');
   const sourcingInput = document.getElementById('sourcingText');
 
-  if (!notesTextarea || !contactTextarea || !supplyContinuityInput || !sqieInput || !plannerInput || !sourcingInput) {
+  if (!contactTextarea || !supplyContinuityInput || !sqieInput || !plannerInput || !sourcingInput) {
     return;
   }
 
   const storageKey = `supplier_comments_${currentSupplier}`;
   const rawValue = localStorage.getItem(storageKey);
-  let savedData = { notes: '', contact: '', supplyContinuity: '', sqie: '', planner: '', sourcing: '' };
+  let savedData = { notes: '', contact: '', supplyContinuity: '', sqie: '', planner: '', sourcing: '', messages: [] };
 
   if (rawValue) {
     try {
@@ -1679,18 +1681,29 @@ function loadSupplierCommentsData() {
         savedData.sqie = parsed.sqie || '';
         savedData.planner = parsed.planner || '';
         savedData.sourcing = parsed.sourcing || '';
+        savedData.messages = Array.isArray(parsed.messages) ? parsed.messages : [];
       }
     } catch (error) {
       savedData.notes = rawValue;
     }
   }
 
-  notesTextarea.value = savedData.notes;
+  contactTextarea.value = savedData.contact;
   contactTextarea.value = savedData.contact;
   supplyContinuityInput.value = savedData.supplyContinuity;
   sqieInput.value = savedData.sqie;
   plannerInput.value = savedData.planner;
   sourcingInput.value = savedData.sourcing;
+
+  // initialize message list
+  supplierMessages = savedData.messages || [];
+  renderSupplierMessages();
+
+  // clear new message inputs
+  const newMsg = document.getElementById('newSupplierMessage');
+  const newDate = document.getElementById('newSupplierDate');
+  if (newMsg) newMsg.value = '';
+  if (newDate) newDate.value = '';
 }
 
 function saveSupplierComments() {
@@ -1698,30 +1711,156 @@ function saveSupplierComments() {
     return;
   }
 
-  const notesTextarea = document.getElementById('supplierNotesText');
   const contactTextarea = document.getElementById('supplierContactText');
   const supplyContinuityInput = document.getElementById('supplyContinuityText');
   const sqieInput = document.getElementById('sqieText');
   const plannerInput = document.getElementById('plannerText');
   const sourcingInput = document.getElementById('sourcingText');
 
-  if (!notesTextarea || !contactTextarea || !supplyContinuityInput || !sqieInput || !plannerInput || !sourcingInput) {
+  if (!contactTextarea || !supplyContinuityInput || !sqieInput || !plannerInput || !sourcingInput) {
     return;
   }
 
   const storageKey = `supplier_comments_${currentSupplier}`;
   const data = {
-    notes: notesTextarea.value || '',
+    notes: '',
     contact: contactTextarea.value || '',
     supplyContinuity: supplyContinuityInput.value || '',
     sqie: sqieInput.value || '',
     planner: plannerInput.value || '',
-    sourcing: sourcingInput.value || ''
+    sourcing: sourcingInput.value || '',
+    messages: supplierMessages
   };
 
   localStorage.setItem(storageKey, JSON.stringify(data));
   showNotification('Supplier comments saved successfully!', 'success');
   closeSupplierCommentsModal();
+}
+
+// Render messages list inside supplier comments modal
+function renderSupplierMessages() {
+  const list = document.getElementById('commentsList');
+  if (!list) return;
+
+  if (!supplierMessages || supplierMessages.length === 0) {
+    list.innerHTML = '<div class="comments-empty">Nenhuma ação registrada.</div>';
+    return;
+  }
+
+  list.innerHTML = supplierMessages.map((msg, idx) => {
+    const safeText = escapeHtml(msg.text);
+    const formattedDate = formatDate(msg.date);
+    return `
+      <div class="comment-item" data-msg-index="${idx}">
+        <div class="comment-item-body">
+          <div class="comment-item-text" id="supplierMsgText_${idx}">${safeText}</div>
+          <div class="comment-item-meta">${formattedDate}</div>
+        </div>
+        <div class="comment-item-actions">
+          <button class="comment-edit-btn" onclick="editSupplierMessage(${idx})" title="Editar">
+            <i class="ph ph-pencil-simple"></i>
+          </button>
+          <button class="comment-delete-btn" onclick="deleteSupplierMessage(${idx})" title="Excluir">
+            <i class="ph ph-trash"></i>
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// Add a new message to the current supplier
+function addSupplierMessage() {
+  if (!currentSupplier) return;
+  const input = document.getElementById('newSupplierMessage');
+  const dateInput = document.getElementById('newSupplierDate');
+  if (!input || !dateInput) return;
+  const text = input.value.trim();
+  const date = dateInput.value;
+  if (!text || !date) return;
+
+  supplierMessages.push({ date: date, text: text });
+  renderSupplierMessages();
+
+  // clear fields
+  input.value = '';
+  dateInput.value = '';
+
+  // persist messages independently so modal stays open
+  const storageKey = `supplier_comments_${currentSupplier}`;
+  let existing = {};
+  const raw = localStorage.getItem(storageKey);
+  if (raw) {
+    try {
+      existing = JSON.parse(raw) || {};
+    } catch (e) {
+      existing = {};
+    }
+  }
+  existing.messages = supplierMessages;
+  localStorage.setItem(storageKey, JSON.stringify(existing));
+}
+
+// Delete a message by index
+function deleteSupplierMessage(index) {
+  if (index < 0 || index >= supplierMessages.length) return;
+  if (!confirm('Excluir esta ação?')) return;
+  supplierMessages.splice(index, 1);
+  renderSupplierMessages();
+  saveSupplierComments();
+}
+
+// Enter edit mode for a supplier message
+function editSupplierMessage(index) {
+  if (index < 0 || index >= supplierMessages.length) return;
+  const msg = supplierMessages[index];
+  const textEl = document.getElementById(`supplierMsgText_${index}`);
+  if (!textEl) return;
+
+  textEl.innerHTML = `<textarea class="comments-textarea" id="supplierMsgEdit_${index}" rows="3">${escapeHtml(msg.text)}</textarea>`;
+  const actions = textEl.closest('.comment-item').querySelector('.comment-item-actions');
+  if (actions) {
+    actions.innerHTML = `
+      <button class="btn-comment-action" onclick="saveSupplierMessageEdit(${index})" title="Salvar">
+        <i class="ph ph-check"></i>
+      </button>
+      <button class="btn-comment-action" onclick="cancelSupplierMessageEdit(${index})" title="Cancelar">
+        <i class="ph ph-x"></i>
+      </button>
+    `;
+  }
+
+  const editInput = document.getElementById(`supplierMsgEdit_${index}`);
+  if (editInput) {
+    editInput.focus();
+    editInput.select();
+    editInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        saveSupplierMessageEdit(index);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        cancelSupplierMessageEdit(index);
+      }
+    });
+  }
+}
+
+function saveSupplierMessageEdit(index) {
+  const editInput = document.getElementById(`supplierMsgEdit_${index}`);
+  if (!editInput) return;
+  const newText = editInput.value.trim();
+  if (!newText) {
+    // don't allow empty
+    return;
+  }
+  supplierMessages[index].text = newText;
+  renderSupplierMessages();
+  saveSupplierComments();
+}
+
+function cancelSupplierMessageEdit(index) {
+  renderSupplierMessages();
 }
 
 // ===== MODO DE SELEÇÃO MÚLTIPLA PARA EXPORTAÇÃO =====
@@ -4009,11 +4148,8 @@ function ensureReplacementPickerOverlayElements() {
     });
   }
 
-  overlay.addEventListener('click', (event) => {
-    if (event.target === overlay) {
-      closeReplacementPickerOverlay();
-    }
-  });
+  // Nota: não fechar o replacement picker ao clicar no overlay.
+  // O fechamento deve ocorrer somente pelo botão 'X' (closeReplacementPickerOverlay).
 
   return true;
 }
@@ -7018,6 +7154,40 @@ function getLatestToolingLifeChange(item) {
   return null;
 }
 
+/**
+ * Atualiza o ícone de mudança de tooling life na coluna info da spreadsheet em tempo real.
+ * @param {string|number} itemId - ID do item
+ * @param {object} item - Objeto do item com comments atualizados
+ */
+function updateToolingLifeChangeIcon(itemId, item) {
+  const row = document.querySelector(`#spreadsheetBody tr[data-id="${itemId}"]`);
+  if (!row) return;
+
+  const iconsCell = row.querySelector('.spreadsheet-icons');
+  if (!iconsCell) return;
+
+  // Remove o ícone antigo se existir
+  const existingIcon = iconsCell.querySelector('.spreadsheet-icon-info');
+  if (existingIcon) {
+    existingIcon.remove();
+  }
+
+  // Calcula o novo ícone
+  const toolingLifeChange = getLatestToolingLifeChange(item);
+  if (toolingLifeChange) {
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'spreadsheet-icon-info';
+    iconSpan.title = toolingLifeChange.title;
+    iconSpan.innerHTML = `
+      <span class="tooling-life-change-icon ${toolingLifeChange.direction}">
+        <i class="ph ${toolingLifeChange.direction === 'up' ? 'ph-arrow-up' : 'ph-arrow-down'}"></i>
+      </span>
+    `;
+    // Insere como primeiro filho para manter a ordem
+    iconsCell.insertBefore(iconSpan, iconsCell.firstChild);
+  }
+}
+
 function renderSpreadsheetView() {
   const spreadsheetBody = document.getElementById('spreadsheetBody');
   if (!spreadsheetBody || !toolingData) return;
@@ -7679,7 +7849,7 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
       const btn = expandedRow.querySelector('.spreadsheet-expand-btn');
       if (btn) btn.innerHTML = '<i class="ph ph-caret-down"></i>';
 
-      // Remove a linha de detalhes
+      // Remove a linha de detalhes com animação
       const detailRow = expandedRow.nextElementSibling;
       if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
         // Salva antes de fechar (se houver mudanças) e sincroniza a linha
@@ -7700,7 +7870,11 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
             }
           }
         }
-        detailRow.remove();
+        detailRow.classList.remove('is-open');
+        detailRow.classList.add('is-closing');
+        const onEnd = () => { detailRow.remove(); };
+        detailRow.querySelector('.spreadsheet-card-container')?.addEventListener('transitionend', onEnd, { once: true });
+        setTimeout(onEnd, 350); // fallback
       }
     }
   });
@@ -7710,7 +7884,7 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
     row.classList.remove('row-expanded');
     if (expandBtn) expandBtn.innerHTML = '<i class="ph ph-caret-down"></i>';
 
-    // Remove a linha de detalhes
+    // Remove a linha de detalhes com animação
     const detailRow = row.nextElementSibling;
     if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
       // Verifica se há mudanças ANTES de remover o DOM
@@ -7727,7 +7901,11 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
           cardSnapshotStore.delete(snapshotKey);
         }
       }
-      detailRow.remove();
+      detailRow.classList.remove('is-open');
+      detailRow.classList.add('is-closing');
+      const onEnd = () => { detailRow.remove(); };
+      detailRow.querySelector('.spreadsheet-card-container')?.addEventListener('transitionend', onEnd, { once: true });
+      setTimeout(onEnd, 350); // fallback
     }
   } else {
     // Abre a linha atual
@@ -8344,6 +8522,9 @@ async function spreadsheetSave(inputElement) {
       if (updateResult?.comments) {
         item.comments = updateResult.comments;
         updateCommentsDisplay(id);
+
+        // Atualiza o ícone de mudança de tooling life em tempo real na coluna info
+        updateToolingLifeChangeIcon(id, item);
       }
     }
 
@@ -10244,6 +10425,9 @@ async function saveToolingQuietly(id) {
 
       if (updateResult?.comments) {
         updateCommentsDisplay(id);
+
+        // Atualiza o ícone de mudança de tooling life na coluna info (spreadsheet)
+        updateToolingLifeChangeIcon(id, toolingData[index]);
       }
 
       // Atualiza métricas do card do supplier em tempo real (busca dados frescos do banco)
