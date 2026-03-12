@@ -2463,7 +2463,9 @@ function selectSupplier(evt, supplierName) {
     return;
   }
 
-  handleSupplierSelection(supplierName, { sourceElement: cardElement, forceReload: true });
+  guardUnsavedChanges(() => {
+    handleSupplierSelection(supplierName, { sourceElement: cardElement, forceReload: true });
+  });
 }
 
 async function promptRenameSupplier(currentName) {
@@ -5544,7 +5546,114 @@ function scheduleInterfaceRefresh(reason = 'auto', delay = INTERFACE_REFRESH_DEL
 
 function autoSaveTooling(id, immediate = false) {
   // Auto-save desabilitado: o salvamento só ocorre via botão Save de cada aba
+  checkCardDirty(id);
 }
+
+// Verifica se o card tem alterações pendentes e atualiza a cor do botão Save
+function checkCardDirty(id) {
+  const snapshotKey = getSnapshotKey(id);
+  const previousSnapshot = cardSnapshotStore.get(snapshotKey);
+  if (previousSnapshot === undefined) return;
+
+  const rawValues = collectCardDomValues(id);
+  if (!rawValues) return;
+
+  const item = toolingData.find(t => Number(t.id) === Number(id));
+  if (item) {
+    if (item.comments !== undefined) rawValues.comments = item.comments;
+    if (item.expiration_date !== undefined) rawValues.expiration_date = item.expiration_date;
+  }
+
+  const isDirty = serializeCardValues(rawValues) !== previousSnapshot;
+
+  const card = document.querySelector(`[data-item-id="${id}"]`);
+  if (card) {
+    card.querySelectorAll('.btn-save').forEach(btn => {
+      btn.classList.toggle('btn-save--dirty', isDirty);
+    });
+  }
+}
+
+// ─── Unsaved-changes guard ────────────────────────────────────────────────────
+
+const _unsavedGuard = { pendingCallback: null, dirtyId: null };
+
+/** Retorna o id do primeiro card aberto que tem alterações não salvas, ou null. */
+function getAnyDirtyCardId() {
+  const dirtyBtn = document.querySelector('.btn-save--dirty');
+  if (!dirtyBtn) return null;
+  const card = dirtyBtn.closest('[data-item-id]');
+  return card ? card.getAttribute('data-item-id') : null;
+}
+
+/**
+ * Se houver card sujo, apresenta o modal de confirmação e chama `callback`
+ * após o usuário decidir. Se não houver card sujo, executa `callback` direto.
+ */
+function guardUnsavedChanges(callback) {
+  const dirtyId = getAnyDirtyCardId();
+  if (!dirtyId) {
+    callback();
+    return;
+  }
+  _unsavedGuard.pendingCallback = callback;
+  _unsavedGuard.dirtyId = dirtyId;
+  const overlay = document.getElementById('unsavedChangesOverlay');
+  if (overlay) overlay.classList.add('active');
+}
+
+async function unsavedChangesSave() {
+  const overlay = document.getElementById('unsavedChangesOverlay');
+  if (overlay) overlay.classList.remove('active');
+  if (_unsavedGuard.dirtyId) {
+    await saveTooling(Number(_unsavedGuard.dirtyId));
+  }
+  const cb = _unsavedGuard.pendingCallback;
+  _unsavedGuard.pendingCallback = null;
+  _unsavedGuard.dirtyId = null;
+  if (cb) cb();
+}
+
+function unsavedChangesDiscard() {
+  const overlay = document.getElementById('unsavedChangesOverlay');
+  if (overlay) overlay.classList.remove('active');
+
+  if (_unsavedGuard.dirtyId) {
+    const id = _unsavedGuard.dirtyId;
+    // Restaura valores do snapshot para o DOM
+    const snapshotKey = getSnapshotKey(id);
+    const serialized = cardSnapshotStore.get(snapshotKey);
+    if (serialized) {
+      try {
+        const entries = JSON.parse(serialized); // [[field, value], ...]
+        const snapshotValues = Object.fromEntries(entries);
+        const elements = document.querySelectorAll(`[data-id="${snapshotKey}"]`);
+        elements.forEach(el => {
+          const field = el.getAttribute('data-field');
+          if (!field || el.classList.contains('calculated')) return;
+          if (Object.prototype.hasOwnProperty.call(snapshotValues, field)) {
+            if (el instanceof HTMLInputElement && el.type === 'checkbox') {
+              el.checked = snapshotValues[field] === '1';
+            } else if (el instanceof HTMLSelectElement || el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+              el.value = snapshotValues[field] ?? '';
+              el.dispatchEvent(new Event('change', { bubbles: false }));
+            }
+          }
+        });
+      } catch { /* snapshot inválido, ignora */ }
+    }
+    // Limpa dirty flag
+    checkCardDirty(id);
+  }
+
+  const cb = _unsavedGuard.pendingCallback;
+  _unsavedGuard.pendingCallback = null;
+  _unsavedGuard.dirtyId = null;
+  if (cb) cb();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 
 // Formata data para exibição
 function formatDate(dateString) {
@@ -7370,8 +7479,12 @@ function renderSpreadsheetView() {
       <input type="text" class="spreadsheet-input spreadsheet-new-input input-right" inputmode="numeric" data-mask="thousands" 
         id="newToolingVolume" placeholder="Volume">
     </td>
-    <td></td>
-    <td></td>
+    <td>
+      <input type="date" class="spreadsheet-input spreadsheet-new-input spreadsheet-date" id="newToolingProdDate" title="Produced Date">
+    </td>
+    <td>
+      <input type="date" class="spreadsheet-input spreadsheet-new-input spreadsheet-date" id="newToolingVolDate" title="Volume Date">
+    </td>
     <td></td>
     <td></td>
     <td></td>
@@ -7833,6 +7946,10 @@ async function loadSpreadsheetAttachmentIcons(data) {
 
 // Toggle da expansão de uma linha da planilha para mostrar detalhes do card
 function toggleSpreadsheetRow(itemId, itemIndex) {
+  guardUnsavedChanges(() => _doToggleSpreadsheetRow(itemId, itemIndex));
+}
+
+function _doToggleSpreadsheetRow(itemId, itemIndex) {
   const row = document.querySelector(`tr[data-id="${itemId}"]`);
   if (!row) return;
 
@@ -9123,7 +9240,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
           </button>
           <button class="btn-save" onclick="saveTooling(${item.id})">
             <i class="ph ph-floppy-disk"></i>
-            Save Changes
+            Save
           </button>
         </div>
       </div>
@@ -9623,7 +9740,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
             </button>
             <button class="btn-save" onclick="saveTooling(${item.id})">
               <i class="ph ph-floppy-disk"></i>
-              Save Changes
+              Save
             </button>
           </div>
         </div>
@@ -10402,6 +10519,9 @@ async function saveTooling(id) {
     } else {
       cardSnapshotStore.set(snapshotKey, prepared.serialized);
     }
+
+    // Reseta indicador de alterações (snapshot atualizado = sem diff)
+    checkCardDirty(id);
 
     const index = toolingData.findIndex(item => Number(item.id) === Number(id));
     if (index !== -1) {

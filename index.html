@@ -491,6 +491,29 @@
         </div>
       </div>
 
+      <!-- Unsaved changes confirmation modal -->
+      <div class="modal-overlay" id="unsavedChangesOverlay">
+        <div class="unsaved-modal">
+          <div class="unsaved-modal-icon">
+            <i class="ph ph-warning"></i>
+          </div>
+          <div class="unsaved-modal-content">
+            <h3 class="unsaved-modal-title">Unsaved Changes</h3>
+            <p class="unsaved-modal-description">You have unsaved changes. Do you want to save before leaving?</p>
+          </div>
+          <div class="unsaved-modal-actions">
+            <button class="unsaved-btn-discard" type="button" onclick="unsavedChangesDiscard()">
+              <i class="ph ph-trash"></i>
+              <span>Discard</span>
+            </button>
+            <button class="unsaved-btn-save" type="button" onclick="unsavedChangesSave()">
+              <i class="ph ph-floppy-disk"></i>
+              <span>Save</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Comment delete modal -->
       <div class="modal-overlay" id="commentDeleteOverlay">
         <div class="comment-delete-modal">
