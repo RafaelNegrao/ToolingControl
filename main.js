@@ -584,10 +584,17 @@ function ensureSupplierMetadataTable() {
       err => {
         if (err) {
           reject(err);
-        } else {
-          supplierMetadataEnsured = true;
-          resolve();
+          return;
         }
+        // Ensure data_revision column exists (migration for existing DBs)
+        db.run(
+          `ALTER TABLE ${SUPPLIER_METADATA_TABLE} ADD COLUMN data_revision INTEGER DEFAULT 0`,
+          alterErr => {
+            // Ignore error if column already exists
+            supplierMetadataEnsured = true;
+            resolve();
+          }
+        );
       }
     );
   });
@@ -637,6 +644,63 @@ async function setSupplierImportTimestamp(supplierName, timestamp) {
   });
 }
 
+async function getSupplierDataRevision(supplierName) {
+  if (!supplierName) return 0;
+  await ensureSupplierMetadataTable();
+  return new Promise((resolve, reject) => {
+    db.get(
+      `SELECT data_revision FROM ${SUPPLIER_METADATA_TABLE} WHERE supplier = ?`,
+      [supplierName],
+      (err, row) => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve(row?.data_revision || 0);
+        }
+      }
+    );
+  });
+}
+
+async function incrementSupplierDataRevision(supplierName) {
+  if (!supplierName) return;
+  await ensureSupplierMetadataTable();
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO ${SUPPLIER_METADATA_TABLE} (supplier, data_revision)
+       VALUES (?, 1)
+       ON CONFLICT(supplier) DO UPDATE SET data_revision = COALESCE(data_revision, 0) + 1`,
+      [supplierName],
+      err => {
+        if (err) {
+          reject(err);
+        } else {
+          resolve();
+        }
+      }
+    );
+  });
+}
+
+// Debounced revision increment — consolidates multiple rapid field updates
+// (e.g. tooling_life change + expiration_date recalc) into a single revision bump
+const _revisionTimers = {};
+function scheduleRevisionIncrement(supplierName) {
+  if (!supplierName) return;
+  const key = String(supplierName).trim().toLowerCase();
+  if (_revisionTimers[key]) {
+    clearTimeout(_revisionTimers[key]);
+  }
+  _revisionTimers[key] = setTimeout(async () => {
+    delete _revisionTimers[key];
+    try {
+      await incrementSupplierDataRevision(String(supplierName).trim());
+    } catch (err) {
+      console.error('[DataRevision] Debounced increment failed:', err);
+    }
+  }, 3000);
+}
+
 function upsertSupplierInfoRow(sheet, label, value = '') {
   if (!sheet) {
     return;
@@ -676,16 +740,10 @@ function extractSupplierNameFromInfoSheet(sheet) {
 }
 
 function ensureToolingHeaderOrder(worksheet) {
-  const headerRow = worksheet.getRow(1);
-  if (!headerRow) {
-    throw new Error('Spreadsheet missing header row.');
-  }
-
   // Aliases para retrocompatibilidade (planilhas antigas podem ter nomes antigos)
   const headerAliases = {
     'Annual Volume': ['Annual Volume', 'Forecast'],
     'Annual Volume Date': ['Annual Volume Date', 'Forecast Date'],
-    // Aceita headers com ou sem asterisco para campos obrigatórios
     'PN *': ['PN *', 'PN'],
     'PN Description *': ['PN Description *', 'PN Description'],
     'Tooling Description *': ['Tooling Description *', 'Tooling Description'],
@@ -693,22 +751,39 @@ function ensureToolingHeaderOrder(worksheet) {
     'Produced (quantity) *': ['Produced (quantity) *', 'Produced (quantity)']
   };
 
-  const mismatches = [];
-  TOOLING_DATA_HEADERS.forEach((expected, index) => {
-    const actual = cellValueToString(headerRow.getCell(index + 1).value);
-    // Verifica se o header atual corresponde ao esperado ou a um alias aceito
-    const acceptedValues = headerAliases[expected] || [expected];
-    if (!acceptedValues.includes(actual)) {
-      mismatches.push({ expected, actual: actual || '(empty)', position: index + 1 });
-    }
-  });
+  function validateHeaderRow(rowNumber) {
+    const headerRow = worksheet.getRow(rowNumber);
+    if (!headerRow) return { valid: false, mismatches: [] };
 
-  if (mismatches.length > 0) {
-    const details = mismatches
-      .map(m => `Col ${m.position}: expected "${m.expected}" but found "${m.actual}"`)
-      .join('; ');
-    throw new Error(`Spreadsheet header mismatch. Please use the official export template. ${details}`);
+    const mismatches = [];
+    TOOLING_DATA_HEADERS.forEach((expected, index) => {
+      const actual = cellValueToString(headerRow.getCell(index + 1).value);
+      const acceptedValues = headerAliases[expected] || [expected];
+      if (!acceptedValues.includes(actual)) {
+        mismatches.push({ expected, actual: actual || '(empty)', position: index + 1 });
+      }
+    });
+
+    return { valid: mismatches.length === 0, mismatches };
   }
+
+  // Try row 5 first (new format with supplier info in rows 1-3)
+  const row5Result = validateHeaderRow(5);
+  if (row5Result.valid) {
+    return 5;
+  }
+
+  // Try row 1 (legacy format)
+  const row1Result = validateHeaderRow(1);
+  if (row1Result.valid) {
+    return 1;
+  }
+
+  // Neither matched — report error with details from row 5 (preferred format)
+  const details = row5Result.mismatches
+    .map(m => `Col ${m.position}: expected "${m.expected}" but found "${m.actual}"`)
+    .join('; ');
+  throw new Error(`Spreadsheet header mismatch. Please use the official export template. ${details}`);
 }
 
 function validateVerificationSheet(workbook) {
@@ -977,6 +1052,25 @@ function ensureDatabaseFile(baseDir) {
 }
 
 // Conectar ao banco de dados
+function configureDatabasePragmas() {
+  return new Promise((resolve, reject) => {
+    // busy_timeout: SQLite retries acquiring the file lock for up to 8 seconds
+    // before returning SQLITE_BUSY — essential for multiple users on OneDrive.
+    // journal_mode DELETE (default) is safer than WAL on network/cloud drives
+    // because WAL requires a shared-memory file (.shm) that OneDrive does not sync.
+    // synchronous NORMAL avoids full fsync on every write while still protecting
+    // against crashes (only power loss at the worst moment could corrupt the DB).
+    db.serialize(() => {
+      db.run('PRAGMA busy_timeout = 8000');
+      db.run('PRAGMA journal_mode = DELETE');
+      db.run('PRAGMA synchronous = NORMAL', (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+  });
+}
+
 function connectDatabase() {
   const baseDir = getAppBaseDir();
   const dbPath = ensureDatabaseFile(baseDir);
@@ -986,7 +1080,8 @@ function connectDatabase() {
         reject(err);
         return;
       }
-      checkAndAddColumns()
+      configureDatabasePragmas()
+        .then(() => checkAndAddColumns())
         .then(() => ensureTodosTable())
         .then(() => ensureStepHistoryTable())
         .then(resolve)
@@ -1429,8 +1524,11 @@ function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
       const validValues = validFields.map(key => data[key]);
       const setClause = validFields.map(field => `${field.trim()} = ?`).join(', ');
 
-      // Verifica se todos os campos são "silenciosos" (não devem atualizar last_update)
-      const hasUserEditableFields = validFields.some(field => !SILENT_UPDATE_FIELDS.has(field));
+      // Verifica se o payload ORIGINAL do cliente contém campos editáveis pelo usuário.
+      // Usa o payload original (antes do backend adicionar campos derivados como comments,
+      // remaining_tooling_life_pcs, etc.) para evitar que cascatas automáticas do sistema
+      // (ex: recalcular expiration_date) disparem incrementos de revisão indesejados.
+      const hasUserEditableFields = Object.keys(payload).some(field => !SILENT_UPDATE_FIELDS.has(field));
       const query = hasUserEditableFields
         ? `UPDATE ferramental SET ${setClause}, last_update = datetime('now') WHERE id = ?`
         : `UPDATE ferramental SET ${setClause} WHERE id = ?`;
@@ -1467,6 +1565,15 @@ function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
               }
             }
 
+            // Schedule debounced data revision increment for the supplier
+            // This consolidates rapid cascading updates into a single revision bump
+            if (this.changes > 0 && hasUserEditableFields) {
+              const supplierForRevision = existingRecord?.supplier || data.supplier;
+              if (supplierForRevision) {
+                scheduleRevisionIncrement(String(supplierForRevision).trim());
+              }
+            }
+
             resolve({
               success: true,
               changes: this.changes,
@@ -1480,7 +1587,7 @@ function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
     };
 
     if (requiresLookup) {
-      const selectFields = new Set(['id', 'comments']);
+      const selectFields = new Set(['id', 'comments', 'supplier']);
       trackableFields.forEach(field => selectFields.add(field));
       const columnList = Array.from(selectFields).join(', ');
       db.get(`SELECT ${columnList} FROM ferramental WHERE id = ?`, [id], (selectErr, row) => {
@@ -1497,6 +1604,10 @@ function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
 }
 
 // Handlers IPC para operações do banco
+ipcMain.handle('get-data-revision', async (event, supplierName) => {
+  return getSupplierDataRevision(supplierName);
+});
+
 ipcMain.handle('load-tooling', async () => {
   return new Promise((resolve, reject) => {
     db.all('SELECT * FROM ferramental ORDER BY id DESC', [], (err, rows) => {
@@ -2007,10 +2118,18 @@ ipcMain.handle('create-tooling', async (event, data) => {
           productionDate,
           comments
         ],
-        function (err) {
+        async function (err) {
           if (err) {
             reject(err);
           } else {
+            // Increment data revision for the supplier
+            if (supplier) {
+              try {
+                await incrementSupplierDataRevision(supplier);
+              } catch (revErr) {
+                console.error('[DataRevision] Failed to increment on create:', revErr);
+              }
+            }
             resolve({ success: true, id: this.lastID });
           }
         }
@@ -2022,11 +2141,22 @@ ipcMain.handle('create-tooling', async (event, data) => {
 });
 
 ipcMain.handle('delete-tooling', async (event, id) => {
+  // Fetch supplier before deleting to increment revision
+  const record = await dbGet('SELECT supplier FROM ferramental WHERE id = ?', [id]);
   return new Promise((resolve, reject) => {
-    db.run('DELETE FROM ferramental WHERE id = ?', [id], function (err) {
+    db.run('DELETE FROM ferramental WHERE id = ?', [id], async function (err) {
       if (err) {
         reject(err);
       } else {
+        // Increment data revision for the supplier
+        const supplier = record?.supplier ? String(record.supplier).trim() : '';
+        if (supplier && this.changes > 0) {
+          try {
+            await incrementSupplierDataRevision(supplier);
+          } catch (revErr) {
+            console.error('[DataRevision] Failed to increment on delete:', revErr);
+          }
+        }
         resolve({ success: true, changes: this.changes });
       }
     });
@@ -2091,41 +2221,83 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         // Criar aba de dados
         const worksheet = workbook.addWorksheet('Tooling Data');
 
-        // Definir colunas com larguras
+        // Definir colunas (sem header automático — vamos criar rows manualmente)
         worksheet.columns = [
-          { header: 'ID', key: 'id', width: 6 },
-          { header: 'PN *', key: 'pn', width: 15 },
-          { header: 'PN Description *', key: 'pn_description', width: 25 },
-          { header: 'Tooling Description *', key: 'tool_description', width: 25 },
-          { header: 'Tooling Life (quantity) *', key: 'tooling_life_qty', width: 12 },
-          { header: 'Produced (quantity) *', key: 'produced', width: 12 },
-          { header: 'Production Date', key: 'production_date', width: 14 },
-          { header: 'Annual Volume', key: 'forecast', width: 12 },
-          { header: 'Annual Volume Date', key: 'forecast_date', width: 14 },
-          { header: 'Expiration Date', key: 'expiration_date', width: 14 },
-          { header: "Supplier's Comments", key: 'supplier_comments', width: 50 }
+          { key: 'id', width: 6 },
+          { key: 'pn', width: 15 },
+          { key: 'pn_description', width: 25 },
+          { key: 'tool_description', width: 25 },
+          { key: 'tooling_life_qty', width: 12 },
+          { key: 'produced', width: 12 },
+          { key: 'production_date', width: 14 },
+          { key: 'forecast', width: 12 },
+          { key: 'forecast_date', width: 14 },
+          { key: 'expiration_date', width: 14 },
+          { key: 'supplier_comments', width: 50 }
         ];
 
-        // Fixar primeira linha (cabeçalho)
-        worksheet.views = [
-          { state: 'frozen', xSplit: 0, ySplit: 1, topLeftCell: 'A2', activeCell: 'A2' }
-        ];
-
-        // Aplicar estilo Cummins Red no cabeçalho para destaque visual
-        const headerRow = worksheet.getRow(1);
-        headerRow.eachCell(cell => {
+        // ===== ROWS 1-3: Supplier info header =====
+        // Row 1: Field | Value header
+        const infoHeaderRow = worksheet.getRow(1);
+        infoHeaderRow.getCell(1).value = 'Field';
+        infoHeaderRow.getCell(2).value = 'Value';
+        infoHeaderRow.eachCell({ includeEmpty: false }, cell => {
           cell.fill = {
             type: 'pattern',
             pattern: 'solid',
-            fgColor: { argb: 'FFC8102E' } // Cummins Red
+            fgColor: { argb: 'FFC8102E' }
           };
-          cell.font = {
-            color: { argb: 'FFFFFFFF' },
-            bold: true
-          };
+          cell.font = { color: { argb: 'FFFFFFFF' }, bold: true };
           cell.alignment = { vertical: 'middle', horizontal: 'center' };
         });
-        headerRow.commit();
+        infoHeaderRow.commit();
+
+        // Row 2: Supplier Name
+        const supplierRow = worksheet.getRow(2);
+        supplierRow.getCell(1).value = 'Supplier Name';
+        supplierRow.getCell(1).font = { bold: true };
+        supplierRow.getCell(2).value = supplierName;
+        supplierRow.commit();
+
+        // Row 3: Data Revision
+        await ensureSupplierMetadataTable();
+        const currentRevision = await getSupplierDataRevision(supplierName);
+        const revisionRow = worksheet.getRow(3);
+        revisionRow.getCell(1).value = 'Revision';
+        revisionRow.getCell(1).font = { bold: true };
+        revisionRow.getCell(2).value = currentRevision;
+        revisionRow.commit();
+
+        // Row 4: Empty (spacer)
+
+        // ===== ROW 5: Data headers =====
+        const DATA_HEADER_ROW = 5;
+        const DATA_START_ROW = 6;
+        const dataHeaderRow = worksheet.getRow(DATA_HEADER_ROW);
+        const headerLabels = [
+          'ID', 'PN *', 'PN Description *', 'Tooling Description *',
+          'Tooling Life (quantity) *', 'Produced (quantity) *',
+          'Production Date', 'Annual Volume', 'Annual Volume Date',
+          'Expiration Date', "Supplier's Comments"
+        ];
+        headerLabels.forEach((label, idx) => {
+          dataHeaderRow.getCell(idx + 1).value = label;
+        });
+        dataHeaderRow.eachCell({ includeEmpty: false }, cell => {
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFC8102E' }
+          };
+          cell.font = { color: { argb: 'FFFFFFFF' }, bold: true };
+          cell.alignment = { vertical: 'middle', horizontal: 'center' };
+        });
+        dataHeaderRow.commit();
+
+        // Fixar linha 5 (cabeçalho de dados)
+        worksheet.views = [
+          { state: 'frozen', xSplit: 0, ySplit: DATA_HEADER_ROW, topLeftCell: `A${DATA_START_ROW}`, activeCell: `A${DATA_START_ROW}` }
+        ];
 
         // Centralizar colunas A, E, F, G, H, I, J para facilitar leitura
         ['A', 'E', 'F', 'G', 'H', 'I', 'J'].forEach(columnKey => {
@@ -2136,12 +2308,10 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         // Função auxiliar para converter string de data para objeto Date
         function parseExcelDate(dateStr) {
           if (!dateStr || typeof dateStr !== 'string') return null;
-          // Formato YYYY-MM-DD
           if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
             const [year, month, day] = dateStr.split('-').map(Number);
-            return new Date(year, month - 1, day); // mês é 0-indexed
+            return new Date(year, month - 1, day);
           }
-          // Formato DD/MM/YYYY
           if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) {
             const [day, month, year] = dateStr.split('/').map(Number);
             return new Date(year, month - 1, day);
@@ -2149,61 +2319,42 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
           return null;
         }
 
-        // Adicionar dados
+        // ===== ROW 6+: Data rows =====
         rows.forEach(row => {
-          // Converter datas para objetos Date do JavaScript (ExcelJS converte automaticamente)
           const prodDate = parseExcelDate(row.production_date);
           const foreDate = parseExcelDate(row.forecast_date);
 
-          worksheet.addRow({
-            id: row.id || '',
-            pn: row.pn || '',
-            pn_description: row.pn_description || '',
-            tool_description: row.tool_description || '',
-            tooling_life_qty: row.tooling_life_qty || '',
-            produced: row.produced || '',
-            production_date: prodDate, // Objeto Date real
-            forecast: row.forecast || '',
-            forecast_date: foreDate, // Objeto Date real
-            expiration_date: '', // Será preenchido com fórmula depois
-            supplier_comments: ''
-          });
+          const newRow = worksheet.addRow([
+            row.id || '',
+            row.pn || '',
+            row.pn_description || '',
+            row.tool_description || '',
+            row.tooling_life_qty || '',
+            row.produced || '',
+            prodDate,
+            row.forecast || '',
+            foreDate,
+            '', // Expiration Date — preenchido com fórmula
+            ''  // Supplier's Comments
+          ]);
         });
 
         const numericColumnIndexes = [5, 6, 8]; // Tooling Life, Produced, Forecast
         const dateColumnIndexes = [7, 9, 10]; // Production Date, Annual Volume Date, Expiration Date
 
         // Calcular primeira linha vazia (para desbloquear PN)
-        const firstEmptyRow = rows.length + 2; // +2 porque: +1 para header, +1 para próxima linha
+        const firstEmptyRow = rows.length + DATA_START_ROW; // DATA_START_ROW + rows.length
 
         // Adicionar 100 linhas vazias extras
         for (let i = 0; i < 100; i++) {
-          worksheet.addRow({
-            id: '',
-            pn: '',
-            pn_description: '',
-            tool_description: '',
-            tooling_life_qty: '',
-            produced: '',
-            production_date: '',
-            forecast: '',
-            forecast_date: '',
-            expiration_date: '', // Será preenchido com fórmula depois
-            supplier_comments: ''
-          });
+          worksheet.addRow(['', '', '', '', '', '', '', '', '', '', '']);
         }
 
-        // Adicionar fórmula de Expiration Date para todas as linhas (exceto header)
-        const totalRows = rows.length + 100; // Total de linhas de dados + vazias
-        for (let rowNum = 2; rowNum <= totalRows + 1; rowNum++) {
+        // Adicionar fórmula de Expiration Date para todas as linhas de dados
+        const totalDataRows = rows.length + 100;
+        for (let rowNum = DATA_START_ROW; rowNum < DATA_START_ROW + totalDataRows; rowNum++) {
           const row = worksheet.getRow(rowNum);
           const expirationCell = row.getCell(10); // Coluna J (Expiration Date)
-
-          // Fórmula: se(annual_volume=0; prod_date + (remaining/1*365); prod_date + (remaining/annual_volume*365))
-          // Remaining = Tooling Life (E) - Produced (F)
-          // Se Production Date (G) vazio -> não mostra nada
-          // Se annual_volume (H) = 0 ou vazio -> usa divisor 1
-          // Remaining pode ser negativo (resulta em data passada)
           expirationCell.value = {
             formula: `IF(OR(G${rowNum}="",E${rowNum}="",F${rowNum}=""),"",IF(OR(H${rowNum}="",H${rowNum}=0),G${rowNum}+ROUND((E${rowNum}-F${rowNum})/1*365,0),G${rowNum}+ROUND((E${rowNum}-F${rowNum})/H${rowNum}*365,0)))`,
             date1904: false
@@ -2227,11 +2378,10 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
           pivotTables: false
         });
 
-        // Desbloquear colunas C a I (Description até Supplier Comments) e aplicar validações
-        // A partir da primeira linha vazia, desbloquear também a coluna B (PN) para permitir novos ferramentais
+        // Desbloquear colunas editáveis nas linhas de dados (a partir da row 6)
         worksheet.eachRow((row, rowNumber) => {
-          if (rowNumber === 1) {
-            // Header row - manter bloqueado
+          if (rowNumber < DATA_START_ROW) {
+            // Rows 1-5: keep locked (supplier info + headers)
             return;
           }
 
@@ -2289,8 +2439,7 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
           });
         });
 
-        // Criar segunda aba com informações do supplier
-        await ensureSupplierMetadataTable();
+        // Criar segunda aba com instruções (sem Supplier Name — agora está na aba Tooling Data)
         const lastImportTimestamp = await getSupplierImportTimestamp(supplierName);
         const supplierSheet = workbook.addWorksheet(SUPPLIER_INFO_SHEET_NAME);
 
@@ -2303,6 +2452,7 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
           { header: 'Field', key: 'field', width: 28 },
           { header: 'Value', key: 'value', width: 55 }
         ];
+        // Keep supplier name in info sheet for backward compatibility validation
         upsertSupplierInfoRow(supplierSheet, 'Supplier Name', supplierName);
         upsertSupplierInfoRow(
           supplierSheet,
@@ -2372,13 +2522,12 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
           let maxContentLength = 0;
 
           column.eachCell({ includeEmpty: false }, cell => {
-            // Pular o cabeçalho (linha 1) - vamos tratar separadamente
-            if (cell.row === 1) return;
+            // Pular rows de info (1-4) e header (5)
+            if (cell.row <= DATA_HEADER_ROW) return;
 
             let cellLength = 0;
-            // Tratar datas especialmente
             if (cell.value instanceof Date) {
-              cellLength = 10; // DD/MM/YYYY = 10 caracteres
+              cellLength = 10;
             } else if (typeof cell.value === 'number') {
               cellLength = cell.value.toString().length;
             } else if (cell.value) {
@@ -2390,11 +2539,10 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
             }
           });
 
-          // Calcular largura do header
-          const headerLength = column.header ? column.header.toString().length : 0;
+          // Calcular largura do header (row 5)
+          const headerCell = worksheet.getRow(DATA_HEADER_ROW).getCell(index + 1);
+          const headerLength = headerCell.value ? headerCell.value.toString().length : 0;
 
-          // Largura final = maior entre header e conteúdo + padding de 2
-          // Largura mínima de 8, máxima de 50 para acomodar colunas de comentários
           const calculatedWidth = Math.max(headerLength, maxContentLength) + 2;
           column.width = Math.min(Math.max(calculatedWidth, 8), 50);
         });
@@ -2408,7 +2556,6 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
               maxLength = cellLength;
             }
           });
-          // Largura baseada no conteúdo com padding moderado
           column.width = Math.min(Math.max(maxLength + 2, 10), 50);
         });
 
@@ -2465,12 +2612,28 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
   await workbook.xlsx.readFile(filePath);
 
   validateVerificationSheet(workbook);
-  const supplierInfoSheet = workbook.getWorksheet(SUPPLIER_INFO_SHEET_NAME);
-  if (!supplierInfoSheet) {
-    throw new Error('Aba "Info & Instructions" não encontrada. Por favor, re-exporte o template.');
+
+  const worksheet = workbook.getWorksheet('Tooling Data') || workbook.worksheets[0];
+  if (!worksheet) {
+    throw new Error('Could not locate "Tooling Data" worksheet in the provided file.');
   }
 
-  const supplierNameInFile = extractSupplierNameFromInfoSheet(supplierInfoSheet);
+  // Try to extract supplier name from Tooling Data sheet row 2 (new format)
+  let supplierNameInFile = '';
+  const toolingDataRow2 = worksheet.getRow(2);
+  const row2Label = cellValueToString(toolingDataRow2.getCell(1).value).toLowerCase();
+  if (row2Label === 'supplier name') {
+    supplierNameInFile = cellValueToString(toolingDataRow2.getCell(2).value).trim();
+  }
+
+  // Fallback to Info sheet (legacy format)
+  if (!supplierNameInFile) {
+    const supplierInfoSheet = workbook.getWorksheet(SUPPLIER_INFO_SHEET_NAME);
+    if (supplierInfoSheet) {
+      supplierNameInFile = extractSupplierNameFromInfoSheet(supplierInfoSheet);
+    }
+  }
+
   const normalizedFileSupplier = supplierNameInFile.trim().toLowerCase();
   const normalizedCurrentSupplier = supplierName.trim().toLowerCase();
   if (
@@ -2484,24 +2647,19 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
     };
   }
 
-  const worksheet = workbook.getWorksheet('Tooling Data') || workbook.worksheets[0];
-
-  if (!worksheet) {
-    throw new Error('Could not locate "Tooling Data" worksheet in the provided file.');
-  }
-
   if (worksheet.rowCount < 2) {
     return { success: false, message: 'Spreadsheet does not contain data rows.' };
   }
 
-  ensureToolingHeaderOrder(worksheet);
+  const headerRowNumber = ensureToolingHeaderOrder(worksheet);
+  const dataStartRow = headerRowNumber + 1;
 
   let updated = 0;
   let created = 0;
   let skipped = 0;
   const todayStr = formatDateToBR(new Date());
 
-  for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+  for (let rowNumber = dataStartRow; rowNumber <= worksheet.rowCount; rowNumber += 1) {
     const row = worksheet.getRow(rowNumber);
 
     const idValue = cellValueToString(row.getCell(1).value);
@@ -2633,6 +2791,16 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
   const timestampStr = getCurrentTimestampBR();
   updateSupplierInfoTimestamp(workbook, timestampStr);
   await setSupplierImportTimestamp(supplierName, timestampStr);
+
+  // Increment data revision if any changes were made
+  if (updated > 0 || created > 0) {
+    try {
+      await incrementSupplierDataRevision(supplierName);
+    } catch (revErr) {
+      console.error('[DataRevision] Failed to increment on import:', revErr);
+    }
+  }
+
   const verificationSheet = workbook.getWorksheet(VERIFICATION_SHEET_NAME);
   if (verificationSheet) {
     verificationSheet.state = 'veryHidden';
@@ -2655,41 +2823,80 @@ ipcMain.handle('export-empty-template', async () => {
     // Criar aba de dados
     const worksheet = workbook.addWorksheet('Tooling Data');
 
-    // Definir colunas com larguras
+    // Definir colunas (sem header automático)
     worksheet.columns = [
-      { header: 'ID', key: 'id', width: 6 },
-      { header: 'PN *', key: 'pn', width: 15 },
-      { header: 'PN Description *', key: 'pn_description', width: 25 },
-      { header: 'Tooling Description *', key: 'tool_description', width: 25 },
-      { header: 'Tooling Life (quantity) *', key: 'tooling_life_qty', width: 12 },
-      { header: 'Produced (quantity) *', key: 'produced', width: 12 },
-      { header: 'Production Date', key: 'production_date', width: 14 },
-      { header: 'Annual Volume', key: 'forecast', width: 12 },
-      { header: 'Annual Volume Date', key: 'forecast_date', width: 14 },
-      { header: 'Expiration Date', key: 'expiration_date', width: 14 },
-      { header: "Supplier's Comments", key: 'supplier_comments', width: 50 }
+      { key: 'id', width: 6 },
+      { key: 'pn', width: 15 },
+      { key: 'pn_description', width: 25 },
+      { key: 'tool_description', width: 25 },
+      { key: 'tooling_life_qty', width: 12 },
+      { key: 'produced', width: 12 },
+      { key: 'production_date', width: 14 },
+      { key: 'forecast', width: 12 },
+      { key: 'forecast_date', width: 14 },
+      { key: 'expiration_date', width: 14 },
+      { key: 'supplier_comments', width: 50 }
     ];
 
-    // Fixar primeira linha (cabeçalho)
-    worksheet.views = [
-      { state: 'frozen', xSplit: 0, ySplit: 1, topLeftCell: 'A2', activeCell: 'A2' }
-    ];
-
-    // Aplicar estilo no cabeçalho
-    const headerRow = worksheet.getRow(1);
-    headerRow.eachCell(cell => {
+    // ===== ROWS 1-3: Supplier info header =====
+    const infoHeaderRow = worksheet.getRow(1);
+    infoHeaderRow.getCell(1).value = 'Field';
+    infoHeaderRow.getCell(2).value = 'Value';
+    infoHeaderRow.eachCell({ includeEmpty: false }, cell => {
       cell.fill = {
         type: 'pattern',
         pattern: 'solid',
         fgColor: { argb: 'FFC8102E' }
       };
-      cell.font = {
-        color: { argb: 'FFFFFFFF' },
-        bold: true
-      };
+      cell.font = { color: { argb: 'FFFFFFFF' }, bold: true };
       cell.alignment = { vertical: 'middle', horizontal: 'center' };
     });
-    headerRow.commit();
+    infoHeaderRow.commit();
+
+    // Row 2: Supplier Name (empty — needs to be filled by user)
+    const supplierRow = worksheet.getRow(2);
+    supplierRow.getCell(1).value = 'Supplier Name';
+    supplierRow.getCell(1).font = { bold: true };
+    supplierRow.getCell(2).value = '';
+    supplierRow.commit();
+
+    // Row 3: Revision (starts at 0)
+    const revisionRow = worksheet.getRow(3);
+    revisionRow.getCell(1).value = 'Revision';
+    revisionRow.getCell(1).font = { bold: true };
+    revisionRow.getCell(2).value = 0;
+    revisionRow.commit();
+
+    // Row 4: Empty (spacer)
+
+    // ===== ROW 5: Data headers =====
+    const DATA_HEADER_ROW = 5;
+    const DATA_START_ROW = 6;
+    const dataHeaderRow = worksheet.getRow(DATA_HEADER_ROW);
+    const headerLabels = [
+      'ID', 'PN *', 'PN Description *', 'Tooling Description *',
+      'Tooling Life (quantity) *', 'Produced (quantity) *',
+      'Production Date', 'Annual Volume', 'Annual Volume Date',
+      'Expiration Date', "Supplier's Comments"
+    ];
+    headerLabels.forEach((label, idx) => {
+      dataHeaderRow.getCell(idx + 1).value = label;
+    });
+    dataHeaderRow.eachCell({ includeEmpty: false }, cell => {
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFC8102E' }
+      };
+      cell.font = { color: { argb: 'FFFFFFFF' }, bold: true };
+      cell.alignment = { vertical: 'middle', horizontal: 'center' };
+    });
+    dataHeaderRow.commit();
+
+    // Fixar linha 5 (cabeçalho de dados)
+    worksheet.views = [
+      { state: 'frozen', xSplit: 0, ySplit: DATA_HEADER_ROW, topLeftCell: `A${DATA_START_ROW}`, activeCell: `A${DATA_START_ROW}` }
+    ];
 
     // Centralizar colunas numéricas
     ['A', 'E', 'F', 'G', 'H', 'I', 'J'].forEach(columnKey => {
@@ -2700,25 +2907,13 @@ ipcMain.handle('export-empty-template', async () => {
     const numericColumnIndexes = [5, 6, 8];
     const dateColumnIndexes = [7, 9, 10];
 
-    // Adicionar 100 linhas vazias
+    // Adicionar 100 linhas vazias a partir da row 6
     for (let i = 0; i < 100; i++) {
-      worksheet.addRow({
-        id: '',
-        pn: '',
-        pn_description: '',
-        tool_description: '',
-        tooling_life_qty: '',
-        produced: '',
-        production_date: '',
-        forecast: '',
-        forecast_date: '',
-        expiration_date: '',
-        supplier_comments: ''
-      });
+      worksheet.addRow(['', '', '', '', '', '', '', '', '', '', '']);
     }
 
-    // Adicionar fórmula de Expiration Date para todas as linhas
-    for (let rowNum = 2; rowNum <= 101; rowNum++) {
+    // Adicionar fórmula de Expiration Date para todas as linhas de dados
+    for (let rowNum = DATA_START_ROW; rowNum < DATA_START_ROW + 100; rowNum++) {
       const row = worksheet.getRow(rowNum);
       const expirationCell = row.getCell(10);
 
@@ -2745,9 +2940,12 @@ ipcMain.handle('export-empty-template', async () => {
       pivotTables: false
     });
 
-    // Desbloquear colunas B a I e K para edição (todas as linhas são novas)
+    // Desbloquear Supplier Name cell (row 2, col 2) para edição
+    worksheet.getRow(2).getCell(2).protection = { locked: false };
+
+    // Desbloquear colunas B a I e K para edição nas linhas de dados
     worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
+      if (rowNumber < DATA_START_ROW) return;
 
       // Desbloquear coluna B (PN) - para novas linhas
       const pnCell = row.getCell(2);
@@ -2791,7 +2989,7 @@ ipcMain.handle('export-empty-template', async () => {
       });
     });
 
-    // Criar aba Info & Instructions com Supplier Name editável
+    // Criar aba Info & Instructions (instructions only)
     const supplierSheet = workbook.addWorksheet(SUPPLIER_INFO_SHEET_NAME);
 
     supplierSheet.views = [
@@ -2803,8 +3001,8 @@ ipcMain.handle('export-empty-template', async () => {
       { header: 'Value', key: 'value', width: 55 }
     ];
 
-    // Adicionar linha de Supplier Name VAZIA para preenchimento
-    const supplierNameRow = supplierSheet.addRow({ field: 'Supplier Name', value: '' });
+    // Keep Supplier Name row for backward compat (will be synced from Tooling Data on import)
+    supplierSheet.addRow({ field: 'Supplier Name', value: '' });
     supplierSheet.addRow({ field: SUPPLIER_INFO_TIMESTAMP_LABEL, value: '' });
 
     // Adicionar instruções
@@ -2815,7 +3013,7 @@ ipcMain.handle('export-empty-template', async () => {
 
     const importantRow = supplierSheet.addRow({ field: '⚠️ IMPORTANTE:', value: '' });
     importantRow.getCell(1).font = { bold: true, color: { argb: 'FFFF0000' } };
-    supplierSheet.addRow({ field: '', value: 'Preencha o "Supplier Name" acima antes de importar!' });
+    supplierSheet.addRow({ field: '', value: 'Preencha o "Supplier Name" na aba Tooling Data (linha 2) antes de importar!' });
     supplierSheet.addRow({ field: '', value: '' });
 
     const addNewRow = supplierSheet.addRow({ field: 'Como Adicionar Novo Ferramental:', value: '' });
@@ -2851,10 +3049,9 @@ ipcMain.handle('export-empty-template', async () => {
     });
     supplierHeaderRow.commit();
 
-    // Proteger aba Info mas permitir edição do Supplier Name (linha 2, coluna 2)
     await supplierSheet.protect('30625629', {
       selectLockedCells: true,
-      selectUnlockedCells: true,
+      selectUnlockedCells: false,
       formatCells: false,
       formatColumns: false,
       formatRows: false,
@@ -2867,32 +3064,16 @@ ipcMain.handle('export-empty-template', async () => {
       pivotTables: false
     });
 
-    // Desbloquear célula do Supplier Name para edição
-    const supplierValueCell = supplierSheet.getRow(2).getCell(2);
-    supplierValueCell.protection = { locked: false };
-    // Destacar célula editável
-    supplierValueCell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFFFF9C4' } // Amarelo claro
-    };
-    supplierValueCell.border = {
-      top: { style: 'medium', color: { argb: 'FFC8102E' } },
-      bottom: { style: 'medium', color: { argb: 'FFC8102E' } },
-      left: { style: 'medium', color: { argb: 'FFC8102E' } },
-      right: { style: 'medium', color: { argb: 'FFC8102E' } }
-    };
-
     // Criar aba de verificação oculta
     const verificationSheet = workbook.addWorksheet(VERIFICATION_SHEET_NAME);
     verificationSheet.state = 'veryHidden';
     verificationSheet.getCell('A1').value = 'key';
     verificationSheet.getCell('B1').value = VERIFICATION_KEY_VALUE;
 
-    // Auto-fit colunas da aba Tooling Data
+    // Auto-fit colunas da aba Tooling Data (using row 5 headers)
     worksheet.columns.forEach((column, index) => {
-      const headerLength = column.header ? column.header.toString().length : 0;
-      // Largura baseada no header + padding
+      const headerCell = worksheet.getRow(DATA_HEADER_ROW).getCell(index + 1);
+      const headerLength = headerCell.value ? headerCell.value.toString().length : 0;
       const calculatedWidth = headerLength + 4;
       column.width = Math.min(Math.max(calculatedWidth, 10), 50);
     });
@@ -2955,16 +3136,31 @@ ipcMain.handle('import-new-supplier', async () => {
 
     validateVerificationSheet(workbook);
 
-    const supplierInfoSheet = workbook.getWorksheet(SUPPLIER_INFO_SHEET_NAME);
-    if (!supplierInfoSheet) {
-      throw new Error('Aba "Info & Instructions" não encontrada. Use o template oficial.');
+    const worksheet = workbook.getWorksheet('Tooling Data') || workbook.worksheets[0];
+    if (!worksheet) {
+      throw new Error('Could not locate "Tooling Data" worksheet in the provided file.');
     }
 
-    const supplierName = extractSupplierNameFromInfoSheet(supplierInfoSheet);
+    // Try to extract supplier name from Tooling Data sheet row 2 (new format)
+    let supplierName = '';
+    const toolingDataRow2 = worksheet.getRow(2);
+    const row2Label = cellValueToString(toolingDataRow2.getCell(1).value).toLowerCase();
+    if (row2Label === 'supplier name') {
+      supplierName = cellValueToString(toolingDataRow2.getCell(2).value).trim();
+    }
+
+    // Fallback to Info sheet (legacy format)
+    if (!supplierName) {
+      const supplierInfoSheet = workbook.getWorksheet(SUPPLIER_INFO_SHEET_NAME);
+      if (supplierInfoSheet) {
+        supplierName = extractSupplierNameFromInfoSheet(supplierInfoSheet);
+      }
+    }
+
     if (!supplierName || supplierName.trim() === '') {
       return {
         success: false,
-        message: 'Supplier name is empty. Please fill in the "Supplier Name" field in the Info & Instructions tab.'
+        message: 'Supplier name is empty. Please fill in the "Supplier Name" field in the Tooling Data tab (row 2).'
       };
     }
 
@@ -2988,19 +3184,14 @@ ipcMain.handle('import-new-supplier', async () => {
       };
     }
 
-    const worksheet = workbook.getWorksheet('Tooling Data') || workbook.worksheets[0];
-
-    if (!worksheet) {
-      throw new Error('Could not locate "Tooling Data" worksheet in the provided file.');
-    }
-
-    ensureToolingHeaderOrder(worksheet);
+    const headerRowNumber = ensureToolingHeaderOrder(worksheet);
+    const dataStartRow = headerRowNumber + 1;
 
     let created = 0;
     let skipped = 0;
     const todayStr = formatDateToBR(new Date());
 
-    for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {
+    for (let rowNumber = dataStartRow; rowNumber <= worksheet.rowCount; rowNumber += 1) {
       const row = worksheet.getRow(rowNumber);
 
       const pn = cellValueToString(row.getCell(2).value);

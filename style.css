@@ -2038,6 +2038,32 @@ textarea {
   font-style: italic;
 }
 
+.card-last-update-snick .card-inline-info {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: #666;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.card-last-update-snick .card-inline-info:hover {
+  transform: scale(1.08);
+}
+
+.card-last-update-snick .card-inline-info i {
+  font-size: 15px;
+}
+
+.card-last-update-snick .tooling-life-change-icon,
+.card-last-update-snick .tooling-life-change-icon.up,
+.card-last-update-snick .tooling-life-change-icon.down {
+  color: #666;
+}
+
 .tooling-card-footer {
   display: flex;
   align-items: center;
@@ -3194,9 +3220,39 @@ select.detail-input::-ms-expand {
 }
 
 .attachments-supplier-name-wrap {
-  display: inline-flex;
+  position: relative;
+  display: flex;
+  width: 100%;
+  justify-content: center;
   align-items: center;
+  text-align: center;
+  padding-top: 20px;
   gap: 6px;
+}
+
+.data-revision-badge {
+  display: inline-flex;
+  position: absolute;
+  top: 0;
+  left: 0;
+  justify-content: center;
+  align-items: center;
+  padding: 2px 10px;
+  border-radius: 12px;
+  background: rgba(200, 16, 46, 0.08);
+  border: 1px solid rgba(200, 16, 46, 0.2);
+  color: #c8102e;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  user-select: none;
+  transition: all 0.2s ease;
+}
+
+.data-revision-badge:hover {
+  background: rgba(200, 16, 46, 0.12);
+  border-color: rgba(200, 16, 46, 0.35);
 }
 
 .attachments-supplier-name {
@@ -7780,7 +7836,7 @@ select.detail-input::-ms-expand {
 }
 
 .spreadsheet-table th.col-tool-desc {
-  width: 180px;
+  width: auto;
 }
 
 .spreadsheet-table th.col-life {
@@ -8214,6 +8270,17 @@ select.detail-input::-ms-expand {
 
 .spreadsheet-input.input-center {
   text-align: center;
+}
+
+/* Campos somente leitura na linha fechada da planilha */
+.spreadsheet-display {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  text-align: center;
+  color: #555;
 }
 
 /* Inputs de data na planilha */
@@ -8714,6 +8781,15 @@ select.detail-input::-ms-expand {
 
 .spreadsheet-table tr.row-expanded td {
   border-bottom: none;
+}
+
+.spreadsheet-table tr.row-expanded td:not(.col-expand):not(.col-id) {
+  opacity: 0.40;
+  pointer-events: none;
+}
+
+.spreadsheet-table tr.row-expanded td:not(.col-expand):not(.col-id) > * {
+  visibility: visible;
 }
 
 .spreadsheet-table tr.row-expanded .spreadsheet-expand-btn {

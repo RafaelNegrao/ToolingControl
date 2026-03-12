@@ -2174,6 +2174,7 @@ async function importSupplierData() {
 
     await loadToolingBySupplier(currentSupplier);
     await loadSuppliers();
+    loadDataRevision(currentSupplier);
   } catch (error) {
     const fallbackMessage = error?.message || 'Error importing data. Please try again.';
     showToast(fallbackMessage, 'error');
@@ -2350,6 +2351,9 @@ function handleSupplierSelection(supplierName, { sourceElement = null, forceRelo
     currentSupplierName.textContent = normalizedName;
   }
 
+  // Load data revision badge
+  loadDataRevision(normalizedName);
+
   // Habilitar botões de exportar/importar IMEDIATAMENTE
   updateSupplierDataButtons(true);
 
@@ -2411,6 +2415,19 @@ function handleSupplierSelection(supplierName, { sourceElement = null, forceRelo
         loadToolingBySupplier(normalizedName).catch(err => { });
       }
     }, 0);
+  }
+}
+
+// Load and display the data revision badge for a supplier
+async function loadDataRevision(supplierName) {
+  const badge = document.getElementById('dataRevisionBadge');
+  if (!badge) return;
+  try {
+    const revision = await window.api.getDataRevision(supplierName);
+    badge.textContent = `Rev. ${revision || 0}`;
+    badge.title = `Data Revision: ${revision || 0}`;
+  } catch (err) {
+    badge.textContent = 'Rev. 0';
   }
 }
 
@@ -3694,7 +3711,13 @@ function buildStepsDropdownOptionsMarkup(currentStep, cardIndex, itemId) {
   const normalizedCurrent = (currentStep || '').toString().trim();
   const stepValues = ['1', '2', '3', '4', '5', '6', '7'];
 
-  return stepValues.map((step) => {
+  const blankSelected = !normalizedCurrent ? ' is-selected' : '';
+  const blankOption = `<button type="button" class="steps-dropdown-option${blankSelected}" data-step-value="" onclick="selectStepsDropdownOption(event, ${cardIndex}, ${itemId}, '')">
+      <span class="steps-option-number">&nbsp;</span>
+      <span class="steps-option-description"></span>
+    </button>`;
+
+  return blankOption + stepValues.map((step) => {
     const description = getStepDescription(step);
     const isSelected = normalizedCurrent === step ? ' is-selected' : '';
     return `<button type="button" class="steps-dropdown-option${isSelected}" data-step-value="${step}" onclick="selectStepsDropdownOption(event, ${cardIndex}, ${itemId}, '${step}')">
@@ -5167,10 +5190,6 @@ async function navigateToLinkedCard(targetId) {
     const expandedCards = document.querySelectorAll('.tooling-card.expanded');
     for (const expandedCard of expandedCards) {
       if (expandedCard !== targetCard) {
-        const itemId = expandedCard.getAttribute('data-item-id');
-        if (itemId) {
-          await saveToolingQuietly(itemId);
-        }
         expandedCard.classList.remove('expanded');
       }
     }
@@ -5524,26 +5543,7 @@ function scheduleInterfaceRefresh(reason = 'auto', delay = INTERFACE_REFRESH_DEL
 }
 
 function autoSaveTooling(id, immediate = false) {
-  // Skip autosave during timeline reordering
-  if (isReorderingTimeline) {
-    return;
-  }
-
-  // Cancela timeout anterior se existir
-  if (autoSaveTimeouts[id]) {
-    clearTimeout(autoSaveTimeouts[id]);
-  }
-
-  // Se immediate for true, salva imediatamente sem notificação
-  if (immediate) {
-    saveToolingQuietly(id);
-    return;
-  }
-
-  // Cria novo timeout para salvar após 1 segundo sem edição
-  autoSaveTimeouts[id] = setTimeout(async () => {
-    await saveToolingQuietly(id);
-  }, 1000);
+  // Auto-save desabilitado: o salvamento só ocorre via botão Save de cada aba
 }
 
 // Formata data para exibição
@@ -6890,6 +6890,7 @@ async function deleteToolingItem(id) {
     if (selectedSupplier) {
       // loadToolingBySupplier já atualiza as métricas via displayTooling
       await loadToolingBySupplier(selectedSupplier);
+      loadDataRevision(selectedSupplier);
     } else {
       displayTooling([]);
     }
@@ -7292,16 +7293,13 @@ function renderSpreadsheetView() {
             data-field="tool_description" data-id="${item.id}">
         </td>
         <td>
-          <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
-            value="${toolingLifeDisplay}" data-field="tooling_life_qty" data-id="${item.id}">
+          <span class="spreadsheet-display" data-field="tooling_life_qty" data-id="${item.id}">${toolingLifeDisplay}</span>
         </td>
         <td>
-          <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
-            value="${producedDisplay}" data-field="produced" data-id="${item.id}">
+          <span class="spreadsheet-display" data-field="produced" data-id="${item.id}">${producedDisplay}</span>
         </td>
         <td>
-          <input type="text" class="spreadsheet-input input-center" inputmode="numeric" data-mask="thousands" 
-            value="${forecastDisplay}" data-field="annual_volume_forecast" data-id="${item.id}">
+          <span class="spreadsheet-display" data-field="annual_volume_forecast" data-id="${item.id}">${forecastDisplay}</span>
         </td>
         <td class="spreadsheet-expiration">
           ${expirationIconHtml}
@@ -7855,20 +7853,12 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
         // Salva antes de fechar (se houver mudanças) e sincroniza a linha
         const prevItemId = expandedRow.getAttribute('data-id');
         if (prevItemId) {
-          // Verifica se há mudanças ANTES de remover o DOM
-          const prepared = buildCardPayloadFromDom(prevItemId);
-          if (prepared && prepared.hasChanges) {
-            Promise.resolve().then(() => {
-              saveToolingQuietly(prevItemId);
-              syncSpreadsheetRowFromCard(prevItemId);
-            });
-          } else {
-            // Apenas limpa o snapshot sem salvar
-            const snapshotKey = getSnapshotKey(prevItemId);
-            if (snapshotKey) {
-              cardSnapshotStore.delete(snapshotKey);
-            }
+          // Limpa o snapshot sem salvar (save apenas via botão)
+          const snapshotKey = getSnapshotKey(prevItemId);
+          if (snapshotKey) {
+            cardSnapshotStore.delete(snapshotKey);
           }
+          syncSpreadsheetRowFromCard(prevItemId);
         }
         detailRow.classList.remove('is-open');
         detailRow.classList.add('is-closing');
@@ -7887,20 +7877,12 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
     // Remove a linha de detalhes com animação
     const detailRow = row.nextElementSibling;
     if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
-      // Verifica se há mudanças ANTES de remover o DOM
-      const prepared = buildCardPayloadFromDom(itemId);
-      if (prepared && prepared.hasChanges) {
-        Promise.resolve().then(() => {
-          saveToolingQuietly(itemId);
-          syncSpreadsheetRowFromCard(itemId);
-        });
-      } else {
-        // Apenas limpa o snapshot sem salvar
-        const snapshotKey = getSnapshotKey(itemId);
-        if (snapshotKey) {
-          cardSnapshotStore.delete(snapshotKey);
-        }
+      // Limpa o snapshot sem salvar (save apenas via botão)
+      const snapshotKey = getSnapshotKey(itemId);
+      if (snapshotKey) {
+        cardSnapshotStore.delete(snapshotKey);
       }
+      syncSpreadsheetRowFromCard(itemId);
       detailRow.classList.remove('is-open');
       detailRow.classList.add('is-closing');
       const onEnd = () => { detailRow.remove(); };
@@ -7916,7 +7898,7 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
     const item = toolingData.find(t => String(t.id) === String(itemId));
     if (item) {
       const supplierContext = selectedSupplier || currentSupplier || '';
-      const chainMembership = new Map();
+      const chainMembership = computeLocalChainMembership(toolingData, externalIncomingLinks);
       const bodyHTML = buildToolingCardBodyHTML(item, itemIndex, chainMembership, supplierContext);
 
       // Conta o número de colunas
@@ -8045,16 +8027,23 @@ async function loadCardAttachmentsForSpreadsheet(itemId, container) {
     const attachments = await window.api.getAttachments(supplierContext, itemId);
     const list = container.querySelector('.card-attachments-list');
     const empty = container.querySelector('.card-attachments-empty');
+    const footerAttachmentIcon = container.querySelector(`[data-card-attachment-icon="${itemId}"]`);
 
     if (!list) return;
 
     if (!attachments || attachments.length === 0) {
       if (empty) empty.style.display = 'flex';
       list.innerHTML = '';
+      if (footerAttachmentIcon) {
+        footerAttachmentIcon.setAttribute('hidden', '');
+      }
       return;
     }
 
     if (empty) empty.style.display = 'none';
+    if (footerAttachmentIcon) {
+      footerAttachmentIcon.removeAttribute('hidden');
+    }
 
     list.innerHTML = attachments.map(att => `
       <div class="card-attachment-item">
@@ -8099,6 +8088,10 @@ function syncSpreadsheetRowFromCard(itemId) {
         if (field === 'status') {
           input.className = 'spreadsheet-select ' + getStatusClass(value);
         }
+      } else if (input.tagName === 'SPAN') {
+        input.textContent = ['tooling_life_qty', 'produced', 'annual_volume_forecast'].includes(field)
+          ? formatNumericForSpreadsheet(value)
+          : (value || '');
       } else if (input.type === 'date') {
         input.value = formatDateForDateInput(value);
       } else if (['tooling_life_qty', 'produced', 'annual_volume_forecast'].includes(field)) {
@@ -8470,8 +8463,10 @@ function syncSpreadsheetFromExpandedCard(itemId, field, value) {
   const row = document.querySelector(`tr[data-id="${itemId}"]`);
   if (!row) return;
 
-  // Encontra o input/select correspondente na linha da spreadsheet
-  const targetElement = row.querySelector(`[data-field="${field}"][data-id="${itemId}"].spreadsheet-input, [data-field="${field}"][data-id="${itemId}"].spreadsheet-select`);
+  // Encontra o input/select/span correspondente na linha da spreadsheet
+  const targetElement = row.querySelector(
+    `[data-field="${field}"][data-id="${itemId}"].spreadsheet-input, [data-field="${field}"][data-id="${itemId}"].spreadsheet-select, [data-field="${field}"][data-id="${itemId}"].spreadsheet-display`
+  );
   if (!targetElement) return;
 
   // Atualiza o valor
@@ -8480,6 +8475,10 @@ function syncSpreadsheetFromExpandedCard(itemId, field, value) {
     if (field === 'status') {
       targetElement.className = 'spreadsheet-select ' + getStatusClass(value);
     }
+  } else if (targetElement.tagName === 'SPAN') {
+    targetElement.textContent = numericSpreadsheetFields.includes(field)
+      ? formatNumericForSpreadsheet(value)
+      : (value || '');
   } else if (targetElement.type === 'date') {
     targetElement.value = formatDateForDateInput(value);
   } else if (numericSpreadsheetFields.includes(field)) {
@@ -8745,6 +8744,16 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
   const isObsolete = normalizedStatus === 'obsolete';
   const replacementIdValue = sanitizeReplacementId(item.replacement_tooling_id);
   const hasReplacementLink = replacementIdValue !== '';
+  const membershipKey = String(item.id || '').trim();
+  const hasChainMembership = chainMembership?.get(membershipKey) === true;
+  const toolingLifeChange = getLatestToolingLifeChange(item);
+  const toolingLifeChangeIconHtml = toolingLifeChange ? `
+            <span class="card-inline-info card-inline-info-life" title="${escapeHtml(toolingLifeChange.title)}">
+              <span class="tooling-life-change-icon ${toolingLifeChange.direction}">
+                <i class="ph ${toolingLifeChange.direction === 'up' ? 'ph-arrow-up' : 'ph-arrow-down'}"></i>
+              </span>
+            </span>
+          ` : '';
   const replacementPickerOptionsMarkup = buildReplacementPickerOptionsMarkup(item, index);
   const replacementPickerLabel = escapeHtml(
     hasReplacementLink
@@ -9099,6 +9108,13 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
         <div class="card-last-update-snick" data-last-update-id="${item.id}">
           <i class="ph ph-clock-clockwise"></i>
           <span>Last update: ${lastUpdateDisplay}</span>
+          ${toolingLifeChangeIconHtml}
+          <span class="card-inline-info card-inline-info-chain" ${hasChainMembership ? '' : 'hidden'} title="Replacement chain" onclick="event.stopPropagation(); openReplacementTimelineOverlay(${item.id})">
+            <i class="ph ph-git-branch"></i>
+          </span>
+          <span class="card-inline-info card-inline-info-attachment" data-card-attachment-icon="${item.id}" hidden title="Attachments" onclick="event.stopPropagation(); openToolingAttachmentsFromSpreadsheet(${item.id})">
+            <i class="ph ph-paperclip"></i>
+          </span>
         </div>
         <div class="tooling-card-footer-actions">
           <button class="btn-delete" onclick="confirmDeleteTooling(${item.id})">
@@ -9729,10 +9745,6 @@ async function toggleAllCards() {
         await loadCardAttachments(itemId);
       }
     } else if (!shouldExpand && isExpanded) {
-      const itemId = card.getAttribute('data-item-id');
-      if (itemId) {
-        await saveToolingQuietly(itemId);
-      }
       card.classList.remove('expanded');
     }
   }
@@ -9863,12 +9875,8 @@ function toggleCard(index) {
   const card = document.getElementById(`card-${index}`);
   const wasExpanded = card.classList.contains('expanded');
 
-  // Se está fechando o card, salva em background
+  // Se está fechando o card
   if (wasExpanded) {
-    const itemId = card.getAttribute('data-item-id');
-    if (itemId) {
-      Promise.resolve().then(() => saveToolingQuietly(itemId));
-    }
     card.classList.remove('expanded');
   } else {
     // Está abrindo o card
@@ -10333,6 +10341,34 @@ async function uploadCardAttachment(itemId) {
   }
 }
 
+// Atualiza sidebar e status bar após save manual sem recarregar a lista de tooling
+// (evita fechar os cards expandidos)
+async function refreshSidebarAfterSave() {
+  try {
+    if (currentSupplier) loadDataRevision(currentSupplier);
+    suppliersData = await window.api.getSuppliersWithStats();
+
+    // Re-renderiza apenas o sidebar de suppliers (não toca nos cards de tooling)
+    let displayList = suppliersData;
+    if (expirationFilterEnabled) {
+      displayList = suppliersData.filter(s => ExpirationMetrics.hasCriticalItems(s));
+    }
+    if (stepsFilteredSuppliers !== null) {
+      displayList = displayList.filter(s => stepsFilteredSuppliers.includes(String(s.supplier || '')));
+    }
+    displaySuppliers(displayList);
+
+    const analytics = await window.api.getAnalytics();
+    if (!Array.isArray(suppliersData) || suppliersData.length === 0) {
+      updateStatusBar(analytics);
+    } else {
+      syncStatusBarWithSuppliers();
+    }
+  } catch (error) {
+    // Silently ignore — save already succeeded, sidebar update is best-effort
+  }
+}
+
 // Salva alterações do ferramental
 async function saveTooling(id) {
   try {
@@ -10376,7 +10412,8 @@ async function saveTooling(id) {
       }
     }
 
-    scheduleInterfaceRefresh('manual-save');
+    // Atualiza apenas o sidebar e status bar — nunca recarrega os cards para não fechar o atual
+    refreshSidebarAfterSave();
   } catch (error) {
     showNotification('Erro ao salvar dados', 'error');
   }
@@ -10458,6 +10495,11 @@ function updateLastUpdateDisplay(id, dateValue) {
 // Atualiza suppliers, barra inferior e dados visíveis após salvar
 async function updateInterfaceAfterSave() {
   try {
+    // Refresh data revision badge
+    if (currentSupplier) {
+      loadDataRevision(currentSupplier);
+    }
+
     // Recarrega suppliers com estatísticas atualizadas
     const oldSuppliersData = suppliersData;
     suppliersData = await window.api.getSuppliersWithStats();
