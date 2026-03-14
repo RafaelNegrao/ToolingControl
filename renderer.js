@@ -88,6 +88,10 @@ let productionInfoElements = {
   overlay: null,
   closeButtons: []
 };
+let analysisCompletedInfoElements = {
+  overlay: null,
+  closeButtons: []
+};
 let stepsInfoElements = {
   overlay: null,
   closeButtons: []
@@ -226,7 +230,7 @@ function classifyToolingExpirationState(item) {
   const percentUsedValue = toolingLife > 0 ? (produced / toolingLife) * 100 : 0;
 
   if (percentUsedValue >= 100 || expirationStatus.class === 'expired') {
-    return { state: 'expired', label: 'Expirado', expirationDate: expirationDateValue };
+    return { state: 'expired', label: 'Expired', expirationDate: expirationDateValue };
   }
 
   if (expirationStatus.class === 'warning') {
@@ -428,6 +432,63 @@ function initProductionInfoModal() {
         closeProductionInfoModal();
       });
     });
+  }
+}
+
+function initAnalysisCompletedInfoModal() {
+  const overlay = document.getElementById('analysisCompletedInfoOverlay');
+  const closeButtons = document.querySelectorAll('[data-analysis-completed-info-close]');
+
+  analysisCompletedInfoElements = {
+    overlay,
+    closeButtons
+  };
+
+  if (!overlay) {
+    return;
+  }
+
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) {
+      closeAnalysisCompletedInfoModal();
+    }
+  });
+
+  if (closeButtons && closeButtons.length > 0) {
+    closeButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        closeAnalysisCompletedInfoModal();
+      });
+    });
+  }
+}
+
+function openAnalysisCompletedInfoModal(event) {
+  if (event) {
+    event.preventDefault();
+    event.stopPropagation();
+  }
+  const { overlay, closeButtons } = analysisCompletedInfoElements;
+  if (!overlay) {
+    return;
+  }
+  overlay.classList.add('active');
+  requestAnimationFrame(() => {
+    closeButtons?.[0]?.focus();
+  });
+}
+
+function closeAnalysisCompletedInfoModal() {
+  const { overlay } = analysisCompletedInfoElements;
+  if (!overlay) {
+    return;
+  }
+  overlay.classList.remove('active');
+}
+
+function handleAnalysisCompletedInfoIconKey(event) {
+  if (event.key === 'Enter' || event.key === ' ') {
+    openAnalysisCompletedInfoModal(event);
   }
 }
 
@@ -866,6 +927,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initAttachmentsDragAndDrop();
   initExpirationInfoModal();
   initProductionInfoModal();
+  initAnalysisCompletedInfoModal();
   initStepsInfoModal();
   initSettingsCarouselScrollListener();
   initThousandsMaskBehavior();
@@ -1254,6 +1316,10 @@ document.addEventListener('keydown', (e) => {
   const productionOverlay = productionInfoElements.overlay;
   if (productionOverlay && productionOverlay.classList.contains('active') && e.key === 'Escape') {
     closeProductionInfoModal();
+  }
+  const analysisCompletedOverlay = analysisCompletedInfoElements.overlay;
+  if (analysisCompletedOverlay && analysisCompletedOverlay.classList.contains('active') && e.key === 'Escape') {
+    closeAnalysisCompletedInfoModal();
   }
   const stepsOverlay = stepsInfoElements.overlay;
   if (stepsOverlay && stepsOverlay.classList.contains('active') && e.key === 'Escape') {
@@ -1821,10 +1887,10 @@ function editSupplierMessage(index) {
   const actions = textEl.closest('.comment-item').querySelector('.comment-item-actions');
   if (actions) {
     actions.innerHTML = `
-      <button class="btn-comment-action" onclick="saveSupplierMessageEdit(${index})" title="Salvar">
+      <button class="btn-comment-action" onclick="saveSupplierMessageEdit(${index})" title="Save">
         <i class="ph ph-check"></i>
       </button>
-      <button class="btn-comment-action" onclick="cancelSupplierMessageEdit(${index})" title="Cancelar">
+      <button class="btn-comment-action" onclick="cancelSupplierMessageEdit(${index})" title="Cancel">
         <i class="ph ph-x"></i>
       </button>
     `;
@@ -2471,7 +2537,7 @@ function selectSupplier(evt, supplierName) {
 async function promptRenameSupplier(currentName) {
   const normalizedCurrent = typeof currentName === 'string' ? currentName.trim() : '';
   if (!normalizedCurrent) {
-    showToast('Selecione um fornecedor antes de renomear.', 'error');
+    showToast('Select a supplier before renaming.', 'error');
     return;
   }
 
@@ -2531,7 +2597,7 @@ async function confirmRenameSupplier() {
   }
 
   if (normalizedNew === normalizedCurrent) {
-    showToast('O nome do fornecedor não foi alterado.', 'info');
+    showToast('The supplier name was not changed.', 'info');
     closeRenameSupplierModal();
     return;
   }
@@ -2539,7 +2605,7 @@ async function confirmRenameSupplier() {
   try {
     const result = await window.api.renameSupplier(normalizedCurrent, normalizedNew);
     if (!result || result.success !== true) {
-      showToast(result?.message || 'Erro ao renomear fornecedor.', 'error');
+      showToast(result?.message || 'Error renaming supplier.', 'error');
       return;
     }
 
@@ -2571,9 +2637,9 @@ async function confirmRenameSupplier() {
       selectSupplier(null, normalizedNew);
     }
 
-    showToast(`Fornecedor renomeado para "${normalizedNew}".`, 'success');
+    showToast(`Supplier renamed to "${normalizedNew}".`, 'success');
   } catch (error) {
-    showToast(error?.message || 'Erro ao renomear fornecedor.', 'error');
+    showToast(error?.message || 'Error renaming supplier.', 'error');
   }
 }
 
@@ -3194,7 +3260,7 @@ async function loadToolingBySupplier(supplier) {
     // A função displayTooling já atualiza as métricas do supplier card internamente
     await displayToolingInChunks(toolingData);
   } catch (error) {
-    showNotification('Erro ao carregar ferramentais', 'error');
+    showNotification('Error loading tooling', 'error');
     hideSkeletonLoading();
   }
 }
@@ -3306,13 +3372,13 @@ function getExpirationStatus(expirationDate) {
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
   if (diffDays < 0) {
-    return { class: 'expired', label: 'Expirado' };
+    return { class: 'expired', label: 'Expired' };
   } else if (diffDays <= 730) {
-    return { class: 'warning', label: 'Até 2 anos' };
+    return { class: 'warning', label: 'Within 2 years' };
   } else if (diffDays <= 1825) {
-    return { class: 'ok', label: '2 a 5 anos' };
+    return { class: 'ok', label: '2 to 5 years' };
   } else {
-    return { class: 'ok', label: 'Mais de 5 anos' };
+    return { class: 'ok', label: 'More than 5 years' };
   }
 }
 
@@ -3644,6 +3710,8 @@ function handleStatusSelectChange(cardIndex, itemId, selectEl) {
       const stubItem = { id: Number(replacementPickerOverlayState.itemId) || 0 };
       replacementPickerOverlayState.list.innerHTML = buildReplacementPickerOptionsMarkup(stubItem, replacementPickerOverlayState.cardIndex);
     }
+
+    updateAnalysisVisibilityForItem(itemId);
   }
   autoSaveTooling(itemId, true);
 }
@@ -3830,7 +3898,8 @@ async function handleAnalysisCompletedChange(itemId, isChecked) {
         const commentText = 'Analysis completed - tooling reviewed and no revitalization required.';
         const newComment = {
           date: dateStr,
-          text: commentText
+          text: commentText,
+          system: true
         };
 
         // Adiciona ao array de comentários
@@ -3869,6 +3938,50 @@ async function handleAnalysisCompletedChange(itemId, isChecked) {
     console.error('Error updating analysis completed:', error);
     showNotification('Error updating analysis status', 'error');
   }
+}
+
+function buildLiveCardState(itemId) {
+  const baseItem = toolingData.find(t => String(t.id) === String(itemId));
+  if (!baseItem) {
+    return null;
+  }
+
+  const domValues = collectCardDomValues(itemId) || {};
+  return {
+    ...baseItem,
+    ...domValues,
+    id: baseItem.id
+  };
+}
+
+function updateAnalysisVisibilityForItem(itemId) {
+  const item = buildLiveCardState(itemId);
+  if (!item) {
+    return;
+  }
+
+  const classification = classifyToolingExpirationState(item);
+  const shouldShow = classification.state === 'expired' || classification.state === 'warning';
+  const cardContainers = document.querySelectorAll(`[data-item-id="${itemId}"]`);
+
+  cardContainers.forEach(container => {
+    const layoutRow = container.querySelector('[data-analysis-layout]');
+    const checkboxItem = container.querySelector('[data-analysis-checkbox-item]');
+    const notesItem = container.querySelector('[data-analysis-notes-item]');
+
+    if (layoutRow) {
+      layoutRow.classList.toggle('detail-pair', shouldShow);
+      layoutRow.classList.toggle('detail-item-full', !shouldShow);
+    }
+
+    if (checkboxItem) {
+      checkboxItem.hidden = !shouldShow;
+    }
+
+    if (notesItem) {
+      notesItem.hidden = !shouldShow;
+    }
+  });
 }
 
 function updateExpirationIconsForItem(itemId) {
@@ -3911,6 +4024,8 @@ function updateExpirationIconsForItem(itemId) {
       }
     }
   });
+
+  updateAnalysisVisibilityForItem(itemId);
 }
 
 function handlePNChange(cardIndex, itemId, inputEl) {
@@ -4273,7 +4388,7 @@ async function openReplacementTimelineOverlay(startId) {
 
   const normalizedId = sanitizeReplacementId(startId);
   if (!normalizedId) {
-    showNotification('Não foi possível identificar o ferramental selecionado.', 'warning');
+    showNotification('Unable to identify the selected tooling.', 'warning');
     return;
   }
 
@@ -4296,7 +4411,7 @@ async function openReplacementTimelineOverlay(startId) {
     const chain = await buildReplacementTimeline(normalizedId);
     renderReplacementTimeline(chain);
   } catch (error) {
-    showNotification('Não foi possível carregar a linha temporal de substituições.', 'error');
+    showNotification('Unable to load the replacement timeline.', 'error');
     renderReplacementTimeline([]);
   }
 }
@@ -5004,7 +5119,7 @@ async function updateReplacementChainAfterReorder() {
       }
     }
 
-    showNotification('Cadeia reorganizada e salva com sucesso.', 'success');
+    showNotification('Chain reordered and saved successfully.', 'success');
 
     // Update cards UI immediately
     for (let i = 0; i < orderedIds.length; i++) {
@@ -5022,7 +5137,7 @@ async function updateReplacementChainAfterReorder() {
     renderReplacementTimeline(chain);
 
   } catch (error) {
-    showNotification('Erro ao atualizar a ordem da cadeia.', 'error');
+    showNotification('Error updating chain order.', 'error');
   } finally {
     isReorderingTimeline = false;
   }
@@ -5098,7 +5213,7 @@ function handleReplacementLinkChipClick(event, buttonEl) {
 async function navigateToLinkedCard(targetId) {
   const normalizedId = sanitizeReplacementId(targetId);
   if (!normalizedId) {
-    showNotification('Informe um ID de substituição válido.', 'error');
+    showNotification('Enter a valid replacement ID.', 'error');
     return;
   }
 
@@ -5112,7 +5227,7 @@ async function navigateToLinkedCard(targetId) {
     if (!targetRow) {
       const cardLoaded = await ensureCardLoadedById(normalizedId);
       if (!cardLoaded) {
-        showNotification(`O card #${normalizedId} não foi encontrado. Verifique se o registro existe.`, 'warning');
+        showNotification(`Card #${normalizedId} was not found. Check whether the record exists.`, 'warning');
         return;
       }
 
@@ -5121,7 +5236,7 @@ async function navigateToLinkedCard(targetId) {
     }
 
     if (!targetRow) {
-      showNotification(`Não foi possível exibir o card #${normalizedId}. O registro pode não existir mais.`, 'warning');
+      showNotification(`Unable to display card #${normalizedId}. The record may no longer exist.`, 'warning');
       return;
     }
 
@@ -5130,7 +5245,7 @@ async function navigateToLinkedCard(targetId) {
     const itemIndex = toolingData.indexOf(item);
 
     if (itemIndex === -1) {
-      showNotification(`Não foi possível encontrar o item #${normalizedId}.`, 'warning');
+      showNotification(`Unable to find item #${normalizedId}.`, 'warning');
       return;
     }
 
@@ -5171,7 +5286,7 @@ async function navigateToLinkedCard(targetId) {
     if (!targetCard) {
       const cardLoaded = await ensureCardLoadedById(normalizedId);
       if (!cardLoaded) {
-        showNotification(`O card #${normalizedId} não foi encontrado. Verifique se o registro existe.`, 'warning');
+        showNotification(`Card #${normalizedId} was not found. Check whether the record exists.`, 'warning');
         return;
       }
 
@@ -5184,7 +5299,7 @@ async function navigateToLinkedCard(targetId) {
     }
 
     if (!targetCard) {
-      showNotification(`Não foi possível exibir o card #${normalizedId}. O registro pode não existir mais.`, 'warning');
+      showNotification(`Unable to display card #${normalizedId}. The record may no longer exist.`, 'warning');
       return;
     }
 
@@ -5324,6 +5439,16 @@ function restoreDateReminders(itemId) {
       if (input) {
         showDateHighlight(input);
       }
+    }
+  });
+}
+
+function highlightEmptyDateFields(container, itemId) {
+  const dateFields = ['date_remaining_tooling_life', 'date_annual_volume'];
+  dateFields.forEach(fieldName => {
+    const input = container.querySelector(`[data-id="${itemId}"][data-field="${fieldName}"]`);
+    if (input && !input.value) {
+      showDateHighlight(input);
     }
   });
 }
@@ -6249,7 +6374,7 @@ function confirmDeleteTooling(id) {
   const descriptorParts = [];
   if (item?.pn) descriptorParts.push(item.pn);
   if (item?.tool_description) descriptorParts.push(item.tool_description);
-  const descriptor = descriptorParts.join(' - ') || 'este ferramental';
+  const descriptor = descriptorParts.join(' - ') || 'this tooling';
 
   deleteConfirmState = {
     id,
@@ -6296,7 +6421,7 @@ async function handleDeleteConfirmation() {
   }
 
   if (userCode !== deleteConfirmState.code) {
-    showNotification('Código incorreto. Tente novamente.', 'error');
+    showNotification('Incorrect code. Try again.', 'error');
     inputEl.select();
     return;
   }
@@ -6411,6 +6536,20 @@ function closeAddToolingModal() {
   if (forecastDateInput) forecastDateInput.value = '';
 }
 
+function isAutomaticLogComment(comment) {
+  if (!comment || typeof comment !== 'object') {
+    return false;
+  }
+  if (comment.system === true) {
+    return true;
+  }
+  const rawText = String(comment.text || '').trim();
+  if (!rawText) {
+    return false;
+  }
+  return /(^|\n)[^,\n][^\n]*,\s*.+?\s*-->\s*.+(?=$|\n)/.test(rawText);
+}
+
 function buildCommentsListHTML(commentsJson, itemId, filterText = null) {
   let comments = [];
 
@@ -6431,11 +6570,17 @@ function buildCommentsListHTML(commentsJson, itemId, filterText = null) {
   // Aplicar filtro por texto se fornecido
   let filteredComments = indexedComments;
   if (filterText && filterText !== 'all') {
-    const searchTerm = filterText.toLowerCase();
-    filteredComments = indexedComments.filter(comment => {
-      const commentText = (comment.text || '').toLowerCase();
-      return commentText.includes(searchTerm);
-    });
+    if (filterText === 'only-logs') {
+      filteredComments = indexedComments.filter(comment => isAutomaticLogComment(comment));
+    } else if (filterText === 'only-comments') {
+      filteredComments = indexedComments.filter(comment => !isAutomaticLogComment(comment));
+    } else {
+      const searchTerm = filterText.toLowerCase();
+      filteredComments = indexedComments.filter(comment => {
+        const commentText = (comment.text || '').toLowerCase();
+        return commentText.includes(searchTerm);
+      });
+    }
   }
 
   // Inverter ordem para mostrar comentários mais recentes primeiro (do topo para baixo)
@@ -6454,6 +6599,7 @@ function buildCommentsListHTML(commentsJson, itemId, filterText = null) {
     const text = escapeHtml(comment.text || '');
     const isInitial = comment.initial === true;
     const isImported = comment.origin === 'import';
+    const isSystemLog = isAutomaticLogComment(comment);
     const cardClasses = ['comment-card'];
     if (isInitial) {
       cardClasses.push('comment-initial');
@@ -6461,10 +6607,20 @@ function buildCommentsListHTML(commentsJson, itemId, filterText = null) {
     if (isImported) {
       cardClasses.push('comment-imported');
     }
+    if (isSystemLog) {
+      cardClasses.push('comment-log');
+    }
 
     let headerRight = '';
     if (isInitial) {
       headerRight = '<span class="comment-initial-badge">Initial</span>';
+    } else if (isSystemLog) {
+      headerRight = `
+        <span class="comment-log-chip" title="Automatic change log">
+          <i class="ph ph-file-text" aria-hidden="true"></i>
+          <span>Log</span>
+        </span>
+      `;
     } else if (isImported) {
       headerRight = `
         <div class="comment-actions comment-actions--readonly" title="Imported from spreadsheet">
@@ -6569,6 +6725,10 @@ function editComment(itemId, commentIndex) {
 
   if (commentIndex < 0 || commentIndex >= comments.length) return;
   if (comments[commentIndex].initial) return;
+  if (isAutomaticLogComment(comments[commentIndex])) {
+    showNotification('Log comments cannot be edited', 'info');
+    return;
+  }
   if (comments[commentIndex].origin === 'import') {
     showNotification('Imported comments cannot be edited', 'info');
     return;
@@ -6728,6 +6888,11 @@ function openCommentDeleteModal(itemId, commentIndex) {
     return;
   }
 
+  if (isAutomaticLogComment(targetComment)) {
+    showNotification('Log comments cannot be deleted', 'info');
+    return;
+  }
+
   if (targetComment.origin === 'import') {
     showNotification('Imported comments cannot be deleted', 'info');
     return;
@@ -6794,6 +6959,11 @@ function deleteComment(itemId, commentIndex) {
     return false;
   }
 
+  if (isAutomaticLogComment(comments[commentIndex])) {
+    showNotification('Log comments cannot be deleted', 'info');
+    return false;
+  }
+
   if (comments[commentIndex]?.origin === 'import') {
     showNotification('Imported comments cannot be deleted', 'info');
     return false;
@@ -6820,6 +6990,17 @@ function updateCommentsDisplay(itemId) {
   const currentFilter = filterBtn ? filterBtn.dataset.currentFilter : null;
 
   commentsList.innerHTML = buildCommentsListHTML(item.comments || '', itemId, currentFilter);
+  updateCommentsFilterModeState(itemId, currentFilter || 'all');
+}
+
+function updateCommentsFilterModeState(itemId, activeFilter = 'all') {
+  const popup = document.getElementById(`commentsFilterPopup_${itemId}`);
+  if (!popup) return;
+
+  popup.querySelectorAll('[data-comments-filter-mode]').forEach((button) => {
+    const mode = button.getAttribute('data-comments-filter-mode');
+    button.classList.toggle('active', mode === activeFilter);
+  });
 }
 
 function toggleCommentsFilterPopup(itemId) {
@@ -6833,6 +7014,9 @@ function toggleCommentsFilterPopup(itemId) {
     }
   });
 
+  const filterBtn = document.getElementById(`commentsFilterBtn_${itemId}`);
+  const currentFilter = filterBtn ? (filterBtn.dataset.currentFilter || 'all') : 'all';
+  updateCommentsFilterModeState(itemId, currentFilter);
   popup.classList.toggle('active');
 }
 
@@ -6890,24 +7074,24 @@ async function submitAddToolingForm() {
   const forecastDate = forecastDateInput ? forecastDateInput.value : null;
 
   if (!pn) {
-    showNotification('Informe o PN do ferramental.', 'error');
+    showNotification('Enter the tooling PN.', 'error');
     pnInput.focus();
     return;
   }
 
   if (!supplier) {
-    showNotification('Selecione ou cadastre um fornecedor.', 'error');
+    showNotification('Select or add a supplier.', 'error');
     supplierInput.focus();
     return;
   }
 
   if (Number.isNaN(toolingLife) || Number.isNaN(produced)) {
-    showNotification('Preencha os valores numéricos corretamente.', 'error');
+    showNotification('Fill in the numeric values correctly.', 'error');
     return;
   }
 
   if (toolingLife < 0 || produced < 0) {
-    showNotification('Valores numéricos devem ser positivos.', 'error');
+    showNotification('Numeric values must be positive.', 'error');
     return;
   }
 
@@ -6947,7 +7131,7 @@ async function submitAddToolingForm() {
     const result = await window.api.createTooling(payload);
 
     if (!result || result.success !== true) {
-      showNotification(result?.error || 'Não foi possível criar o ferramental.', 'error');
+      showNotification(result?.error || 'Unable to create the tooling.', 'error');
       return;
     }
 
@@ -6978,9 +7162,9 @@ async function submitAddToolingForm() {
       currentSupplierName.textContent = supplier;
     }
 
-    showNotification('Ferramental criado com sucesso!');
+    showNotification('Tooling created successfully!');
   } catch (error) {
-    showNotification('Erro ao criar ferramental', 'error');
+    showNotification('Error creating tooling', 'error');
   }
 }
 
@@ -6988,11 +7172,11 @@ async function deleteToolingItem(id) {
   try {
     const result = await window.api.deleteTooling(id);
     if (!result || result.success !== true) {
-      showNotification('Não foi possível excluir o ferramental.', 'error');
+      showNotification('Unable to delete the tooling.', 'error');
       return;
     }
 
-    showNotification('Ferramental excluído com sucesso!');
+    showNotification('Tooling deleted successfully!');
     await loadSuppliers();
     await loadAnalytics();
     await refreshReplacementIdOptions(true);
@@ -7004,7 +7188,7 @@ async function deleteToolingItem(id) {
       displayTooling([]);
     }
   } catch (error) {
-    showNotification('Erro ao excluir ferramental', 'error');
+    showNotification('Error deleting tooling', 'error');
   }
 }
 
@@ -7395,11 +7579,11 @@ function renderSpreadsheetView() {
         </td>
         <td>
           <input type="text" class="spreadsheet-input" value="${escapeHtml(item.pn || '')}" 
-            data-field="pn" data-id="${item.id}">
+            data-field="pn" data-id="${item.id}" disabled>
         </td>
         <td>
           <input type="text" class="spreadsheet-input" value="${escapeHtml(item.tool_description || '')}" 
-            data-field="tool_description" data-id="${item.id}">
+            data-field="tool_description" data-id="${item.id}" disabled>
         </td>
         <td>
           <span class="spreadsheet-display" data-field="tooling_life_qty" data-id="${item.id}">${toolingLifeDisplay}</span>
@@ -7415,12 +7599,12 @@ function renderSpreadsheetView() {
           <span class="expiration-text">${expirationDateDisplay}</span>
         </td>
         <td>
-          <select class="spreadsheet-select input-center" data-field="steps" data-id="${item.id}">
+          <select class="spreadsheet-select input-center" data-field="steps" data-id="${item.id}" disabled>
             ${stepsOptionsHtml}
           </select>
         </td>
         <td>
-          <select class="spreadsheet-select ${statusClass}" data-field="status" data-id="${item.id}">
+          <select class="spreadsheet-select ${statusClass}" data-field="status" data-id="${item.id}" disabled>
             ${statusOptionsHtml}
           </select>
         </td>
@@ -7479,12 +7663,8 @@ function renderSpreadsheetView() {
       <input type="text" class="spreadsheet-input spreadsheet-new-input input-right" inputmode="numeric" data-mask="thousands" 
         id="newToolingVolume" placeholder="Volume">
     </td>
-    <td>
-      <input type="date" class="spreadsheet-input spreadsheet-new-input spreadsheet-date" id="newToolingProdDate" title="Produced Date">
-    </td>
-    <td>
-      <input type="date" class="spreadsheet-input spreadsheet-new-input spreadsheet-date" id="newToolingVolDate" title="Volume Date">
-    </td>
+    <td></td>
+    <td></td>
     <td></td>
     <td></td>
     <td></td>
@@ -7949,6 +8129,51 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
   guardUnsavedChanges(() => _doToggleSpreadsheetRow(itemId, itemIndex));
 }
 
+function animateSpreadsheetDetailRowOpen(detailRow) {
+  const cardContainer = detailRow?.querySelector('.spreadsheet-card-container');
+  if (!cardContainer) {
+    detailRow?.classList.add('is-open');
+    return;
+  }
+
+  detailRow.classList.add('is-open');
+  const targetHeight = cardContainer.scrollHeight;
+
+  cardContainer.animate(
+    [
+      { maxHeight: '0px', opacity: 0, transform: 'translateY(-8px)' },
+      { maxHeight: targetHeight + 'px', opacity: 1, transform: 'translateY(0)' }
+    ],
+    { duration: 350, easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)', fill: 'forwards' }
+  );
+}
+
+function animateSpreadsheetDetailRowClose(detailRow) {
+  if (!detailRow || detailRow.dataset.closing === 'true') {
+    return;
+  }
+
+  const cardContainer = detailRow.querySelector('.spreadsheet-card-container');
+  if (!cardContainer) {
+    detailRow.remove();
+    return;
+  }
+
+  detailRow.dataset.closing = 'true';
+  const currentHeight = cardContainer.scrollHeight;
+  cardContainer.style.overflow = 'hidden';
+
+  const anim = cardContainer.animate(
+    [
+      { maxHeight: currentHeight + 'px', opacity: 1 },
+      { maxHeight: '0px', opacity: 0 }
+    ],
+    { duration: 220, easing: 'ease-in', fill: 'forwards' }
+  );
+
+  anim.onfinish = () => detailRow.remove();
+}
+
 function _doToggleSpreadsheetRow(itemId, itemIndex) {
   const row = document.querySelector(`tr[data-id="${itemId}"]`);
   if (!row) return;
@@ -7977,11 +8202,7 @@ function _doToggleSpreadsheetRow(itemId, itemIndex) {
           }
           syncSpreadsheetRowFromCard(prevItemId);
         }
-        detailRow.classList.remove('is-open');
-        detailRow.classList.add('is-closing');
-        const onEnd = () => { detailRow.remove(); };
-        detailRow.querySelector('.spreadsheet-card-container')?.addEventListener('transitionend', onEnd, { once: true });
-        setTimeout(onEnd, 350); // fallback
+        animateSpreadsheetDetailRowClose(detailRow);
       }
     }
   });
@@ -8000,11 +8221,7 @@ function _doToggleSpreadsheetRow(itemId, itemIndex) {
         cardSnapshotStore.delete(snapshotKey);
       }
       syncSpreadsheetRowFromCard(itemId);
-      detailRow.classList.remove('is-open');
-      detailRow.classList.add('is-closing');
-      const onEnd = () => { detailRow.remove(); };
-      detailRow.querySelector('.spreadsheet-card-container')?.addEventListener('transitionend', onEnd, { once: true });
-      setTimeout(onEnd, 350); // fallback
+      animateSpreadsheetDetailRowClose(detailRow);
     }
   } else {
     // Abre a linha atual
@@ -8035,7 +8252,7 @@ function _doToggleSpreadsheetRow(itemId, itemIndex) {
 
       // Insere após a linha atual
       row.after(detailRow);
-      requestAnimationFrame(() => detailRow.classList.add('is-open'));
+      animateSpreadsheetDetailRowOpen(detailRow);
 
       // Inicializa o conteúdo do card
       const cardContainer = detailRow.querySelector('.spreadsheet-card-container');
@@ -8045,6 +8262,7 @@ function _doToggleSpreadsheetRow(itemId, itemIndex) {
 
         // Restaura reminders de data persistentes
         restoreDateReminders(itemId);
+        highlightEmptyDateFields(cardContainer, itemId);
 
         // Initialize drag and drop for attachment dropzone
         const dropzone = cardContainer.querySelector('.card-attachments-dropzone');
@@ -8347,24 +8565,24 @@ async function spreadsheetCreateTooling() {
 
   // Verificar campos obrigatórios
   if (!pn) {
-    showNotification('Informe o PN do ferramental.', 'error');
+    showNotification('Enter the tooling PN.', 'error');
     if (pnInput) pnInput.focus();
     return;
   }
 
   if (!currentSupplier) {
-    showNotification('Selecione um fornecedor primeiro.', 'error');
+    showNotification('Select a supplier first.', 'error');
     return;
   }
 
   if (toolingLife <= 0) {
-    showNotification('Informe a vida útil do ferramental.', 'error');
+    showNotification('Enter the tooling life.', 'error');
     if (lifeInput) lifeInput.focus();
     return;
   }
 
   if (produced < 0) {
-    showNotification('Valor de produção inválido.', 'error');
+    showNotification('Invalid produced value.', 'error');
     if (producedInput) producedInput.focus();
     return;
   }
@@ -8406,7 +8624,7 @@ async function spreadsheetCreateTooling() {
     const result = await window.api.createTooling(payload);
 
     if (!result || result.success !== true) {
-      showNotification(result?.error || 'Não foi possível criar o ferramental.', 'error');
+      showNotification(result?.error || 'Unable to create the tooling.', 'error');
       return;
     }
 
@@ -8425,11 +8643,11 @@ async function spreadsheetCreateTooling() {
     await refreshReplacementIdOptions(true);
     await loadToolingBySupplier(currentSupplier);
 
-    showNotification('Ferramental criado com sucesso!');
+    showNotification('Tooling created successfully!');
 
   } catch (error) {
     console.error('Error creating tooling from spreadsheet:', error);
-    showNotification('Erro ao criar ferramental', 'error');
+    showNotification('Error creating tooling', 'error');
   }
 }
 
@@ -8837,6 +9055,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
   let expirationDateValue = resolveToolingExpirationDate(item);
   const isAnalysisCompleted = item.analysis_completed === 1;
   const showAnalysisCompletedCheckbox = classification.state === 'expired' || classification.state === 'warning';
+  const analysisNotesValue = escapeHtml(item.analysis_notes || '');
 
   // Usa a função de ícone para dentro do input do card
   const expirationIconHtml = getCardExpirationIcon(classification.state, isAnalysisCompleted);
@@ -8897,10 +9116,6 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
         <button class="card-tab" onclick="switchCardTab(${index}, 'attachments')">
           <i class="ph ph-paperclip"></i>
           <span>Attachments</span>
-        </button>
-        <button class="card-tab" onclick="switchCardTab(${index}, 'step-tracking')">
-          <i class="ph ph-path"></i>
-          <span>Step Tracking</span>
         </button>
       </div>
 
@@ -8963,24 +9178,31 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   <input type="date" class="detail-input" value="${item.date_annual_volume || ''}" data-field="date_annual_volume" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
                 </div>
               </div>
-              <div class="${showAnalysisCompletedCheckbox ? 'detail-item' : 'detail-item detail-item-full'}">
-                <span class="detail-label">
-                  Expiration (Calculated)
-                  <i class="ph ph-info tooltip-icon" title="Formula: Production Date + ((Remaining ÷ Annual Volume) × 365) days" role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
-                </span>
-                <div class="input-with-icon">
-                  ${expirationIconHtml}
-                  <input type="date" class="detail-input calculated with-icon" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
+              <div class="detail-item ${showAnalysisCompletedCheckbox ? 'detail-pair' : 'detail-item-full'}" data-analysis-layout>
+                <div class="detail-item">
+                  <span class="detail-label">
+                    Expiration (Calculated)
+                    <i class="ph ph-info tooltip-icon" title="Formula: Production Date + ((Remaining ÷ Annual Volume) × 365) days" role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
+                  </span>
+                  <div class="input-with-icon">
+                    ${expirationIconHtml}
+                    <input type="date" class="detail-input calculated with-icon" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
+                  </div>
+                </div>
+                <div class="detail-item" data-analysis-checkbox-item style="display:flex;align-items:flex-end" ${showAnalysisCompletedCheckbox ? '' : 'hidden'}>
+                  <span class="detail-label">
+                    <i class="ph ph-info tooltip-icon" title="About Analysis Completed" role="button" tabindex="0" onclick="openAnalysisCompletedInfoModal(event)" onkeydown="handleAnalysisCompletedInfoIconKey(event)"></i>
+                  </span>
+                  <label class="analysis-completed-checkbox" style="width:100%">
+                    <input type="checkbox" data-field="analysis_completed" data-id="${item.id}" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
+                    <span>Analysis Completed</span>
+                  </label>
                 </div>
               </div>
-              ${showAnalysisCompletedCheckbox ? `
-              <div class="detail-item">
-                <span class="detail-label">An&aacute;lise Conclu&iacute;da</span>
-                <label class="analysis-completed-checkbox">
-                  <input type="checkbox" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
-                  <span>An&aacute;lise Conclu&iacute;da</span>
-                </label>
-              </div>` : ''}
+              <div class="detail-item detail-item-full" data-analysis-notes-item ${showAnalysisCompletedCheckbox ? '' : 'hidden'}>
+                <span class="detail-label">Analysis Notes</span>
+                <textarea class="detail-textarea" rows="4" data-field="analysis_notes" data-id="${item.id}" placeholder="Describe the analysis performed and the decision taken">${analysisNotesValue}</textarea>
+              </div>
             </div>
             
             <!-- Column 2: Identification -->
@@ -9058,6 +9280,11 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   </button>
                   <div class="comments-filter-popup" id="commentsFilterPopup_${item.id}">
                     <div class="comments-filter-popup-header">Filter by keyword</div>
+                    <div class="comments-filter-modes">
+                      <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-comments" onclick="applyCommentsFilter(${item.id}, 'only-comments')">Only Comments</button>
+                      <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-logs" onclick="applyCommentsFilter(${item.id}, 'only-logs')">Only Logs</button>
+                      <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="all" onclick="applyCommentsFilter(${item.id}, 'all')">All</button>
+                    </div>
                     <div class="comments-filter-popup-options">
                       <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'all')">All Comments</button>
                       <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'created')">Created</button>
@@ -9202,24 +9429,6 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
         </div>
       </div>
 
-      <!-- Aba Step Tracking -->
-      <div class="card-tab-content" data-tab="step-tracking">
-        <div class="step-tracking-container" data-tooling-id="${item.id}">
-          <div class="step-tracking-header">
-            <span class="step-tracking-current">Current Step: <strong>${item.steps || 'Not set'}</strong></span>
-            <button class="step-tracking-clear-btn" onclick="clearStepHistory(${item.id})" title="Clear history">
-              <i class="ph ph-trash"></i>
-            </button>
-          </div>
-          <div class="step-tracking-timeline" id="stepTimeline-${item.id}">
-            <div class="step-tracking-loading">
-              <i class="ph ph-spinner"></i>
-              <span>Loading history...</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
       <!-- Footer com Botões -->
       <div class="tooling-card-footer">
         <div class="card-last-update-snick" data-last-update-id="${item.id}">
@@ -9312,6 +9521,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
   const replacementEditorVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
   const analysisClassification = classifyToolingExpirationState(item);
   const isAnalysisCompleted = item.analysis_completed === 1;
+  const analysisNotesValue = escapeHtml(item.analysis_notes || '');
   const showAnalysisCompletedCheckbox = analysisClassification.state === 'expired' || analysisClassification.state === 'warning';
 
   // Calcula status de vencimento para ícone
@@ -9410,10 +9620,6 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
               <i class="ph ph-paperclip"></i>
               <span>Attachments</span>
             </button>
-            <button class="card-tab" onclick="switchCardTab(${index}, 'step-tracking')">
-              <i class="ph ph-path"></i>
-              <span>Step Tracking</span>
-            </button>
           </div>
 
           <!-- Aba Data -->
@@ -9475,28 +9681,35 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                       <input type="date" class="detail-input" value="${item.date_annual_volume || ''}" data-field="date_annual_volume" data-id="${item.id}" onchange="autoSaveTooling(${item.id})">
                     </div>
                   </div>
-                  <div class="${showAnalysisCompletedCheckbox ? 'detail-item' : 'detail-item detail-item-full'}">
-                    <span class="detail-label">
-                      Expiration (Calculated)
-                      <i class="ph ph-info tooltip-icon" title="Formula: Production Date + ((Remaining ÷ Annual Volume) × 365) days" role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
-                    </span>
-                    ${hasExpirationIcon ? `
-                    <div class="input-with-icon">
-                      <i class="${expirationIconClass} input-icon" style="color: ${expirationIconColor}"></i>
-                      <input type="date" class="detail-input calculated with-icon" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
+                  <div class="detail-item ${showAnalysisCompletedCheckbox ? 'detail-pair' : 'detail-item-full'}" data-analysis-layout>
+                    <div class="detail-item">
+                      <span class="detail-label">
+                        Expiration (Calculated)
+                        <i class="ph ph-info tooltip-icon" title="Formula: Production Date + ((Remaining ÷ Annual Volume) × 365) days" role="button" tabindex="0" onclick="openExpirationInfoModal(event)" onkeydown="handleExpirationInfoIconKey(event)"></i>
+                      </span>
+                      ${hasExpirationIcon ? `
+                      <div class="input-with-icon">
+                        <i class="${expirationIconClass} input-icon" style="color: ${expirationIconColor}"></i>
+                        <input type="date" class="detail-input calculated with-icon" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
+                      </div>
+                      ` : `
+                      <input type="date" class="detail-input calculated" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
+                      `}
                     </div>
-                    ` : `
-                    <input type="date" class="detail-input calculated" value="${expirationInputValue}" data-field="expiration_date" data-id="${item.id}" readonly>
-                    `}
+                    <div class="detail-item" data-analysis-checkbox-item style="display:flex;align-items:flex-end" ${showAnalysisCompletedCheckbox ? '' : 'hidden'}>
+                      <span class="detail-label">
+                        <i class="ph ph-info tooltip-icon" title="About Analysis Completed" role="button" tabindex="0" onclick="openAnalysisCompletedInfoModal(event)" onkeydown="handleAnalysisCompletedInfoIconKey(event)"></i>
+                      </span>
+                      <label class="analysis-completed-checkbox" style="width:100%">
+                        <input type="checkbox" data-field="analysis_completed" data-id="${item.id}" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
+                        <span>Analysis Completed</span>
+                      </label>
+                    </div>
                   </div>
-                  ${showAnalysisCompletedCheckbox ? `
-                  <div class="detail-item">
-                    <span class="detail-label">An&aacute;lise Conclu&iacute;da</span>
-                    <label class="analysis-completed-checkbox">
-                      <input type="checkbox" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
-                      <span>An&aacute;lise Conclu&iacute;da</span>
-                    </label>
-                  </div>` : ''}
+                  <div class="detail-item detail-item-full" data-analysis-notes-item ${showAnalysisCompletedCheckbox ? '' : 'hidden'}>
+                    <span class="detail-label">Analysis Notes</span>
+                    <textarea class="detail-textarea" rows="4" data-field="analysis_notes" data-id="${item.id}" placeholder="Describe the analysis performed and the decision taken">${analysisNotesValue}</textarea>
+                  </div>
                 </div>
                 
                 <!-- Column 2: Identification -->
@@ -9571,6 +9784,11 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                         </button>
                         <div class="comments-filter-popup" id="commentsFilterPopup_${item.id}">
                           <div class="comments-filter-popup-header">Filter by keyword</div>
+                          <div class="comments-filter-modes">
+                            <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-comments" onclick="applyCommentsFilter(${item.id}, 'only-comments')">Only Comments</button>
+                            <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-logs" onclick="applyCommentsFilter(${item.id}, 'only-logs')">Only Logs</button>
+                            <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="all" onclick="applyCommentsFilter(${item.id}, 'all')">All</button>
+                          </div>
                           <div class="comments-filter-popup-options">
                             <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'all')">All Comments</button>
                             <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'created')">Created</button>
@@ -9712,24 +9930,6 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                 <span>Click or drop files here</span>
               </div>
               <div class="card-attachments-list" id="cardAttachments-${item.id}"></div>
-            </div>
-          </div>
-
-          <!-- Aba Step Tracking -->
-          <div class="card-tab-content" data-tab="step-tracking">
-            <div class="step-tracking-container" data-tooling-id="${item.id}">
-              <div class="step-tracking-header">
-                <span class="step-tracking-current">Current Step: <strong>${item.steps || 'Not set'}</strong></span>
-                <button class="step-tracking-clear-btn" onclick="clearStepHistory(${item.id})" title="Clear history">
-                  <i class="ph ph-trash"></i>
-                </button>
-              </div>
-              <div class="step-tracking-timeline" id="stepTimeline-${item.id}">
-                <div class="step-tracking-loading">
-                  <i class="ph ph-spinner"></i>
-                  <span>Loading history...</span>
-                </div>
-              </div>
             </div>
           </div>
 
@@ -10018,6 +10218,7 @@ function toggleCard(index) {
 
         // Restaura reminders de data persistentes
         restoreDateReminders(itemId);
+        highlightEmptyDateFields(card, itemId);
 
         // Initialize drag and drop for attachment dropzone
         const dropzone = card.querySelector('.card-attachments-dropzone');
@@ -10438,37 +10639,63 @@ async function uploadCardAttachment(itemId) {
   try {
     const { normalizedId, toolingItem } = findToolingItem(itemId);
     if (normalizedId === null) {
-      showNotification('Ferramental inválido para anexar arquivos.', 'error');
+      showNotification('Invalid tooling item for file attachment.', 'error');
       return;
     }
 
     if (!toolingItem || !toolingItem.supplier) {
-      showNotification('Fornecedor não encontrado para este ferramental.', 'error');
+      showNotification('Supplier not found for this tooling.', 'error');
       return;
     }
 
     const result = await window.api.uploadAttachment(toolingItem.supplier, normalizedId);
 
     if (result && result.success) {
-      showNotification(result.message || 'Arquivo(s) anexado(s) com sucesso!');
+      showNotification(result.message || 'File(s) attached successfully!');
       await loadCardAttachments(normalizedId);
     }
   } catch (error) {
-    showNotification('Erro ao anexar arquivo', 'error');
+    showNotification('Error attaching file', 'error');
   }
 }
 
-// Atualiza sidebar e status bar após save manual sem recarregar a lista de tooling
-// (evita fechar os cards expandidos)
 async function refreshSidebarAfterSave() {
   try {
     if (currentSupplier) loadDataRevision(currentSupplier);
     suppliersData = await window.api.getSuppliersWithStats();
 
     // Re-renderiza apenas o sidebar de suppliers (não toca nos cards de tooling)
+    const statusSupplierSearchInput = document.getElementById('statusSupplierSearchInput');
+    const activeSidebarFilter = statusSupplierSearchInput ? statusSupplierSearchInput.value.trim() : '';
     let displayList = suppliersData;
+
+    if (activeSidebarFilter) {
+      const normalizedSearch = activeSidebarFilter.toLowerCase().trim();
+      const matchingSuppliers = new Set();
+
+      try {
+        const allResults = await window.api.searchTooling(activeSidebarFilter);
+        allResults.forEach(item => {
+          const supplierName = String(item.supplier || '').trim();
+          if (supplierName) {
+            matchingSuppliers.add(supplierName);
+          }
+        });
+      } catch (error) {
+      }
+
+      suppliersData.forEach(supplier => {
+        const supplierName = String(supplier.supplier || '').trim();
+        if (supplierName.toLowerCase().includes(normalizedSearch)) {
+          matchingSuppliers.add(supplierName);
+        }
+      });
+
+      displayList = suppliersData.filter(supplier => matchingSuppliers.has(String(supplier.supplier || '').trim()));
+    }
+
     if (expirationFilterEnabled) {
-      displayList = suppliersData.filter(s => ExpirationMetrics.hasCriticalItems(s));
+      displayList = displayList.filter(s => ExpirationMetrics.hasCriticalItems(s));
     }
     if (stepsFilteredSuppliers !== null) {
       displayList = displayList.filter(s => stepsFilteredSuppliers.includes(String(s.supplier || '')));
@@ -10491,11 +10718,11 @@ async function saveTooling(id) {
   try {
     const prepared = buildCardPayloadFromDom(id);
     if (!prepared) {
-      showNotification('Não foi possível localizar os dados do card.', 'error');
+      showNotification('Unable to locate the card data.', 'error');
       return;
     }
     if (!prepared.hasChanges) {
-      showNotification('Nenhuma alteração detectada.', 'info');
+      showNotification('No changes detected.', 'info');
       return;
     }
 
@@ -10503,7 +10730,7 @@ async function saveTooling(id) {
     if (updateResult?.comments) {
       prepared.payload.comments = updateResult.comments;
     }
-    showNotification('Dados salvos com sucesso!');
+    showNotification('Data saved successfully!');
 
     const snapshotKey = getSnapshotKey(id);
     const refreshedSnapshot = collectCardDomValues(id);
@@ -10535,7 +10762,7 @@ async function saveTooling(id) {
     // Atualiza apenas o sidebar e status bar — nunca recarrega os cards para não fechar o atual
     refreshSidebarAfterSave();
   } catch (error) {
-    showNotification('Erro ao salvar dados', 'error');
+    showNotification('Error saving data', 'error');
   }
 }
 
@@ -10766,7 +10993,7 @@ async function loadAnalytics() {
       const intervalsCount = stepChangeAverage?.intervalsCount || 0;
       avgStepChangeElement.textContent = (intervalsCount > 0 && Number.isFinite(avgDays))
         ? `${avgDays.toFixed(1)} d`
-        : 'N/A';
+        : 'N/D';
     }
 
     // Steps summary
@@ -10791,44 +11018,44 @@ async function displayStepsSummary() {
   // Mapeamento de título e descrição detalhada de cada step
   const stepDescriptions = {
     '1': {
-      title: 'Atualização dos Dados do Controle',
-      description: 'Atualizar os dados do controle de volume total produzido por ferramental e o volume anual do item.'
+      title: 'Control Data Update',
+      description: 'Update the total produced volume and the annual volume for the tooling item.'
     },
     '2': {
-      title: 'Identificação de Ferramentais Críticos',
-      description: 'Identificar ferramentais com data de expiração prevista em até 2 anos.'
+      title: 'Critical Tooling Identification',
+      description: 'Identify tooling with an expected expiration date within 2 years.'
     },
     '3': {
-      title: 'Solicitação de Validação ao Fornecedor',
-      description: 'Enviar ao fornecedor as informações de volume total produzido e vida útil do ferramental para validação.'
+      title: 'Supplier Validation Request',
+      description: 'Send the supplier the total produced volume and tooling life information for validation.'
     },
     '4': {
-      title: 'Reavaliação dos Ferramentais Críticos',
-      description: 'Reavaliar a lista de ferramentais em risco de expiração dentro dos próximos 2 anos.'
+      title: 'Critical Tooling Reassessment',
+      description: 'Reassess the list of tooling at risk of expiration within the next 2 years.'
     },
     '5': {
-      title: 'Análise Técnica no Fornecedor in Loco',
-      description: 'Realizar visita técnica ao fornecedor para análise técnica dos ferramentais identificados como crítico.'
+      title: 'On-Site Technical Analysis at Supplier',
+      description: 'Conduct a technical visit to the supplier to analyze tooling identified as critical.'
     },
     '6': {
-      title: 'Confirmação Técnica',
-      description: 'Retornar com a avaliação técnica da vida útil do ferramental para Supply Continuity para atualização do Controle.'
+      title: 'Technical Confirmation',
+      description: 'Return the technical tooling life assessment to Supply Continuity for control updates.'
     },
     '7': {
-      title: 'Estratégia de Continuidade de Fornecimento',
-      description: 'Definir a Estratégia de Continuidade de Fornecimento do item para os ferramentais que irão expirar em até 2 anos com base na análise de risco versus viabilidade do negócio.'
+      title: 'Supply Continuity Strategy',
+      description: 'Define the supply continuity strategy for items whose tooling will expire within 2 years based on risk and business viability.'
     }
   };
 
   // Mapeamento de período de cada step
   const stepPeriods = {
-    '1': 'Setembro',
-    '2': 'Setembro',
-    '3': 'Outubro a Janeiro',
-    '4': 'Outubro a Janeiro',
-    '5': 'Dezembro a Março',
-    '6': 'Dezembro a Março',
-    '7': 'Abril a Junho'
+    '1': 'September',
+    '2': 'September',
+    '3': 'October to January',
+    '4': 'October to January',
+    '5': 'December to March',
+    '6': 'December to March',
+    '7': 'April to June'
   };
 
   // Mapeamento de Responsible (responsável de cada step)
@@ -10880,10 +11107,10 @@ async function displayStepsSummary() {
   function renderStatusBadge(status) {
     // Technical status labels as requested by user
     const statusConfig = {
-      'completed': { text: 'Concluído', class: 'status-completed' },
-      'current': { text: 'Em Execução', class: 'status-current' },
-      'behind': { text: 'Atrasado', class: 'status-behind' },
-      'upcoming': { text: 'Não Iniciado', class: 'status-upcoming' }
+      'completed': { text: 'Completed', class: 'status-completed' },
+      'current': { text: 'In Progress', class: 'status-current' },
+      'behind': { text: 'Delayed', class: 'status-behind' },
+      'upcoming': { text: 'Not Started', class: 'status-upcoming' }
     };
 
     const config = statusConfig[status] || statusConfig['upcoming'];
@@ -10928,16 +11155,16 @@ async function displayStepsSummary() {
 
       // Meses exibidos na matriz (Setembro a Junho)
       const matrixMonths = [
-        { name: 'Setembro', cal: 8 },
-        { name: 'Outubro', cal: 9 },
-        { name: 'Novembro', cal: 10 },
-        { name: 'Dezembro', cal: 11 },
-        { name: 'Janeiro', cal: 0 },
-        { name: 'Fevereiro', cal: 1 },
-        { name: 'Março', cal: 2 },
-        { name: 'Abril', cal: 3 },
-        { name: 'Maio', cal: 4 },
-        { name: 'Junho', cal: 5 }
+        { name: 'September', cal: 8 },
+        { name: 'October', cal: 9 },
+        { name: 'November', cal: 10 },
+        { name: 'December', cal: 11 },
+        { name: 'January', cal: 0 },
+        { name: 'February', cal: 1 },
+        { name: 'March', cal: 2 },
+        { name: 'April', cal: 3 },
+        { name: 'May', cal: 4 },
+        { name: 'June', cal: 5 }
       ];
 
       // Definição dos meses ativos por step (1..7) — uma linha por step
@@ -10972,7 +11199,7 @@ async function displayStepsSummary() {
         const stepObj = stepsArray.find(s => s.steps === step) || {};
         const suppliersCount = (stepObj.suppliers || []).length;
         const supplierBarHtml = suppliersCount > 0
-          ? `<button type="button" class="matrix-info-btn" data-step="${escapeHtml(step)}" title="Show ${suppliersCount} supplier(s)">
+          ? `<button type="button" class="matrix-info-btn" data-step="${escapeHtml(step)}" title="View ${suppliersCount} supplier(s)">
                <i class="ph ph-info"></i>
                <span class="matrix-info-count">${suppliersCount}</span>
              </button>`
@@ -11094,11 +11321,11 @@ async function displayStepsSummary() {
           <div class="step-column-stats">
             <div class="step-column-stat">
               <span class="step-stat-value">${item.count}</span>
-              <span class="step-stat-label">Ferramentais</span>
+              <span class="step-stat-label">Toolings</span>
             </div>
             <div class="step-column-stat">
               <span class="step-stat-value">${item.percentage}%</span>
-              <span class="step-stat-label">do Total</span>
+              <span class="step-stat-label">of Total</span>
             </div>
           </div>
         </div>
@@ -11133,7 +11360,7 @@ async function displayStepsSummary() {
     });
 
   } catch (error) {
-    container.innerHTML = '<div class="no-steps-message"><i class="ph ph-warning"></i> Erro ao carregar dados das etapas</div>';
+    container.innerHTML = '<div class="no-steps-message"><i class="ph ph-warning"></i> Error loading step data</div>';
   }
 }
 
@@ -11380,13 +11607,13 @@ function handleAddStatusOption() {
 
   const newStatusRaw = input.value.trim();
   if (!newStatusRaw) {
-    showNotification('Informe um nome para o status.', 'error');
+    showNotification('Enter a name for the status.', 'error');
     return;
   }
 
   const exists = statusOptions.some(option => option.toLowerCase() === newStatusRaw.toLowerCase());
   if (exists) {
-    showNotification('Este status já está na lista.', 'error');
+    showNotification('This status is already in the list.', 'error');
     input.value = '';
     return;
   }
@@ -11396,7 +11623,7 @@ function handleAddStatusOption() {
   renderStatusSettings();
   updateAllStatusSelects();
   input.value = '';
-  showNotification('Status adicionado com sucesso!');
+  showNotification('Status added successfully!');
 }
 
 function removeStatusOption(value) {
@@ -11405,7 +11632,7 @@ function removeStatusOption(value) {
   }
 
   if (statusOptions.length <= 1) {
-    showNotification('Mantenha pelo menos um status na lista.', 'error');
+    showNotification('Keep at least one status in the list.', 'error');
     return;
   }
 
@@ -11417,7 +11644,7 @@ function removeStatusOption(value) {
   saveStatusOptionsToStorage();
   renderStatusSettings();
   updateAllStatusSelects();
-  showNotification('Status removido.');
+  showNotification('Status removed.');
 }
 
 function renderStatusSettings() {

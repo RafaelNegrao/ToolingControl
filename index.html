@@ -90,7 +90,7 @@
                     <span class="data-revision-badge" id="dataRevisionBadge" title="Data Revision">Rev. 0</span>
                     <span class="attachments-supplier-name" id="currentSupplierName">Selected supplier</span>
                     <button class="attachments-rename-btn" id="renameSupplierBtn" type="button"
-                      title="Renomear fornecedor"
+                      title="Rename supplier"
                       onclick="event.stopPropagation(); promptRenameSupplier(document.getElementById('currentSupplierName').textContent)"
                       disabled>
                       <i class="ph ph-pencil-simple"></i>
@@ -221,7 +221,7 @@
               <div class="modal-icon">
                 <i class="ph ph-note-pencil"></i>
               </div>
-              <h3 class="modal-title">Ações</h3>
+              <h3 class="modal-title">Actions</h3>
               <p class="modal-subtitle" id="supplierCommentsSubtitle">Loading...</p>
               <button class="modal-close-btn" type="button" onclick="closeSupplierCommentsModal()" title="Close">
                 <i class="ph ph-x"></i>
@@ -234,24 +234,24 @@
                   <!-- General notes removed -->
 
                   <div class="comments-list scrollable" id="commentsList">
-                    <!-- Mensagens serão renderizadas aqui -->
+                    <!-- Messages are rendered here -->
                   </div>
 
                   <div class="new-message-wrap"
                     style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">
                     <textarea id="newSupplierMessage" class="comments-textarea"
-                      placeholder="Adicionar ação a ser tomada..."></textarea>
+                      placeholder="Add action to be taken..."></textarea>
                     <div class="new-message-controls" style="display: flex; gap: 8px; align-items: stretch;">
                       <input type="date" id="newSupplierDate" class="comments-input" style="width: auto; flex: 1;" />
                       <button class="btn btn-primary" id="addSupplierMessageBtn" type="button"
-                        onclick="addSupplierMessage()" style="white-space: nowrap;">+ Adicionar</button>
+                        onclick="addSupplierMessage()" style="white-space: nowrap;">+ Add</button>
                     </div>
                   </div>
                 </div>
 
-                <!-- Right column: responsáveis -->
+                <!-- Right column: responsibles -->
                 <aside class="responsibles-column">
-                  <h4 class="responsibles-title">Responsáveis</h4>
+                  <h4 class="responsibles-title">Responsibles</h4>
                   <div class="comment-field-group" style="flex: 1;">
                     <label for="supplierContactText">Supplier Contact</label>
                     <textarea class="comments-textarea" id="supplierContactText"
@@ -278,9 +278,9 @@
               </div>
             </div>
             <div class="modal-footer">
-              <button class="btn btn-secondary" onclick="closeSupplierCommentsModal()">Cancelar</button>
+              <button class="btn btn-secondary" onclick="closeSupplierCommentsModal()">Cancel</button>
               <button class="btn btn-primary" onclick="saveSupplierComments()">
-                <i class="ph ph-check"></i> Salvar
+                <i class="ph ph-check"></i> Save
               </button>
             </div>
           </div>
@@ -293,22 +293,22 @@
               <div class="modal-icon">
                 <i class="ph ph-pencil-simple"></i>
               </div>
-              <h3 class="modal-title">Renomear fornecedor</h3>
-              <p class="modal-subtitle" id="renameSupplierSubtitle">Fornecedor</p>
+              <h3 class="modal-title">Rename supplier</h3>
+              <p class="modal-subtitle" id="renameSupplierSubtitle">Supplier</p>
               <button class="modal-close-btn" type="button" onclick="closeRenameSupplierModal()" title="Close">
                 <i class="ph ph-x"></i>
               </button>
             </div>
             <div class="modal-body rename-supplier-body">
-              <label for="renameSupplierInput">Novo nome</label>
-              <input type="text" class="comments-input" id="renameSupplierInput" placeholder="Digite o novo nome" />
-              <div class="rename-supplier-error" id="renameSupplierError">O nome do fornecedor não pode ficar vazio.
+              <label for="renameSupplierInput">New name</label>
+              <input type="text" class="comments-input" id="renameSupplierInput" placeholder="Enter the new name" />
+              <div class="rename-supplier-error" id="renameSupplierError">Supplier name cannot be empty.
               </div>
             </div>
             <div class="modal-footer">
-              <button class="btn btn-secondary" onclick="closeRenameSupplierModal()">Cancelar</button>
+              <button class="btn btn-secondary" onclick="closeRenameSupplierModal()">Cancel</button>
               <button class="btn btn-primary" onclick="confirmRenameSupplier()">
-                <i class="ph ph-check"></i> Salvar
+                <i class="ph ph-check"></i> Save
               </button>
             </div>
           </div>
@@ -333,7 +333,7 @@
             </div>
           </div>
           <div class="tooling-list" id="toolingList" style="display: none;">
-            <!-- Lista de ferramentais será preenchida dinamicamente -->
+            <!-- Tooling list is filled dynamically -->
           </div>
           <div class="spreadsheet-container" id="spreadsheetContainer" style="display: none;">
             <table class="spreadsheet-table" id="spreadsheetTable">
@@ -785,17 +785,6 @@
               </div>
             </button>
 
-            <div class="filter-option-divider"></div>
-
-            <div class="filter-option-group-title">Data Management</div>
-            <button class="filter-option-button filter-option-danger" type="button"
-              onclick="openClearAllStepHistoryModal()">
-              <i class="ph ph-path"></i>
-              <div class="filter-option-info">
-                <span class="filter-option-label">Clear All Step History</span>
-                <span class="filter-option-desc">Remove step tracking data from all tooling</span>
-              </div>
-            </button>
           </div>
           <div class="modal-actions">
             <button class="btn-secondary" type="button" onclick="closeSupplierFilterOverlay()">Close</button>
@@ -853,6 +842,28 @@
           </div>
           <div class="modal-actions">
             <button class="btn-secondary" type="button" data-production-info-close>Close</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Analysis completed info modal -->
+      <div class="modal-overlay info-modal-overlay" id="analysisCompletedInfoOverlay">
+        <div class="modal-card info-modal-card">
+          <button type="button" class="info-modal-close" data-analysis-completed-info-close aria-label="Close">
+            <i class="ph ph-x"></i>
+          </button>
+          <div class="modal-icon">
+            <i class="ph ph-clipboard-text"></i>
+          </div>
+          <h3>About Analysis Completed</h3>
+          <p>This field is hidden by default and only appears when the tooling is expired.</p>
+          <ul class="info-modal-list">
+            <li>Use it after reviewing the expired tooling and confirming that no further revitalization action is required.</li>
+            <li>When the checkbox is selected, the tooling will no longer be listed as expired in the interface metrics and lists.</li>
+            <li>You can uncheck it at any time if the tooling needs to appear again in the expired follow-up lists.</li>
+          </ul>
+          <div class="modal-actions">
+            <button class="btn-secondary" type="button" data-analysis-completed-info-close>Close</button>
           </div>
         </div>
       </div>
@@ -933,7 +944,7 @@
                 <i class="ph ph-wrench"></i>
               </div>
               <div class="metric-content">
-                <h3>Total de Ferramentais</h3>
+                <h3>Total Tooling</h3>
                 <p class="metric-value" id="totalTooling">0</p>
               </div>
             </div>
@@ -942,7 +953,7 @@
                 <i class="ph ph-warning-circle"></i>
               </div>
               <div class="metric-content">
-                <h3>Expirados</h3>
+                <h3>Expired</h3>
                 <p class="metric-value" id="totalExpired">0</p>
               </div>
             </div>
@@ -951,7 +962,7 @@
                 <i class="ph ph-clock"></i>
               </div>
               <div class="metric-content">
-                <h3>Expirando (2 anos)</h3>
+                <h3>Expiring (2 years)</h3>
                 <p class="metric-value" id="totalExpiring">0</p>
               </div>
             </div>
@@ -960,7 +971,7 @@
                 <i class="ph ph-factory"></i>
               </div>
               <div class="metric-content">
-                <h3>Fornecedores</h3>
+                <h3>Suppliers</h3>
                 <p class="metric-value" id="totalSuppliers">0</p>
               </div>
             </div>
@@ -969,7 +980,7 @@
                 <i class="ph ph-trend-up"></i>
               </div>
               <div class="metric-content">
-                <h3>Aumento de Tooling Life</h3>
+                <h3>Tooling Life Increase</h3>
                 <p class="metric-value" id="totalToolingLifeIncrease">0</p>
               </div>
             </div>
@@ -978,7 +989,7 @@
                 <i class="ph ph-trend-down"></i>
               </div>
               <div class="metric-content">
-                <h3>Reducao de Tooling Life</h3>
+                <h3>Tooling Life Decrease</h3>
                 <p class="metric-value" id="totalToolingLifeDecrease">0</p>
               </div>
             </div>
@@ -987,7 +998,7 @@
                 <i class="ph ph-timer"></i>
               </div>
               <div class="metric-content">
-                <h3>Media entre Steps</h3>
+                <h3>Avg. between Steps</h3>
                 <p class="metric-value" id="avgStepChangeInterval">N/A</p>
               </div>
             </div>
@@ -1145,9 +1156,9 @@
                       <i class="ph ph-lightbulb"></i>
                     </div>
                     <div class="credit-info">
-                      <p class="credit-label">Intelectual author</p>
+                      <p class="credit-label">Intellectual author</p>
                       <p class="credit-name">Denis Sposito Mechi</p>
-                      <p class="credit-role">Supply continuity specialist IB105</p>
+                      <p class="credit-role">Supply Continuity Specialist IB105</p>
                     </div>
                   </div>
                 </div>

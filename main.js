@@ -40,7 +40,8 @@ const CHANGE_TRACKING_FIELDS = {
   tooling_life_qty: { label: 'Tooling Life (qty)', type: 'number' },
   annual_volume_forecast: { label: 'Forecast (qty)', type: 'number' },
   date_remaining_tooling_life: { label: 'Production Date', type: 'date' },
-  date_annual_volume: { label: 'Annual Volume Date', type: 'date' }
+  date_annual_volume: { label: 'Annual Volume Date', type: 'date' },
+  analysis_notes: { label: 'Analysis Notes', type: 'string' }
 };
 const CHANGE_TRACKING_IGNORED_FIELDS = new Set([
   'comments',
@@ -1127,6 +1128,7 @@ function checkAndAddColumns() {
     { name: 'stim_tooling_management', type: 'TEXT' },
     { name: 'invoice', type: 'TEXT' },
     { name: 'vpcr', type: 'TEXT' },
+    { name: 'analysis_notes', type: 'TEXT' },
     { name: 'replacement_tooling_id', type: 'INTEGER' },
     { name: 'analysis_completed', type: 'INTEGER' }
   ];
@@ -1666,7 +1668,7 @@ ipcMain.handle('rename-supplier', async (event, currentName, newName) => {
     const normalizedNew = String(newName || '').trim();
 
     if (!normalizedCurrent || !normalizedNew) {
-      resolve({ success: false, message: 'Nome do fornecedor inválido.' });
+      resolve({ success: false, message: 'Invalid supplier name.' });
       return;
     }
 
@@ -1687,12 +1689,12 @@ ipcMain.handle('rename-supplier', async (event, currentName, newName) => {
       [normalizedNew, normalizedCurrent],
       (checkErr, row) => {
         if (checkErr) {
-          resolve({ success: false, message: 'Erro ao validar fornecedor.' });
+          resolve({ success: false, message: 'Error validating supplier.' });
           return;
         }
 
         if ((row?.count || 0) > 0) {
-          resolve({ success: false, message: 'Já existe um fornecedor com esse nome.' });
+          resolve({ success: false, message: 'A supplier with this name already exists.' });
           return;
         }
 
@@ -1701,7 +1703,7 @@ ipcMain.handle('rename-supplier', async (event, currentName, newName) => {
           [normalizedNew, normalizedCurrent],
           function updateSupplier(err) {
             if (err) {
-              resolve({ success: false, message: 'Erro ao atualizar fornecedor.' });
+              resolve({ success: false, message: 'Error updating supplier.' });
               return;
             }
 
@@ -1716,7 +1718,7 @@ ipcMain.handle('rename-supplier', async (event, currentName, newName) => {
             } catch (renameErr) {
               resolve({
                 success: false,
-                message: 'Fornecedor renomeado, mas houve erro ao mover os anexos.'
+                message: 'Supplier renamed, but there was an error moving the attachments.'
               });
               return;
             }
@@ -2079,7 +2081,7 @@ ipcMain.handle('create-tooling', async (event, data) => {
       const comments = data?.comments || null;
 
       if (!pn || !supplier) {
-        resolve({ success: false, error: 'PN e fornecedor são obrigatórios.' });
+        resolve({ success: false, error: 'PN and supplier are required.' });
         return;
       }
 
@@ -2411,8 +2413,8 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
               allowBlank: true,
               formulae: [-9999999999, 9999999999],
               showErrorMessage: true,
-              errorTitle: 'Valor inválido',
-              error: 'Use apenas números nestes campos.'
+              errorTitle: 'Invalid value',
+              error: 'Use numbers only in these fields.'
             };
           });
 
@@ -2426,8 +2428,8 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
               allowBlank: true,
               formulae: ['DATE(2000,1,1)', 'DATE(2100,12,31)'],
               showErrorMessage: true,
-              errorTitle: 'Data inválida',
-              error: 'Use apenas datas nestes campos.'
+              errorTitle: 'Invalid date',
+              error: 'Use dates only in these fields.'
             };
 
             if (cell.value) {
@@ -2968,8 +2970,8 @@ ipcMain.handle('export-empty-template', async () => {
           allowBlank: true,
           formulae: [-9999999999, 9999999999],
           showErrorMessage: true,
-          errorTitle: 'Valor inválido',
-          error: 'Use apenas números nestes campos.'
+          errorTitle: 'Invalid value',
+          error: 'Use numbers only in these fields.'
         };
       });
 
@@ -2983,8 +2985,8 @@ ipcMain.handle('export-empty-template', async () => {
           allowBlank: true,
           formulae: ['DATE(2000,1,1)', 'DATE(2100,12,31)'],
           showErrorMessage: true,
-          errorTitle: 'Data inválida',
-          error: 'Use apenas datas nestes campos.'
+          errorTitle: 'Invalid date',
+          error: 'Use dates only in these fields.'
         };
       });
     });
@@ -3478,7 +3480,7 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
       try {
         fs.mkdirSync(longTargetDir, { recursive: true });
       } catch (error) {
-        return { success: false, error: 'Não foi possível criar diretório de anexos.' };
+        return { success: false, error: 'Unable to create the attachments directory.' };
       }
     }
 
@@ -3502,7 +3504,7 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
     return {
       success: !hasFailure,
       results,
-      message: fileCount > 1 ? `${fileCount} arquivos anexados` : 'Arquivo anexado'
+      message: fileCount > 1 ? `${fileCount} files attached` : 'File attached'
     };
   } catch (error) {
     return { success: false, error: error.message };
@@ -3511,7 +3513,7 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
 
 ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, filePaths, itemId = null) => {
   if (!supplierName || !Array.isArray(filePaths) || filePaths.length === 0) {
-    return { success: false, error: 'Nenhum arquivo informado.' };
+    return { success: false, error: 'No file provided.' };
   }
 
   try {
@@ -3529,19 +3531,19 @@ ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, fileP
       try {
         fs.mkdirSync(longTargetDir, { recursive: true });
       } catch (error) {
-        return { success: false, error: 'Não foi possível criar diretório de anexos.' };
+        return { success: false, error: 'Unable to create the attachments directory.' };
       }
     }
 
     const results = filePaths.map(sourcePath => {
       const longSourcePath = getLongPath(sourcePath);
       if (!sourcePath || !fs.existsSync(longSourcePath)) {
-        return { success: false, error: 'Arquivo não encontrado.' };
+        return { success: false, error: 'File not found.' };
       }
 
       const stats = fs.statSync(longSourcePath);
       if (!stats.isFile()) {
-        return { success: false, error: 'Apenas arquivos podem ser anexados.' };
+        return { success: false, error: 'Only files can be attached.' };
       }
 
       const fileName = path.basename(sourcePath);
@@ -3562,7 +3564,7 @@ ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, fileP
     return {
       success: !hasFailure,
       results,
-      message: fileCount > 1 ? `${fileCount} arquivos anexados` : 'Arquivo anexado'
+      message: fileCount > 1 ? `${fileCount} files attached` : 'File attached'
     };
   } catch (error) {
     return { success: false, error: error.message };
@@ -3584,7 +3586,7 @@ ipcMain.handle('open-attachment', async (event, supplierName, fileName, itemId =
   const longPath = getLongPath(filePath);
 
   if (!fs.existsSync(longPath)) {
-    throw new Error('Arquivo não encontrado');
+    throw new Error('File not found');
   }
 
   try {
@@ -3629,7 +3631,7 @@ ipcMain.handle('delete-attachment', async (event, supplierName, fileName, itemId
   const longPath = getLongPath(filePath);
 
   if (!fs.existsSync(longPath)) {
-    return { success: false, error: 'Arquivo não encontrado' };
+    return { success: false, error: 'File not found' };
   }
 
   try {
