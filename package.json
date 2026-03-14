@@ -12,8 +12,26 @@
     "appId": "com.cummins.tooling-control-app",
     "productName": "Tooling Control App",
     "artifactName": "${productName}.${ext}",
+    "compression": "maximum",
+    "asar": true,
+    "electronLanguages": [
+      "en-US",
+      "pt-BR"
+    ],
     "files": [
-      "**/*"
+      "index.html",
+      "main.js",
+      "preload.js",
+      "renderer.js",
+      "style.css",
+      "package.json",
+      "ferramentas.ico",
+      "ferramental_database.db",
+      "!dist/**",
+      "!attachments/**",
+      "!**/*.md",
+      "!builder-*.yml",
+      "!*.blockmap"
     ],
     "win": {
       "target": [
@@ -43,9 +61,7 @@
     "electron-rebuild": "^3.2.9"
   },
   "dependencies": {
-    "electron-store": "^11.0.2",
     "exceljs": "^4.4.0",
-    "sqlite3": "^5.1.7",
-    "xlsx": "^0.18.5"
+    "sqlite3": "^5.1.7"
   }
 }
