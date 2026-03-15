@@ -92,6 +92,7 @@ let analysisCompletedInfoElements = {
   overlay: null,
   closeButtons: []
 };
+let _analysisNotesModalItemId = null;
 let stepsInfoElements = {
   overlay: null,
   closeButtons: []
@@ -490,6 +491,59 @@ function handleAnalysisCompletedInfoIconKey(event) {
   if (event.key === 'Enter' || event.key === ' ') {
     openAnalysisCompletedInfoModal(event);
   }
+}
+
+function initAnalysisNotesModal() {
+  const overlay = document.getElementById('analysisNotesModalOverlay');
+  if (!overlay) return;
+  overlay.addEventListener('click', (event) => {
+    if (event.target === overlay) closeAnalysisNotesModal();
+  });
+  document.getElementById('analysisNotesModalCancelBtn')?.addEventListener('click', closeAnalysisNotesModal);
+  document.getElementById('analysisNotesModalSaveBtn')?.addEventListener('click', saveAnalysisNotesModal);
+}
+
+function openAnalysisNotesModal(itemId) {
+  _analysisNotesModalItemId = itemId;
+  const item = toolingData.find(t => String(t.id) === String(itemId));
+  const overlay = document.getElementById('analysisNotesModalOverlay');
+  const textarea = document.getElementById('analysisNotesModalTextarea');
+  if (!overlay || !textarea) return;
+  textarea.value = item?.analysis_notes || '';
+  overlay.classList.add('active');
+  setTimeout(() => textarea.focus(), 50);
+}
+
+function closeAnalysisNotesModal() {
+  document.getElementById('analysisNotesModalOverlay')?.classList.remove('active');
+  _analysisNotesModalItemId = null;
+}
+
+async function saveAnalysisNotesModal() {
+  const itemId = _analysisNotesModalItemId;
+  if (!itemId) return;
+  const textarea = document.getElementById('analysisNotesModalTextarea');
+  const notes = textarea?.value ?? '';
+  try {
+    await window.api.updateTooling(itemId, { analysis_notes: notes });
+    const item = toolingData.find(t => String(t.id) === String(itemId));
+    if (item) item.analysis_notes = notes;
+    updateAnalysisNotesIconForItem(itemId);
+    closeAnalysisNotesModal();
+    showNotification('Analysis notes saved', 'success');
+  } catch (err) {
+    console.error('Error saving analysis notes:', err);
+    showNotification('Error saving analysis notes', 'error');
+  }
+}
+
+function updateAnalysisNotesIconForItem(itemId) {
+  const item = toolingData.find(t => String(t.id) === String(itemId));
+  const hasNotes = !!(item?.analysis_notes?.trim());
+  document.querySelectorAll(`[data-analysis-notes-icon][data-id="${itemId}"]`).forEach(btn => {
+    btn.classList.toggle('has-notes', hasNotes);
+    btn.title = hasNotes ? 'View/Edit notes' : 'Add notes';
+  });
 }
 
 function openProductionInfoModal(event) {
@@ -928,6 +982,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   initExpirationInfoModal();
   initProductionInfoModal();
   initAnalysisCompletedInfoModal();
+  initAnalysisNotesModal();
   initStepsInfoModal();
   initSettingsCarouselScrollListener();
   initThousandsMaskBehavior();
@@ -1320,6 +1375,10 @@ document.addEventListener('keydown', (e) => {
   const analysisCompletedOverlay = analysisCompletedInfoElements.overlay;
   if (analysisCompletedOverlay && analysisCompletedOverlay.classList.contains('active') && e.key === 'Escape') {
     closeAnalysisCompletedInfoModal();
+  }
+  const analysisNotesOverlay = document.getElementById('analysisNotesModalOverlay');
+  if (analysisNotesOverlay && analysisNotesOverlay.classList.contains('active') && e.key === 'Escape') {
+    closeAnalysisNotesModal();
   }
   const stepsOverlay = stepsInfoElements.overlay;
   if (stepsOverlay && stepsOverlay.classList.contains('active') && e.key === 'Escape') {
@@ -3967,7 +4026,6 @@ function updateAnalysisVisibilityForItem(itemId) {
   cardContainers.forEach(container => {
     const layoutRow = container.querySelector('[data-analysis-layout]');
     const checkboxItem = container.querySelector('[data-analysis-checkbox-item]');
-    const notesItem = container.querySelector('[data-analysis-notes-item]');
 
     if (layoutRow) {
       layoutRow.classList.toggle('detail-pair', shouldShow);
@@ -3976,10 +4034,6 @@ function updateAnalysisVisibilityForItem(itemId) {
 
     if (checkboxItem) {
       checkboxItem.hidden = !shouldShow;
-    }
-
-    if (notesItem) {
-      notesItem.hidden = !shouldShow;
     }
   });
 }
@@ -5615,6 +5669,9 @@ function buildCardPayloadFromDom(id) {
     }
     if (item.expiration_date !== undefined) {
       rawValues.expiration_date = item.expiration_date;
+    }
+    if (item.analysis_notes !== undefined) {
+      rawValues.analysis_notes = item.analysis_notes;
     }
   }
 
@@ -8142,15 +8199,27 @@ function animateSpreadsheetDetailRowOpen(detailRow) {
   }
 
   detailRow.classList.add('is-open');
+  // Mantém overflow hidden durante a animação para que o conteúdo não
+  // apareça antes de terminar (o CSS de is-open define overflow: visible).
+  cardContainer.style.overflow = 'hidden';
   const targetHeight = cardContainer.scrollHeight;
 
-  cardContainer.animate(
+  const anim = cardContainer.animate(
     [
       { maxHeight: '0px', opacity: 0, transform: 'translateY(-8px)' },
       { maxHeight: targetHeight + 'px', opacity: 1, transform: 'translateY(0)' }
     ],
     { duration: 350, easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)', fill: 'forwards' }
   );
+
+  // Cancela o fill 'forwards' ao terminar para que o CSS (max-height: none)
+  // volte a valer — evitando que novos campos (ex.: Analysis Notes) sejam
+  // cortados quando aparecem após a abertura do card.
+  // Restaura overflow para o valor do CSS (visible), agora que a animação terminou.
+  anim.onfinish = () => {
+    anim.cancel();
+    cardContainer.style.overflow = '';
+  };
 }
 
 function animateSpreadsheetDetailRowClose(detailRow) {
@@ -9203,15 +9272,16 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   <span class="detail-label">
                     <i class="ph ph-info tooltip-icon" title="About Analysis Completed" role="button" tabindex="0" onclick="openAnalysisCompletedInfoModal(event)" onkeydown="handleAnalysisCompletedInfoIconKey(event)"></i>
                   </span>
-                  <label class="analysis-completed-checkbox" style="width:100%">
-                    <input type="checkbox" data-field="analysis_completed" data-id="${item.id}" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
-                    <span>Analysis Completed</span>
-                  </label>
+                  <div class="analysis-completed-row">
+                    <label class="analysis-completed-checkbox">
+                      <input type="checkbox" data-field="analysis_completed" data-id="${item.id}" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
+                      <span>Analysis Completed</span>
+                    </label>
+                    <button type="button" class="analysis-notes-btn ${analysisNotesValue ? 'has-notes' : ''}" data-analysis-notes-icon data-id="${item.id}" title="${analysisNotesValue ? 'View/Edit notes' : 'Add notes'}" onclick="event.stopPropagation(); openAnalysisNotesModal(${item.id})">
+                      <i class="ph ph-chat-text"></i>
+                    </button>
+                  </div>
                 </div>
-              </div>
-              <div class="detail-item detail-item-full" data-analysis-notes-item ${showAnalysisCompletedCheckbox ? '' : 'hidden'}>
-                <span class="detail-label">Analysis Notes</span>
-                <textarea class="detail-textarea" rows="4" data-field="analysis_notes" data-id="${item.id}" placeholder="Describe the analysis performed and the decision taken">${analysisNotesValue}</textarea>
               </div>
             </div>
             
@@ -9710,15 +9780,16 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                       <span class="detail-label">
                         <i class="ph ph-info tooltip-icon" title="About Analysis Completed" role="button" tabindex="0" onclick="openAnalysisCompletedInfoModal(event)" onkeydown="handleAnalysisCompletedInfoIconKey(event)"></i>
                       </span>
-                      <label class="analysis-completed-checkbox" style="width:100%">
-                        <input type="checkbox" data-field="analysis_completed" data-id="${item.id}" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
-                        <span>Analysis Completed</span>
-                      </label>
+                      <div class="analysis-completed-row">
+                        <label class="analysis-completed-checkbox">
+                          <input type="checkbox" data-field="analysis_completed" data-id="${item.id}" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
+                          <span>Analysis Completed</span>
+                        </label>
+                        <button type="button" class="analysis-notes-btn ${analysisNotesValue ? 'has-notes' : ''}" data-analysis-notes-icon data-id="${item.id}" title="${analysisNotesValue ? 'View/Edit notes' : 'Add notes'}" onclick="event.stopPropagation(); openAnalysisNotesModal(${item.id})">
+                          <i class="ph ph-chat-text"></i>
+                        </button>
+                      </div>
                     </div>
-                  </div>
-                  <div class="detail-item detail-item-full" data-analysis-notes-item ${showAnalysisCompletedCheckbox ? '' : 'hidden'}>
-                    <span class="detail-label">Analysis Notes</span>
-                    <textarea class="detail-textarea" rows="4" data-field="analysis_notes" data-id="${item.id}" placeholder="Describe the analysis performed and the decision taken">${analysisNotesValue}</textarea>
                   </div>
                 </div>
                 

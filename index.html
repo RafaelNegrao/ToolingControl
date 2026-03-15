@@ -868,6 +868,27 @@
         </div>
       </div>
 
+      <!-- Analysis Notes modal -->
+      <div class="modal-overlay info-modal-overlay" id="analysisNotesModalOverlay">
+        <div class="modal-card info-modal-card analysis-notes-modal-card">
+          <button type="button" class="info-modal-close" id="analysisNotesModalClose" aria-label="Close">
+            <i class="ph ph-x"></i>
+          </button>
+          <div class="modal-icon">
+            <i class="ph ph-chat-text"></i>
+          </div>
+          <h3>Analysis Notes</h3>
+          <textarea id="analysisNotesModalTextarea" class="analysis-notes-modal-textarea" placeholder="Describe the analysis performed and the decision taken" rows="5"></textarea>
+          <div class="modal-actions">
+            <button class="btn-secondary" type="button" id="analysisNotesModalCancelBtn">Cancel</button>
+            <button class="btn-save" type="button" id="analysisNotesModalSaveBtn">
+              <i class="ph ph-floppy-disk"></i>
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Steps info modal -->
       <div class="modal-overlay info-modal-overlay" id="stepsInfoOverlay">
         <div class="modal-card info-modal-card">
