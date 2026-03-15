@@ -8124,8 +8124,13 @@ async function loadSpreadsheetAttachmentIcons(data) {
   }
 }
 
+// Timeout pendente de scroll para o card expandido (cancelável)
+let _spreadsheetScrollTimeout = null;
+
 // Toggle da expansão de uma linha da planilha para mostrar detalhes do card
 function toggleSpreadsheetRow(itemId, itemIndex) {
+  clearTimeout(_spreadsheetScrollTimeout);
+  _spreadsheetScrollTimeout = null;
   guardUnsavedChanges(() => _doToggleSpreadsheetRow(itemId, itemIndex));
 }
 
@@ -8303,16 +8308,21 @@ function _doToggleSpreadsheetRow(itemId, itemIndex) {
           }
 
           // Scroll para mostrar a linha no topo com o card expandido visível
-          const detailRow = row.nextElementSibling;
-          if (detailRow && detailRow.classList.contains('spreadsheet-detail-row')) {
-            // Calcula a posição ideal considerando o header fixo
-            const headerHeight = document.querySelector('.spreadsheet-table thead')?.offsetHeight || 50;
-            const container = document.querySelector('.spreadsheet-container');
-            if (container) {
-              const rowTop = row.offsetTop - headerHeight - 10;
-              container.scrollTo({ top: rowTop, behavior: 'smooth' });
+          // Delay de 260ms: aguarda a animação de fechar o card anterior (220ms)
+          // terminar antes de calcular a posição, evitando bug de scroll incorreto
+          clearTimeout(_spreadsheetScrollTimeout);
+          _spreadsheetScrollTimeout = setTimeout(() => {
+            const activeDetailRow = row.nextElementSibling;
+            if (activeDetailRow && activeDetailRow.classList.contains('spreadsheet-detail-row')) {
+              // Calcula a posição ideal considerando o header fixo
+              const headerHeight = document.querySelector('.spreadsheet-table thead')?.offsetHeight || 50;
+              const container = document.querySelector('.spreadsheet-container');
+              if (container) {
+                const rowTop = row.offsetTop - headerHeight - 10;
+                container.scrollTo({ top: rowTop, behavior: 'smooth' });
+              }
             }
-          }
+          }, 260);
         }, 50);
       }
     }
