@@ -47,7 +47,8 @@ const CHANGE_TRACKING_IGNORED_FIELDS = new Set([
   'comments',
   'remaining_tooling_life_pcs',
   'percent_tooling_life',
-  'last_update'
+  'last_update',
+  'analysis_completed'
 ]);
 
 // Campos que não devem atualizar last_update quando modificados sozinhos ou em conjunto

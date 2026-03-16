@@ -3987,68 +3987,53 @@ function handleStepsSelectChange(cardIndex, itemId, selectEl) {
   autoSaveTooling(itemId, true);
 }
 
-async function handleAnalysisCompletedChange(itemId, isChecked) {
-  try {
-    // Atualiza o campo no banco de dados
-    const value = isChecked ? 1 : 0;
-    await window.api.updateTooling(itemId, { analysis_completed: value });
+function handleAnalysisCompletedAfterSave(itemId, oldValue) {
+  const item = toolingData.find(t => Number(t.id) === Number(itemId));
+  if (!item) return;
 
-    // Atualiza o item local
-    const item = toolingData.find(t => t.id === itemId);
-    if (item) {
-      item.analysis_completed = value;
+  const newValue = item.analysis_completed;
+  if (newValue === oldValue) return;
 
-      // Adiciona comentário automático se foi marcado
-      if (isChecked) {
-        const now = new Date();
-        const dateStr = now.toLocaleDateString('pt-BR', {
-          day: '2-digit',
-          month: '2-digit',
-          year: 'numeric'
-        });
-        const commentText = 'Analysis completed - tooling reviewed and no revitalization required.';
-        const newComment = {
-          date: dateStr,
-          text: commentText,
-          system: true
-        };
+  // Adiciona comentário automático se foi marcado
+  if (newValue === 1 && oldValue !== 1) {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('pt-BR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
+    }) + ' ' + now.toLocaleTimeString('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    });
+    const commentText = 'Analysis completed - tooling reviewed and no action required.';
+    const newComment = {
+      date: dateStr,
+      text: commentText,
+      system: true
+    };
 
-        // Adiciona ao array de comentários
-        let comments = [];
-        if (item.comments) {
-          try {
-            comments = typeof item.comments === 'string' ? JSON.parse(item.comments) : item.comments;
-          } catch {
-            comments = [];
-          }
-        }
-        comments.push(newComment);
-        item.comments = JSON.stringify(comments);
-
-        // Salva comentário no banco
-        await window.api.updateTooling(itemId, { comments: item.comments });
-
-        // Atualiza UI dos comentários
-        const commentsList = document.getElementById(`commentsList_${itemId}`);
-        if (commentsList) {
-          commentsList.innerHTML = buildCommentsListHTML(item.comments, itemId);
-        }
-      }
-
-      // Atualiza o ícone de expiração em todos os lugares
-      updateExpirationIconsForItem(itemId);
-
-      // Atualiza métricas do card do supplier em tempo real (busca dados frescos do banco)
-      if (selectedSupplier) {
-        refreshSupplierCardMetricsFromDB(selectedSupplier);
+    let comments = [];
+    if (item.comments) {
+      try {
+        comments = typeof item.comments === 'string' ? JSON.parse(item.comments) : item.comments;
+      } catch {
+        comments = [];
       }
     }
+    comments.push(newComment);
+    item.comments = JSON.stringify(comments);
 
-    showNotification(isChecked ? 'Analysis marked as completed' : 'Analysis marked as pending', 'success');
-  } catch (error) {
-    console.error('Error updating analysis completed:', error);
-    showNotification('Error updating analysis status', 'error');
+    window.api.updateTooling(itemId, { comments: item.comments });
+
+    const commentsList = document.getElementById(`commentsList_${itemId}`);
+    if (commentsList) {
+      commentsList.innerHTML = buildCommentsListHTML(item.comments, itemId);
+    }
   }
+
+  // Atualiza o ícone de expiração em todos os lugares
+  updateExpirationIconsForItem(itemId);
 }
 
 function buildLiveCardState(itemId) {
@@ -5619,7 +5604,8 @@ const NUMERIC_CARD_FIELDS = [
   'remaining_tooling_life_pcs',
   'percent_tooling_life',
   'amount_brl',
-  'tool_quantity'
+  'tool_quantity',
+  'analysis_completed'
 ];
 
 function getSnapshotKey(id) {
@@ -9454,7 +9440,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
                   </span>
                   <div class="analysis-completed-row">
                     <label class="analysis-completed-checkbox">
-                      <input type="checkbox" data-field="analysis_completed" data-id="${item.id}" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
+                      <input type="checkbox" data-field="analysis_completed" data-id="${item.id}" ${isAnalysisCompleted ? 'checked' : ''} onchange="autoSaveTooling(${item.id})">
                       <span>Analysis Completed</span>
                     </label>
                     <button type="button" class="analysis-notes-btn ${analysisNotesValue ? 'has-notes' : ''}" data-analysis-notes-icon data-id="${item.id}" title="${analysisNotesValue ? 'View/Edit notes' : 'Add notes'}" onclick="event.stopPropagation(); openAnalysisNotesModal(${item.id})">
@@ -9951,7 +9937,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                       </span>
                       <div class="analysis-completed-row">
                         <label class="analysis-completed-checkbox">
-                          <input type="checkbox" data-field="analysis_completed" data-id="${item.id}" ${isAnalysisCompleted ? 'checked' : ''} onchange="handleAnalysisCompletedChange(${item.id}, this.checked)">
+                          <input type="checkbox" data-field="analysis_completed" data-id="${item.id}" ${isAnalysisCompleted ? 'checked' : ''} onchange="autoSaveTooling(${item.id})">
                           <span>Analysis Completed</span>
                         </label>
                         <button type="button" class="analysis-notes-btn ${analysisNotesValue ? 'has-notes' : ''}" data-analysis-notes-icon data-id="${item.id}" title="${analysisNotesValue ? 'View/Edit notes' : 'Add notes'}" onclick="event.stopPropagation(); openAnalysisNotesModal(${item.id})">
@@ -10991,11 +10977,13 @@ async function saveTooling(id) {
 
     const index = toolingData.findIndex(item => Number(item.id) === Number(id));
     if (index !== -1) {
+      const oldAnalysisCompleted = toolingData[index].analysis_completed;
       toolingData[index] = { ...toolingData[index], ...prepared.payload };
       calculateExpirationDate(index);
       if (updateResult?.comments) {
         updateCommentsDisplay(id);
       }
+      handleAnalysisCompletedAfterSave(id, oldAnalysisCompleted);
     }
 
     // Atualiza apenas o sidebar e status bar — nunca recarrega os cards para não fechar o atual
@@ -11035,6 +11023,7 @@ async function saveToolingQuietly(id) {
 
     const index = toolingData.findIndex(item => Number(item.id) === Number(id));
     if (index !== -1) {
+      const oldAnalysisCompleted = toolingData[index].analysis_completed;
       // Só atualiza o last_update se o backend confirmou que houve modificação real
       if (updateResult?.lastUpdateModified) {
         const now = new Date().toISOString();
@@ -11052,6 +11041,8 @@ async function saveToolingQuietly(id) {
         // Atualiza o ícone de mudança de tooling life na coluna info (spreadsheet)
         updateToolingLifeChangeIcon(id, toolingData[index]);
       }
+
+      handleAnalysisCompletedAfterSave(id, oldAnalysisCompleted);
 
       // Atualiza métricas do card do supplier em tempo real (busca dados frescos do banco)
       if (selectedSupplier) {
