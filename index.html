@@ -237,12 +237,22 @@
                     <!-- Messages are rendered here -->
                   </div>
 
-                  <div class="new-message-wrap"
-                    style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">
-                    <textarea id="newSupplierMessage" class="comments-textarea"
-                      placeholder="Add action to be taken..."></textarea>
+                  <div class="new-message-wrap" style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">
+                    <div style="display: flex; flex-direction: column; gap: 0;">
+                      <div class="rich-text-toolbar supplier-rte-toolbar">
+                        <button type="button" class="rte-btn" onclick="rteSupplierCmd('bold')" title="Bold"><i class="ph ph-text-b"></i></button>
+                        <button type="button" class="rte-btn" onclick="rteSupplierCmd('italic')" title="Italic"><i class="ph ph-text-italic"></i></button>
+                        <button type="button" class="rte-btn" onclick="rteSupplierCmd('underline')" title="Underline"><i class="ph ph-text-underline"></i></button>
+                        <div class="rte-divider"></div>
+                        <button type="button" class="rte-btn" onclick="rteSupplierCmd('insertUnorderedList')" title="Bullet list"><i class="ph ph-list-bullets"></i></button>
+                        <button type="button" class="rte-btn" onclick="rteSupplierCmd('insertOrderedList')" title="Numbered list"><i class="ph ph-list-numbers"></i></button>
+                      </div>
+                      <div class="rich-text-editor supplier-rte-editor" id="newSupplierMessageEditor" contenteditable="true" data-placeholder="Add action to be taken..."></div>
+                    </div>
                     <div class="new-message-controls" style="display: flex; gap: 8px; align-items: stretch;">
                       <input type="date" id="newSupplierDate" class="comments-input" style="width: auto; flex: 1;" />
+                      <button class="btn btn-secondary" id="cancelSupplierEditBtn" type="button"
+                        onclick="cancelSupplierMessageEdit()" style="white-space: nowrap; display: none;">✕ Cancel</button>
                       <button class="btn btn-primary" id="addSupplierMessageBtn" type="button"
                         onclick="addSupplierMessage()" style="white-space: nowrap;">+ Add</button>
                     </div>
@@ -541,6 +551,40 @@
             </button>
             <button type="button" class="comment-delete-btn confirm" id="commentDeleteConfirmBtn"
               onclick="confirmCommentDelete()">
+              <i class="ph ph-trash"></i>
+              <span>Delete</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Delete Supplier Message modal -->
+      <div class="modal-overlay" id="supplierMsgDeleteOverlay">
+        <div class="comment-delete-modal">
+          <div class="comment-delete-icon">
+            <i class="ph ph-note-pencil"></i>
+          </div>
+          <div class="comment-delete-content">
+            <div class="comment-delete-header">
+              <h3>Delete Action</h3>
+              <p>This action will be removed permanently.</p>
+              <div class="comment-delete-context" id="supplierMsgDeleteContext">Supplier —</div>
+            </div>
+            <div class="comment-delete-preview">
+              <div class="comment-delete-preview-meta">
+                <i class="ph ph-clock"></i>
+                <span id="supplierMsgDeleteDate">--/--/----</span>
+              </div>
+              <p class="comment-delete-preview-text" id="supplierMsgDeleteText">Select an action to preview its content.</p>
+            </div>
+          </div>
+          <div class="comment-delete-actions">
+            <button type="button" class="comment-delete-btn cancel" onclick="closeSupplierMsgDeleteModal()">
+              <i class="ph ph-arrow-counter-clockwise"></i>
+              <span>Cancel</span>
+            </button>
+            <button type="button" class="comment-delete-btn confirm" id="supplierMsgDeleteConfirmBtn"
+              onclick="confirmSupplierMsgDelete()">
               <i class="ph ph-trash"></i>
               <span>Delete</span>
             </button>
@@ -1283,6 +1327,40 @@
     </div>
     <div class="column-filter-popup-footer">
       <button class="column-filter-apply-btn" onclick="applyColumnFilter()">Apply</button>
+    </div>
+  </div>
+
+  <!-- Add Comment Modal (Rich Text) -->
+  <div class="modal-overlay" id="addCommentModal" onclick="if(event.target===this) closeAddCommentModal()">
+    <div class="modal-card modal-card-add-comment">
+      <div class="modal-header">
+        <div class="modal-icon">
+          <i class="ph ph-chat-circle-text"></i>
+        </div>
+        <h3 class="modal-title">Add Comment</h3>
+        <button class="modal-close-btn" type="button" onclick="closeAddCommentModal()" title="Close">
+          <i class="ph ph-x"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div style="display: flex; flex-direction: column; gap: 0;">
+          <div class="rich-text-toolbar">
+            <button type="button" class="rte-btn" onclick="rteCmd('bold')" title="Bold"><i class="ph ph-text-b"></i></button>
+            <button type="button" class="rte-btn" onclick="rteCmd('italic')" title="Italic"><i class="ph ph-text-italic"></i></button>
+            <button type="button" class="rte-btn" onclick="rteCmd('underline')" title="Underline"><i class="ph ph-text-underline"></i></button>
+            <div class="rte-divider"></div>
+            <button type="button" class="rte-btn" onclick="rteCmd('insertUnorderedList')" title="Bullet list"><i class="ph ph-list-bullets"></i></button>
+            <button type="button" class="rte-btn" onclick="rteCmd('insertOrderedList')" title="Numbered list"><i class="ph ph-list-numbers"></i></button>
+          </div>
+          <div class="rich-text-editor" id="richCommentEditor" contenteditable="true" data-placeholder="Write your comment..." onkeydown="if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)){event.preventDefault();submitCommentFromModal();}"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" type="button" onclick="closeAddCommentModal()">Cancel</button>
+        <button class="btn btn-primary" type="button" onclick="submitCommentFromModal()" id="addCommentSubmitBtn">
+          <i class="ph ph-plus"></i> Add Comment
+        </button>
+      </div>
     </div>
   </div>
 

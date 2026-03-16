@@ -78,6 +78,7 @@ let isReorderingTimeline = false;
 let attachmentsDragCounter = 0;
 let attachmentsData = [];
 let supplierMessages = []; // messages/actions added in supplier comments modal
+let supplierEditIndex = null; // index of message being edited in the bottom form
 let activeSearchTerm = '';
 const dateReminderTimers = new Map();
 let expirationInfoElements = {
@@ -1016,6 +1017,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
+  const supplierMsgDeleteOverlay = document.getElementById('supplierMsgDeleteOverlay');
+  if (supplierMsgDeleteOverlay) {
+    supplierMsgDeleteOverlay.addEventListener('click', (e) => {
+      if (e.target === supplierMsgDeleteOverlay) {
+        closeSupplierMsgDeleteModal();
+      }
+    });
+  }
+
   // Função para trocar de aba
   function switchTab(tabName) {
     currentTab = tabName;
@@ -1824,17 +1834,20 @@ function loadSupplierCommentsData() {
   supplierMessages = savedData.messages || [];
   renderSupplierMessages();
 
-  // clear new message inputs
-  const newMsg = document.getElementById('newSupplierMessage');
+  // clear new message inputs and reset edit mode
+  supplierEditIndex = null;
+  const newMsg = document.getElementById('newSupplierMessageEditor');
   const newDate = document.getElementById('newSupplierDate');
-  if (newMsg) newMsg.value = '';
-  if (newDate) newDate.value = '';
+  const addBtn = document.getElementById('addSupplierMessageBtn');
+  if (newMsg) newMsg.innerHTML = '';
+  // Auto-fill today's date
+  const today = new Date().toISOString().split('T')[0];
+  if (newDate) newDate.value = today;
+  if (addBtn) addBtn.textContent = '+ Add';
 }
 
-function saveSupplierComments() {
-  if (!currentSupplier) {
-    return;
-  }
+function persistSupplierComments() {
+  if (!currentSupplier) return;
 
   const contactTextarea = document.getElementById('supplierContactText');
   const supplyContinuityInput = document.getElementById('supplyContinuityText');
@@ -1842,9 +1855,7 @@ function saveSupplierComments() {
   const plannerInput = document.getElementById('plannerText');
   const sourcingInput = document.getElementById('sourcingText');
 
-  if (!contactTextarea || !supplyContinuityInput || !sqieInput || !plannerInput || !sourcingInput) {
-    return;
-  }
+  if (!contactTextarea || !supplyContinuityInput || !sqieInput || !plannerInput || !sourcingInput) return;
 
   const storageKey = `supplier_comments_${currentSupplier}`;
   const data = {
@@ -1858,6 +1869,10 @@ function saveSupplierComments() {
   };
 
   localStorage.setItem(storageKey, JSON.stringify(data));
+}
+
+function saveSupplierComments() {
+  persistSupplierComments();
   showNotification('Supplier comments saved successfully!', 'success');
   closeSupplierCommentsModal();
 }
@@ -1873,12 +1888,12 @@ function renderSupplierMessages() {
   }
 
   list.innerHTML = supplierMessages.map((msg, idx) => {
-    const safeText = escapeHtml(msg.text);
+    const displayText = msg.richText ? sanitizeCommentHtml(msg.text) : escapeHtml(msg.text);
     const formattedDate = formatDate(msg.date);
     return `
       <div class="comment-item" data-msg-index="${idx}">
         <div class="comment-item-body">
-          <div class="comment-item-text" id="supplierMsgText_${idx}">${safeText}</div>
+          <div class="comment-item-text" id="supplierMsgText_${idx}">${displayText}</div>
           <div class="comment-item-meta">${formattedDate}</div>
         </div>
         <div class="comment-item-actions">
@@ -1894,22 +1909,37 @@ function renderSupplierMessages() {
   }).join('');
 }
 
-// Add a new message to the current supplier
+// Add or update a message in the current supplier
 function addSupplierMessage() {
   if (!currentSupplier) return;
-  const input = document.getElementById('newSupplierMessage');
+  const editor = document.getElementById('newSupplierMessageEditor');
   const dateInput = document.getElementById('newSupplierDate');
-  if (!input || !dateInput) return;
-  const text = input.value.trim();
+  const addBtn = document.getElementById('addSupplierMessageBtn');
+  if (!editor || !dateInput) return;
+  const html = editor.innerHTML.trim();
   const date = dateInput.value;
-  if (!text || !date) return;
+  if (!html || html === '<br>' || !date) return;
 
-  supplierMessages.push({ date: date, text: text });
+  if (supplierEditIndex !== null && supplierEditIndex >= 0 && supplierEditIndex < supplierMessages.length) {
+    // Update existing message
+    supplierMessages[supplierEditIndex].text = html;
+    supplierMessages[supplierEditIndex].date = date;
+    supplierMessages[supplierEditIndex].richText = true;
+    supplierEditIndex = null;
+    if (addBtn) addBtn.textContent = '+ Add';
+    const cancelBtn = document.getElementById('cancelSupplierEditBtn');
+    if (cancelBtn) cancelBtn.style.display = 'none';
+    document.querySelectorAll('.comment-item--editing').forEach(el => el.classList.remove('comment-item--editing'));
+  } else {
+    supplierMessages.push({ date: date, text: html, richText: true });
+  }
+
   renderSupplierMessages();
 
-  // clear fields
-  input.value = '';
-  dateInput.value = '';
+  // clear fields and reset date to today
+  editor.innerHTML = '';
+  const today = new Date().toISOString().split('T')[0];
+  dateInput.value = today;
 
   // persist messages independently so modal stays open
   const storageKey = `supplier_comments_${currentSupplier}`;
@@ -1926,66 +1956,88 @@ function addSupplierMessage() {
   localStorage.setItem(storageKey, JSON.stringify(existing));
 }
 
-// Delete a message by index
+// ===== Supplier Message Delete Modal =====
+let supplierMsgDeleteIndex = null;
+
 function deleteSupplierMessage(index) {
   if (index < 0 || index >= supplierMessages.length) return;
-  if (!confirm('Excluir esta ação?')) return;
-  supplierMessages.splice(index, 1);
-  renderSupplierMessages();
-  saveSupplierComments();
+  const msg = supplierMessages[index];
+
+  supplierMsgDeleteIndex = index;
+
+  const overlay = document.getElementById('supplierMsgDeleteOverlay');
+  const context = document.getElementById('supplierMsgDeleteContext');
+  const date = document.getElementById('supplierMsgDeleteDate');
+  const text = document.getElementById('supplierMsgDeleteText');
+
+  if (context) context.textContent = currentSupplier || 'Supplier';
+  if (date) {
+    const formattedDate = msg.date ? formatDate(msg.date) : '--/--/----';
+    date.textContent = formattedDate;
+  }
+  if (text) {
+    // Strip HTML tags for preview
+    const tmp = document.createElement('div');
+    tmp.innerHTML = msg.text || '';
+    const plainText = tmp.textContent || tmp.innerText || '';
+    text.textContent = plainText.trim() || 'No content.';
+  }
+  if (overlay) overlay.classList.add('active');
 }
 
-// Enter edit mode for a supplier message
+function closeSupplierMsgDeleteModal() {
+  const overlay = document.getElementById('supplierMsgDeleteOverlay');
+  if (overlay) overlay.classList.remove('active');
+  supplierMsgDeleteIndex = null;
+}
+
+function confirmSupplierMsgDelete() {
+  if (supplierMsgDeleteIndex === null || supplierMsgDeleteIndex < 0 || supplierMsgDeleteIndex >= supplierMessages.length) return;
+  supplierMessages.splice(supplierMsgDeleteIndex, 1);
+  cancelSupplierMessageEdit();
+  renderSupplierMessages();
+  persistSupplierComments();
+  closeSupplierMsgDeleteModal();
+}
+
+// Enter edit mode for a supplier message — populate bottom form
 function editSupplierMessage(index) {
   if (index < 0 || index >= supplierMessages.length) return;
   const msg = supplierMessages[index];
-  const textEl = document.getElementById(`supplierMsgText_${index}`);
-  if (!textEl) return;
 
-  textEl.innerHTML = `<textarea class="comments-textarea" id="supplierMsgEdit_${index}" rows="3">${escapeHtml(msg.text)}</textarea>`;
-  const actions = textEl.closest('.comment-item').querySelector('.comment-item-actions');
-  if (actions) {
-    actions.innerHTML = `
-      <button class="btn-comment-action" onclick="saveSupplierMessageEdit(${index})" title="Save">
-        <i class="ph ph-check"></i>
-      </button>
-      <button class="btn-comment-action" onclick="cancelSupplierMessageEdit(${index})" title="Cancel">
-        <i class="ph ph-x"></i>
-      </button>
-    `;
-  }
+  const editor = document.getElementById('newSupplierMessageEditor');
+  const dateInput = document.getElementById('newSupplierDate');
+  const addBtn = document.getElementById('addSupplierMessageBtn');
+  if (!editor || !dateInput) return;
 
-  const editInput = document.getElementById(`supplierMsgEdit_${index}`);
-  if (editInput) {
-    editInput.focus();
-    editInput.select();
-    editInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        saveSupplierMessageEdit(index);
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        cancelSupplierMessageEdit(index);
-      }
-    });
-  }
+  const currentHtml = msg.richText ? sanitizeCommentHtml(msg.text) : escapeHtml(msg.text).replace(/\n/g, '<br>');
+  editor.innerHTML = currentHtml;
+  dateInput.value = msg.date || '';
+  supplierEditIndex = index;
+  if (addBtn) addBtn.textContent = '✓ Save';
+  const cancelBtn = document.getElementById('cancelSupplierEditBtn');
+  if (cancelBtn) cancelBtn.style.display = '';
+
+  // Highlight the card being edited
+  document.querySelectorAll('.comment-item').forEach(el => el.classList.remove('comment-item--editing'));
+  const card = document.querySelector(`.comment-item[data-msg-index="${index}"]`);
+  if (card) card.classList.add('comment-item--editing');
+
+  editor.focus();
 }
 
-function saveSupplierMessageEdit(index) {
-  const editInput = document.getElementById(`supplierMsgEdit_${index}`);
-  if (!editInput) return;
-  const newText = editInput.value.trim();
-  if (!newText) {
-    // don't allow empty
-    return;
-  }
-  supplierMessages[index].text = newText;
-  renderSupplierMessages();
-  saveSupplierComments();
-}
-
-function cancelSupplierMessageEdit(index) {
-  renderSupplierMessages();
+function cancelSupplierMessageEdit() {
+  supplierEditIndex = null;
+  const editor = document.getElementById('newSupplierMessageEditor');
+  const dateInput = document.getElementById('newSupplierDate');
+  const addBtn = document.getElementById('addSupplierMessageBtn');
+  if (editor) editor.innerHTML = '';
+  const today = new Date().toISOString().split('T')[0];
+  if (dateInput) dateInput.value = today;
+  if (addBtn) addBtn.textContent = '+ Add';
+  const cancelBtn = document.getElementById('cancelSupplierEditBtn');
+  if (cancelBtn) cancelBtn.style.display = 'none';
+  document.querySelectorAll('.comment-item--editing').forEach(el => el.classList.remove('comment-item--editing'));
 }
 
 // ===== MODO DE SELEÇÃO MÚLTIPLA PARA EXPORTAÇÃO =====
@@ -6653,7 +6705,7 @@ function buildCommentsListHTML(commentsJson, itemId, filterText = null) {
   return filteredComments.map((comment) => {
     const index = comment.originalIndex;
     const date = comment.date || 'N/A';
-    const text = escapeHtml(comment.text || '');
+    const text = comment.richText ? sanitizeCommentHtml(comment.text || '') : escapeHtml(comment.text || '');
     const isInitial = comment.initial === true;
     const isImported = comment.origin === 'import';
     const isSystemLog = isAutomaticLogComment(comment);
@@ -6710,6 +6762,141 @@ function buildCommentsListHTML(commentsJson, itemId, filterText = null) {
       </div>
     `;
   }).join('');
+}
+
+let addCommentTargetItemId = null;
+let addCommentEditIndex = null;
+
+function openAddCommentModal(itemId) {
+  addCommentTargetItemId = itemId;
+  addCommentEditIndex = null;
+  const modal = document.getElementById('addCommentModal');
+  const editor = document.getElementById('richCommentEditor');
+  const title = modal && modal.querySelector('.modal-title');
+  if (title) title.textContent = 'Add Comment';
+  const submitBtn = document.getElementById('addCommentSubmitBtn');
+  if (submitBtn) submitBtn.innerHTML = '<i class="ph ph-plus"></i> Add Comment';
+  if (editor) editor.innerHTML = '';
+  if (modal) {
+    modal.classList.add('active');
+    setTimeout(() => editor && editor.focus(), 100);
+  }
+  document._addCommentEscHandler = (e) => { if (e.key === 'Escape') closeAddCommentModal(); };
+  document.addEventListener('keydown', document._addCommentEscHandler);
+}
+
+function closeAddCommentModal() {
+  const modal = document.getElementById('addCommentModal');
+  if (modal) modal.classList.remove('active');
+  if (document._addCommentEscHandler) {
+    document.removeEventListener('keydown', document._addCommentEscHandler);
+    document._addCommentEscHandler = null;
+  }
+  addCommentTargetItemId = null;
+  addCommentEditIndex = null;
+}
+
+function rteSupplierCmd(command) {
+  document.execCommand(command, false, null);
+  document.getElementById('newSupplierMessageEditor')?.focus();
+  updateSupplierRteState();
+}
+
+function updateSupplierRteState() {
+  const commands = ['bold', 'italic', 'underline', 'insertUnorderedList', 'insertOrderedList'];
+  const toolbar = document.querySelector('.supplier-rte-toolbar:not([style*="margin-bottom"])');
+  if (!toolbar) return;
+  commands.forEach(cmd => {
+    const btn = toolbar.querySelector(`.rte-btn[onclick*="${cmd}"]`);
+    if (!btn) return;
+    try {
+      btn.classList.toggle('rte-btn--active', document.queryCommandState(cmd));
+    } catch (e) {}
+  });
+}
+
+function rteCmd(command) {
+  document.execCommand(command, false, null);
+  document.getElementById('richCommentEditor')?.focus();
+  updateRteToolbarState();
+}
+
+function updateRteToolbarState() {
+  const commands = ['bold', 'italic', 'underline', 'insertUnorderedList', 'insertOrderedList'];
+  commands.forEach(cmd => {
+    const btn = document.querySelector(`.rte-btn[onclick="rteCmd('${cmd}')"]`);
+    if (!btn) return;
+    try {
+      if (document.queryCommandState(cmd)) {
+        btn.classList.add('rte-btn--active');
+      } else {
+        btn.classList.remove('rte-btn--active');
+      }
+    } catch (e) {}
+  });
+}
+
+// Update toolbar state on selection change inside the editor
+document.addEventListener('selectionchange', () => {
+  const sel = document.getSelection();
+  if (!sel || !sel.rangeCount) return;
+  const anchor = sel.anchorNode;
+
+  const commentEditor = document.getElementById('richCommentEditor');
+  if (commentEditor && commentEditor.contains(anchor)) {
+    updateRteToolbarState();
+    return;
+  }
+
+  const supplierEditor = document.getElementById('newSupplierMessageEditor');
+  if (supplierEditor && supplierEditor.contains(anchor)) {
+    updateSupplierRteState();
+  }
+});
+
+function sanitizeCommentHtml(html) {
+  const allowed = /^<\/?(b|i|u|strong|em|ul|ol|li|p|br|span|div)(\s[^>]*)?>$/i;
+  return html.replace(/<[^>]+>/g, tag => allowed.test(tag) ? tag : '');
+}
+
+function submitCommentFromModal() {
+  const editor = document.getElementById('richCommentEditor');
+  if (!editor) return;
+  const html = editor.innerHTML.trim();
+  if (!html || html === '<br>') return;
+  if (addCommentTargetItemId !== null) {
+    const item = toolingData.find(i => Number(i.id) === Number(addCommentTargetItemId));
+    if (!item) return;
+    let comments = [];
+    if (item.comments) {
+      try {
+        comments = JSON.parse(item.comments);
+        if (!Array.isArray(comments)) comments = [];
+      } catch (e) { comments = []; }
+    }
+    const now = new Date();
+    const dateStr = now.toLocaleString('pt-BR', {
+      day: '2-digit', month: '2-digit', year: 'numeric',
+      hour: '2-digit', minute: '2-digit'
+    });
+
+    if (addCommentEditIndex !== null) {
+      // Editing existing comment
+      if (addCommentEditIndex >= 0 && addCommentEditIndex < comments.length) {
+        comments[addCommentEditIndex].text = html;
+        comments[addCommentEditIndex].richText = true;
+        comments[addCommentEditIndex].date = dateStr;
+      }
+    } else {
+      // New comment
+      comments.push({ date: dateStr, text: html, richText: true, initial: false });
+    }
+
+    item.comments = JSON.stringify(comments);
+    updateCommentsDisplay(addCommentTargetItemId);
+    autoSaveTooling(addCommentTargetItemId, true);
+  }
+  closeAddCommentModal();
 }
 
 function handleCommentKeydown(event, itemId) {
@@ -6772,12 +6959,8 @@ function editComment(itemId, commentIndex) {
   if (item.comments) {
     try {
       comments = JSON.parse(item.comments);
-      if (!Array.isArray(comments)) {
-        return;
-      }
-    } catch (e) {
-      return;
-    }
+      if (!Array.isArray(comments)) return;
+    } catch (e) { return; }
   }
 
   if (commentIndex < 0 || commentIndex >= comments.length) return;
@@ -6791,32 +6974,29 @@ function editComment(itemId, commentIndex) {
     return;
   }
 
-  const textElement = document.getElementById(`commentText_${itemId}_${commentIndex}`);
-  if (!textElement) return;
+  const comment = comments[commentIndex];
+  addCommentTargetItemId = itemId;
+  addCommentEditIndex = commentIndex;
 
-  const currentText = comments[commentIndex].text || '';
-  const card = textElement.closest('.comment-card');
+  const modal = document.getElementById('addCommentModal');
+  const editor = document.getElementById('richCommentEditor');
+  const title = modal && modal.querySelector('.modal-title');
 
-  const editFieldHtml = `<textarea class="comment-edit-input" id="commentEditInput_${itemId}_${commentIndex}" rows="4" onkeydown="handleCommentEditKeydown(event, ${itemId}, ${commentIndex})">${escapeHtml(currentText)}</textarea>`;
-  textElement.innerHTML = editFieldHtml;
+  if (title) title.textContent = 'Edit Comment';
+  const submitBtn = document.getElementById('addCommentSubmitBtn');
+  if (submitBtn) submitBtn.innerHTML = '<i class="ph ph-check"></i> Save';
 
-  const editInput = document.getElementById(`commentEditInput_${itemId}_${commentIndex}`);
-  if (editInput) {
-    editInput.focus();
-    editInput.select();
+  if (editor) {
+    editor.innerHTML = comment.richText ? sanitizeCommentHtml(comment.text || '') : escapeHtml(comment.text || '').replace(/\n/g, '<br>');
   }
 
-  const actions = card.querySelector('.comment-actions');
-  if (actions) {
-    actions.innerHTML = `
-      <button class="btn-comment-action" onclick="saveCommentEdit(${itemId}, ${commentIndex})" title="Save">
-        <i class="ph ph-check"></i>
-      </button>
-      <button class="btn-comment-action" onclick="cancelCommentEdit(${itemId})" title="Cancel">
-        <i class="ph ph-x"></i>
-      </button>
-    `;
+  if (modal) {
+    modal.classList.add('active');
+    setTimeout(() => editor && editor.focus(), 100);
   }
+
+  document._addCommentEscHandler = (e) => { if (e.key === 'Escape') closeAddCommentModal(); };
+  document.addEventListener('keydown', document._addCommentEscHandler);
 }
 
 function handleCommentEditKeydown(event, itemId, commentIndex) {
@@ -7660,8 +7840,8 @@ function renderSpreadsheetView() {
             ${stepsOptionsHtml}
           </select>
         </td>
-        <td>
-          <select class="spreadsheet-select ${statusClass}" data-field="status" data-id="${item.id}" disabled>
+        <td class="col-status">
+          <select class="spreadsheet-select ${statusClass}" data-field="status" data-id="${item.id}" title="${escapeHtml(item.status || '')}" disabled>
             ${statusOptionsHtml}
           </select>
         </td>
@@ -9354,52 +9534,41 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
             <div class="detail-group detail-grid comments-group">
               <div class="detail-group-title">
                 Comments
-                <div class="comments-filter-wrapper">
-                  <button type="button" class="btn-comments-filter" id="commentsFilterBtn_${item.id}" onclick="toggleCommentsFilterPopup(${item.id})" title="Filter comments">
-                    <i class="ph ph-funnel"></i>
-                  </button>
-                  <div class="comments-filter-popup" id="commentsFilterPopup_${item.id}">
-                    <div class="comments-filter-popup-header">Filter by keyword</div>
-                    <div class="comments-filter-modes">
-                      <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-comments" onclick="applyCommentsFilter(${item.id}, 'only-comments')">Only Comments</button>
-                      <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-logs" onclick="applyCommentsFilter(${item.id}, 'only-logs')">Only Logs</button>
-                      <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="all" onclick="applyCommentsFilter(${item.id}, 'all')">All</button>
-                    </div>
-                    <div class="comments-filter-popup-options">
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'all')">All Comments</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'created')">Created</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'produced')">Produced (qty)</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'tooling life')">Tooling Life (qty)</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'forecast')">Forecast (qty)</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'production date')">Production Date</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'annual volume date')">Annual Volume Date</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'expiration')">Expiration Date</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'status')">Status</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'steps')">Steps</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'disposition')">Disposition</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'category')">Category</button>
-                      <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'responsible')">Cummins Responsible</button>
+                <div class="comments-header-actions">
+                  <div class="comments-filter-wrapper">
+                    <button type="button" class="btn-comments-filter" id="commentsFilterBtn_${item.id}" onclick="toggleCommentsFilterPopup(${item.id})" title="Filter comments">
+                      <i class="ph ph-funnel"></i>
+                    </button>
+                    <div class="comments-filter-popup" id="commentsFilterPopup_${item.id}">
+                      <div class="comments-filter-popup-header">Filter by keyword</div>
+                      <div class="comments-filter-modes">
+                        <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-comments" onclick="applyCommentsFilter(${item.id}, 'only-comments')">Only Comments</button>
+                        <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-logs" onclick="applyCommentsFilter(${item.id}, 'only-logs')">Only Logs</button>
+                        <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="all" onclick="applyCommentsFilter(${item.id}, 'all')">All</button>
+                      </div>
+                      <div class="comments-filter-popup-options">
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'all')">All Comments</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'created')">Created</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'produced')">Produced (qty)</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'tooling life')">Tooling Life (qty)</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'forecast')">Forecast (qty)</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'production date')">Production Date</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'annual volume date')">Annual Volume Date</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'expiration')">Expiration Date</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'status')">Status</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'steps')">Steps</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'disposition')">Disposition</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'category')">Category</button>
+                        <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'responsible')">Cummins Responsible</button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </div>
-              <div class="card-comments-container">
-                <div class="comments-input-area">
-                  <textarea 
-                    class="comment-input" 
-                    id="commentInput_${item.id}"
-                    placeholder="Add a comment..."
-                    rows="3"
-                    onkeydown="handleCommentKeydown(event, ${item.id})"
-                  ></textarea>
-                  <button 
-                    class="btn-add-comment" 
-                    onclick="addComment(${item.id})"
-                    title="Add comment"
-                  >
+                  <button type="button" class="btn-add-comment" onclick="openAddCommentModal(${item.id})" title="Add comment">
                     <i class="ph ph-plus"></i>
                   </button>
                 </div>
+              </div>
+              <div class="card-comments-container">
                 <div class="comments-list" id="commentsList_${item.id}">
                   ${buildCommentsListHTML(item.comments || '', item.id)}
                 </div>
@@ -9859,52 +10028,41 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
                   <div class="detail-group detail-grid comments-group">
                     <div class="detail-group-title">
                       Comments
-                      <div class="comments-filter-wrapper">
-                        <button type="button" class="btn-comments-filter" id="commentsFilterBtn_${item.id}" onclick="toggleCommentsFilterPopup(${item.id})" title="Filter comments">
-                          <i class="ph ph-funnel"></i>
-                        </button>
-                        <div class="comments-filter-popup" id="commentsFilterPopup_${item.id}">
-                          <div class="comments-filter-popup-header">Filter by keyword</div>
-                          <div class="comments-filter-modes">
-                            <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-comments" onclick="applyCommentsFilter(${item.id}, 'only-comments')">Only Comments</button>
-                            <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-logs" onclick="applyCommentsFilter(${item.id}, 'only-logs')">Only Logs</button>
-                            <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="all" onclick="applyCommentsFilter(${item.id}, 'all')">All</button>
-                          </div>
-                          <div class="comments-filter-popup-options">
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'all')">All Comments</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'created')">Created</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'produced')">Produced (qty)</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'tooling life')">Tooling Life (qty)</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'forecast')">Forecast (qty)</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'production date')">Production Date</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'annual volume date')">Annual Volume Date</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'expiration')">Expiration Date</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'status')">Status</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'steps')">Steps</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'disposition')">Disposition</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'category')">Category</button>
-                            <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'responsible')">Cummins Responsible</button>
+                      <div class="comments-header-actions">
+                        <div class="comments-filter-wrapper">
+                          <button type="button" class="btn-comments-filter" id="commentsFilterBtn_${item.id}" onclick="toggleCommentsFilterPopup(${item.id})" title="Filter comments">
+                            <i class="ph ph-funnel"></i>
+                          </button>
+                          <div class="comments-filter-popup" id="commentsFilterPopup_${item.id}">
+                            <div class="comments-filter-popup-header">Filter by keyword</div>
+                            <div class="comments-filter-modes">
+                              <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-comments" onclick="applyCommentsFilter(${item.id}, 'only-comments')">Only Comments</button>
+                              <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="only-logs" onclick="applyCommentsFilter(${item.id}, 'only-logs')">Only Logs</button>
+                              <button type="button" class="comments-filter-mode-btn" data-comments-filter-mode="all" onclick="applyCommentsFilter(${item.id}, 'all')">All</button>
+                            </div>
+                            <div class="comments-filter-popup-options">
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'all')">All Comments</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'created')">Created</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'produced')">Produced (qty)</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'tooling life')">Tooling Life (qty)</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'forecast')">Forecast (qty)</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'production date')">Production Date</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'annual volume date')">Annual Volume Date</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'expiration')">Expiration Date</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'status')">Status</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'steps')">Steps</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'disposition')">Disposition</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'category')">Category</button>
+                              <button type="button" class="comments-filter-option" onclick="applyCommentsFilter(${item.id}, 'responsible')">Cummins Responsible</button>
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    </div>
-                    <div class="card-comments-container">
-                      <div class="comments-input-area">
-                        <textarea 
-                          class="comment-input" 
-                          id="commentInput_${item.id}"
-                          placeholder="Add a comment..."
-                          rows="3"
-                          onkeydown="handleCommentKeydown(event, ${item.id})"
-                        ></textarea>
-                        <button 
-                          class="btn-add-comment" 
-                          onclick="addComment(${item.id})"
-                          title="Add comment"
-                        >
+                        <button type="button" class="btn-add-comment" onclick="openAddCommentModal(${item.id})" title="Add comment">
                           <i class="ph ph-plus"></i>
                         </button>
                       </div>
+                    </div>
+                    <div class="card-comments-container">
                       <div class="comments-list" id="commentsList_${item.id}">
                         ${buildCommentsListHTML(item.comments || '', item.id)}
                       </div>
