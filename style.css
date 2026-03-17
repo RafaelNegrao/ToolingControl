@@ -225,11 +225,11 @@ textarea {
 /* Sidebar */
 
 .sidebar {
-  width: 320px;
-  flex: 0 0 320px;
+  width: 280px;
+  flex: 0 0 280px;
   background: #2b2b2b;
   border-right: 1px solid #1a1a1a;
-  padding: 20px;
+  padding: 16px 12px;
   overflow: hidden;
   transition: width 0.25s ease, flex 0.25s ease, padding 0.25s ease;
   position: relative;
@@ -9032,11 +9032,11 @@ select.detail-input::-ms-expand {
 }
 
 .spreadsheet-icon-chain {
-  color: #8b5cf6;
+  color: #dc2626;
 }
 
 .spreadsheet-icon-attachment {
-  color: #3b82f6;
+  color: #dc2626;
 }
 
 /* ===== SELECTION MODE FOR EXPORT ===== */
@@ -10028,7 +10028,7 @@ select.detail-input::-ms-expand {
   height: 24px;
   margin: 0 2px;
   font-size: 16px;
-  color: #666;
+  color: #dc2626;
   vertical-align: middle;
 }
 
@@ -10055,7 +10055,7 @@ select.detail-input::-ms-expand {
 }
 
 .tooling-life-change-icon.up {
-  color: #16a34a;
+  color: #dc2626;
 }
 
 .tooling-life-change-icon.down {

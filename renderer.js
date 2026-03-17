@@ -1,5 +1,5 @@
 // Estado da aplicação
-const APP_VERSION = 'v0.2.2';
+const APP_VERSION = 'v0.2.3';
 
 let currentTab = 'tooling';
 let toolingData = [];
@@ -2553,9 +2553,9 @@ function handleSupplierSelection(supplierName, { sourceElement = null, forceRelo
 
       // Verifica AMBOS campos de pesquisa
       const searchInput = document.getElementById('searchInput');
-      const supplierSearchInput = document.getElementById('supplierSearchInput');
+      const statusSupplierSearchInput = document.getElementById('statusSupplierSearchInput');
       const globalSearchValue = searchInput ? searchInput.value.trim() : '';
-      const supplierSearchValue = supplierSearchInput ? supplierSearchInput.value.trim() : '';
+      const supplierSearchValue = statusSupplierSearchInput ? statusSupplierSearchInput.value.trim() : '';
 
       const hasGlobalSearch = globalSearchValue.length >= 2;
       const hasSupplierSearch = supplierSearchValue.length >= 1;
@@ -10819,6 +10819,16 @@ async function loadCardAttachments(itemId) {
 
     // Atualiza o contador no header do card
     updateAttachmentCount(normalizedId, attachments.length);
+
+    // Atualiza o ícone de anexo na coluna info da spreadsheet
+    const spreadsheetIcon = document.querySelector(`[data-attachment-icon="${normalizedId}"]`);
+    if (spreadsheetIcon) {
+      if (attachments.length > 0) {
+        spreadsheetIcon.removeAttribute('hidden');
+      } else {
+        spreadsheetIcon.setAttribute('hidden', '');
+      }
+    }
 
     const container = document.getElementById(`cardAttachments-${normalizedId}`);
 
