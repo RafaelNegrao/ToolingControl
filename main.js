@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
+const { pathToFileURL } = require('url');
 const sqlite3 = require('sqlite3').verbose();
 const fs = require('fs');
 const ExcelJS = require('exceljs');
@@ -35,6 +36,35 @@ const VERIFICATION_KEY_VALUE = '123456';
 const SUPPLIER_INFO_SHEET_NAME = 'Info & Instructions';
 const SUPPLIER_INFO_TIMESTAMP_LABEL = 'Last Import Timestamp';
 const SUPPLIER_METADATA_TABLE = 'supplier_metadata';
+const IMAGE_ATTACHMENT_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']);
+
+function isImageAttachmentFile(fileName = '') {
+  const ext = path.extname(String(fileName || '')).replace('.', '').toLowerCase();
+  return IMAGE_ATTACHMENT_EXTENSIONS.has(ext);
+}
+
+function normalizeAttachmentUploadOptions(options = {}) {
+  return {
+    kind: options?.kind === 'picture' ? 'picture' : 'file'
+  };
+}
+
+// ── Per-item attachments helpers ──
+// Files (attachments): attachments/{supplier}/{itemId}/
+// Pictures: attachments/{supplier}/{itemId}/pictures/
+
+function getItemFilesDir(supplierName, itemId) {
+  const attachmentsDir = getAttachmentsDir();
+  return path.join(attachmentsDir, sanitizeFileName(supplierName), String(itemId));
+}
+
+function getPicturesDir(supplierName, itemId) {
+  const attachmentsDir = getAttachmentsDir();
+  return path.join(attachmentsDir, sanitizeFileName(supplierName), String(itemId), 'pictures');
+}
+
+
+
 const CHANGE_TRACKING_FIELDS = {
   produced: { label: 'Produced (qty)', type: 'number' },
   tooling_life_qty: { label: 'Tooling Life (qty)', type: 'number' },
@@ -2144,20 +2174,34 @@ ipcMain.handle('create-tooling', async (event, data) => {
 });
 
 ipcMain.handle('delete-tooling', async (event, id) => {
-  // Fetch supplier before deleting to increment revision
-  const record = await dbGet('SELECT supplier FROM ferramental WHERE id = ?', [id]);
+  // Fetch record data before deleting (supplier, pn)
+  const record = await dbGet('SELECT supplier, pn FROM ferramental WHERE id = ?', [id]);
+  const supplier = record?.supplier ? String(record.supplier).trim() : '';
+  const pn = record?.pn ? String(record.pn).trim() : '';
+
   return new Promise((resolve, reject) => {
     db.run('DELETE FROM ferramental WHERE id = ?', [id], async function (err) {
       if (err) {
         reject(err);
       } else {
         // Increment data revision for the supplier
-        const supplier = record?.supplier ? String(record.supplier).trim() : '';
         if (supplier && this.changes > 0) {
           try {
             await incrementSupplierDataRevision(supplier);
           } catch (revErr) {
             console.error('[DataRevision] Failed to increment on delete:', revErr);
+          }
+
+          // ── Attachment cleanup ──
+          try {
+            // Delete the entire per-item directory (files + pictures)
+            const itemDir = getItemFilesDir(supplier, id);
+            const longItemDir = getLongPath(itemDir);
+            if (fs.existsSync(longItemDir)) {
+              fs.rmSync(longItemDir, { recursive: true, force: true });
+            }
+          } catch (cleanupErr) {
+            console.error('[Cleanup] Error cleaning up attachments on delete:', cleanupErr);
           }
         }
         resolve({ success: true, changes: this.changes });
@@ -3362,45 +3406,60 @@ function renameAttachmentsFolder(oldSupplierName, newSupplierName) {
   fs.rmSync(longOldDir, { recursive: true, force: true });
 }
 
-// Lista anexos de um fornecedor
+// Lista anexos de um item
 ipcMain.handle('get-attachments', async (event, supplierName, itemId = null) => {
-  const attachmentsDir = getAttachmentsDir();
-  let targetDir;
-
-  if (itemId) {
-    targetDir = path.join(attachmentsDir, sanitizeFileName(supplierName), String(itemId));
-  } else {
-    targetDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
-  }
-
-  // Usar caminho longo para Windows se necessário
-  const longTargetDir = getLongPath(targetDir);
-
-  if (!fs.existsSync(longTargetDir)) {
-    return [];
-  }
+  if (!itemId) return [];
 
   try {
-    const allItems = fs.readdirSync(longTargetDir);
-    const files = allItems.filter(itemName => {
-      const fullPath = path.join(targetDir, itemName);
-      const longFullPath = getLongPath(fullPath);
-      const stats = fs.statSync(longFullPath);
-      return stats.isFile();
-    });
+    // ── Files: read from {itemId}/ directory (per-item, excluding pictures subfolder) ──
+    const itemDir = getItemFilesDir(supplierName, itemId);
+    const longItemDir = getLongPath(itemDir);
+    let fileAttachments = [];
+    if (fs.existsSync(longItemDir)) {
+      const allItems = fs.readdirSync(longItemDir);
+      const rootFiles = allItems.filter(name => {
+        if (name === 'pictures') return false;
+        try { return fs.statSync(getLongPath(path.join(itemDir, name))).isFile(); } catch { return false; }
+      });
+      fileAttachments = rootFiles.map(fileName => {
+        const filePath = path.join(itemDir, fileName);
+        const stats = fs.statSync(getLongPath(filePath));
+        return {
+          fileName,
+          supplierName,
+          itemId,
+          fileSize: stats.size,
+          uploadDate: stats.birthtime,
+          isImage: false,
+          previewUrl: null
+        };
+      });
+    }
 
-    return files.map(fileName => {
-      const filePath = path.join(targetDir, fileName);
-      const longFilePath = getLongPath(filePath);
-      const stats = fs.statSync(longFilePath);
-      return {
-        fileName,
-        supplierName,
-        itemId,
-        fileSize: stats.size,
-        uploadDate: stats.birthtime
-      };
-    });
+    // ── Pictures: read from {itemId}/pictures/ ──
+    const picturesDir = getPicturesDir(supplierName, itemId);
+    const longPicturesDir = getLongPath(picturesDir);
+    let pictureAttachments = [];
+    if (fs.existsSync(longPicturesDir)) {
+      const picItems = fs.readdirSync(longPicturesDir);
+      pictureAttachments = picItems.filter(name => {
+        try { return fs.statSync(getLongPath(path.join(picturesDir, name))).isFile(); } catch { return false; }
+      }).map(fileName => {
+        const filePath = path.join(picturesDir, fileName);
+        const stats = fs.statSync(getLongPath(filePath));
+        return {
+          fileName,
+          supplierName,
+          itemId,
+          fileSize: stats.size,
+          uploadDate: stats.birthtime,
+          isImage: true,
+          previewUrl: pathToFileURL(filePath).href
+        };
+      });
+    }
+
+    return [...fileAttachments, ...pictureAttachments];
   } catch (error) {
     return [];
   }
@@ -3412,52 +3471,50 @@ ipcMain.handle('get-attachments-count-batch', async (event, supplierName, itemId
     return {};
   }
 
-  const attachmentsDir = getAttachmentsDir();
-  const supplierDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
-  const longSupplierDir = getLongPath(supplierDir);
   const counts = {};
 
-  if (!fs.existsSync(longSupplierDir)) {
-    itemIds.forEach(id => { counts[id] = 0; });
-    return counts;
-  }
-
-  itemIds.forEach(itemId => {
-    const targetDir = path.join(supplierDir, String(itemId));
-    const longTargetDir = getLongPath(targetDir);
-    if (!fs.existsSync(longTargetDir)) {
-      counts[itemId] = 0;
-      return;
-    }
-
+  for (const itemId of itemIds) {
     try {
-      const allItems = fs.readdirSync(longTargetDir);
-      const fileCount = allItems.filter(itemName => {
+      // Files count from {itemId}/ directory (excluding pictures subfolder)
+      let fileCount = 0;
+      const itemDir = getItemFilesDir(supplierName, itemId);
+      const longItemDir = getLongPath(itemDir);
+      if (fs.existsSync(longItemDir)) {
+        fileCount = fs.readdirSync(longItemDir).filter(n => {
+          if (n === 'pictures') return false;
+          try { return fs.statSync(getLongPath(path.join(itemDir, n))).isFile(); } catch { return false; }
+        }).length;
+      }
+
+      // Pictures count from {itemId}/pictures/
+      let picCount = 0;
+      const picturesDir = getPicturesDir(supplierName, itemId);
+      const longPicturesDir = getLongPath(picturesDir);
+      if (fs.existsSync(longPicturesDir)) {
         try {
-          const fullPath = path.join(targetDir, itemName);
-          const longFullPath = getLongPath(fullPath);
-          const stats = fs.statSync(longFullPath);
-          return stats.isFile();
-        } catch {
-          return false;
-        }
-      }).length;
-      counts[itemId] = fileCount;
-    } catch (error) {
+          picCount = fs.readdirSync(longPicturesDir).filter(n => {
+            try { return fs.statSync(getLongPath(path.join(picturesDir, n))).isFile(); } catch { return false; }
+          }).length;
+        } catch { }
+      }
+
+      counts[itemId] = fileCount + picCount;
+    } catch {
       counts[itemId] = 0;
     }
-  });
+  }
 
   return counts;
 });
 
 // Upload de arquivo
-ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) => {
+ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null, options = {}) => {
+  const normalizedOptions = normalizeAttachmentUploadOptions(options);
   const result = await dialog.showOpenDialog({
     properties: ['openFile', 'multiSelections'],
-    filters: [
-      { name: 'All Files', extensions: ['*'] }
-    ]
+    filters: normalizedOptions.kind === 'picture'
+      ? [{ name: 'Images', extensions: Array.from(IMAGE_ATTACHMENT_EXTENSIONS) }]
+      : [{ name: 'All Files', extensions: ['*'] }]
   });
 
   if (result.canceled || result.filePaths.length === 0) {
@@ -3465,16 +3522,22 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
   }
 
   try {
-    const attachmentsDir = getAttachmentsDir();
     let targetDir;
 
-    const supplierDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
-    const hasCardScope = itemId !== null && itemId !== undefined;
-    targetDir = hasCardScope
-      ? path.join(supplierDir, String(itemId))
-      : supplierDir;
+    if (normalizedOptions.kind === 'picture') {
+      // Pictures: per-item directory
+      targetDir = getPicturesDir(supplierName, itemId);
+    } else {
+      // Files: per-item directory
+      if (itemId) {
+        targetDir = getItemFilesDir(supplierName, itemId);
+      } else {
+        // Fallback: supplier-level if no itemId
+        const attachmentsDir = getAttachmentsDir();
+        targetDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
+      }
+    }
 
-    // Usar caminho longo para Windows se necessário
     const longTargetDir = getLongPath(targetDir);
 
     if (!fs.existsSync(longTargetDir)) {
@@ -3488,11 +3551,13 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
     const results = result.filePaths.map(sourcePath => {
       try {
         const fileName = path.basename(sourcePath);
+        if (normalizedOptions.kind === 'picture' && !isImageAttachmentFile(fileName)) {
+          return { success: false, fileName, error: 'Only image files are allowed in Pictures.' };
+        }
         const destPath = path.join(targetDir, fileName);
         const longDestPath = getLongPath(destPath);
         const longSourcePath = getLongPath(sourcePath);
         fs.copyFileSync(longSourcePath, longDestPath);
-        const existsAfterCopy = fs.existsSync(longDestPath);
         return { success: true, fileName };
       } catch (error) {
         return { success: false, fileName: path.basename(sourcePath), error: error.message };
@@ -3512,20 +3577,27 @@ ipcMain.handle('upload-attachment', async (event, supplierName, itemId = null) =
   }
 });
 
-ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, filePaths, itemId = null) => {
+ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, filePaths, itemId = null, options = {}) => {
   if (!supplierName || !Array.isArray(filePaths) || filePaths.length === 0) {
     return { success: false, error: 'No file provided.' };
   }
 
-  try {
-    const attachmentsDir = getAttachmentsDir();
-    const supplierDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
-    const hasCardScope = itemId !== null && itemId !== undefined;
-    const targetDir = hasCardScope
-      ? path.join(supplierDir, String(itemId))
-      : supplierDir;
+  const normalizedOptions = normalizeAttachmentUploadOptions(options);
 
-    // Usar caminho longo para Windows se necessário
+  try {
+    let targetDir;
+
+    if (normalizedOptions.kind === 'picture') {
+      targetDir = getPicturesDir(supplierName, itemId);
+    } else {
+      if (itemId) {
+        targetDir = getItemFilesDir(supplierName, itemId);
+      } else {
+        const attachmentsDir = getAttachmentsDir();
+        targetDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
+      }
+    }
+
     const longTargetDir = getLongPath(targetDir);
 
     if (!fs.existsSync(longTargetDir)) {
@@ -3548,6 +3620,9 @@ ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, fileP
       }
 
       const fileName = path.basename(sourcePath);
+      if (normalizedOptions.kind === 'picture' && !isImageAttachmentFile(fileName)) {
+        return { success: false, fileName, error: 'Only image files are allowed in Pictures.' };
+      }
       const destPath = path.join(targetDir, fileName);
       const longDestPath = getLongPath(destPath);
 
@@ -3572,26 +3647,62 @@ ipcMain.handle('upload-attachment-from-paths', async (event, supplierName, fileP
   }
 });
 
+// Save pasted image from clipboard (receives base64 PNG data)
+ipcMain.handle('save-pasted-image', async (event, supplierName, itemId, base64Data) => {
+  if (!supplierName || !itemId || !base64Data) {
+    return { success: false, error: 'Missing parameters.' };
+  }
+
+  try {
+    const attachmentsDir = getAttachmentsDir();
+    const targetDir = path.join(attachmentsDir, sanitizeFileName(supplierName), String(itemId), 'pictures');
+    const longTargetDir = getLongPath(targetDir);
+
+    if (!fs.existsSync(longTargetDir)) {
+      fs.mkdirSync(longTargetDir, { recursive: true });
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const fileName = `paste-${timestamp}.png`;
+    const destPath = path.join(targetDir, fileName);
+    const longDestPath = getLongPath(destPath);
+
+    const buffer = Buffer.from(base64Data, 'base64');
+    fs.writeFileSync(longDestPath, buffer);
+
+    return { success: true, fileName };
+  } catch (error) {
+    return { success: false, error: error.message };
+  }
+});
+
 // Abre arquivo anexado
 ipcMain.handle('open-attachment', async (event, supplierName, fileName, itemId = null) => {
-  const attachmentsDir = getAttachmentsDir();
   let filePath;
 
   if (itemId) {
-    filePath = path.join(attachmentsDir, sanitizeFileName(supplierName), String(itemId), fileName);
+    // Try per-item directory first (files)
+    const itemPath = path.join(getItemFilesDir(supplierName, itemId), fileName);
+    if (fs.existsSync(getLongPath(itemPath))) {
+      filePath = itemPath;
+    }
+    // Then try pictures subdirectory
+    if (!filePath) {
+      const picPath = path.join(getPicturesDir(supplierName, itemId), fileName);
+      if (fs.existsSync(getLongPath(picPath))) {
+        filePath = picPath;
+      }
+    }
   } else {
+    const attachmentsDir = getAttachmentsDir();
     filePath = path.join(attachmentsDir, sanitizeFileName(supplierName), fileName);
   }
 
-  // Usar caminho longo para Windows se necessário
-  const longPath = getLongPath(filePath);
-
-  if (!fs.existsSync(longPath)) {
+  if (!filePath || !fs.existsSync(getLongPath(filePath))) {
     throw new Error('File not found');
   }
 
   try {
-    // Usar função que lida com caminhos longos no Windows
     return await openFileWithLongPath(filePath);
   } catch (error) {
     throw error;
@@ -3619,24 +3730,32 @@ ipcMain.handle('open-attachments-folder', async (event, supplierName) => {
 
 // Exclui arquivo anexado
 ipcMain.handle('delete-attachment', async (event, supplierName, fileName, itemId = null) => {
-  const attachmentsDir = getAttachmentsDir();
   let filePath;
 
   if (itemId) {
-    filePath = path.join(attachmentsDir, sanitizeFileName(supplierName), String(itemId), fileName);
+    // Try per-item directory first (files)
+    const itemPath = path.join(getItemFilesDir(supplierName, itemId), fileName);
+    if (fs.existsSync(getLongPath(itemPath))) {
+      filePath = itemPath;
+    }
+    // Then try pictures subdirectory
+    if (!filePath) {
+      const picPath = path.join(getPicturesDir(supplierName, itemId), fileName);
+      if (fs.existsSync(getLongPath(picPath))) {
+        filePath = picPath;
+      }
+    }
   } else {
+    const attachmentsDir = getAttachmentsDir();
     filePath = path.join(attachmentsDir, sanitizeFileName(supplierName), fileName);
   }
 
-  // Usar caminho longo para Windows se necessário
-  const longPath = getLongPath(filePath);
-
-  if (!fs.existsSync(longPath)) {
+  if (!filePath || !fs.existsSync(getLongPath(filePath))) {
     return { success: false, error: 'File not found' };
   }
 
   try {
-    fs.unlinkSync(longPath);
+    fs.unlinkSync(getLongPath(filePath));
     return { success: true };
   } catch (error) {
     return { success: false, error: error.message };

@@ -38,10 +38,12 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.invoke('get-attachments', supplierName, itemId),
   getAttachmentsCountBatch: (supplierName, itemIds) =>
     ipcRenderer.invoke('get-attachments-count-batch', supplierName, itemIds),
-  uploadAttachment: (supplierName, itemId = null) =>
-    ipcRenderer.invoke('upload-attachment', supplierName, itemId),
-  uploadAttachmentFromPaths: (supplierName, filePaths, itemId = null) =>
-    ipcRenderer.invoke('upload-attachment-from-paths', supplierName, filePaths, itemId),
+  uploadAttachment: (supplierName, itemId = null, options = {}) =>
+    ipcRenderer.invoke('upload-attachment', supplierName, itemId, options),
+  uploadAttachmentFromPaths: (supplierName, filePaths, itemId = null, options = {}) =>
+    ipcRenderer.invoke('upload-attachment-from-paths', supplierName, filePaths, itemId, options),
+  savePastedImage: (supplierName, itemId, base64Data) =>
+    ipcRenderer.invoke('save-pasted-image', supplierName, itemId, base64Data),
   openAttachment: (supplierName, fileName, itemId = null) =>
     ipcRenderer.invoke('open-attachment', supplierName, fileName, itemId),
   openAttachmentsFolder: (supplierName) =>

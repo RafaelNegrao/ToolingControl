@@ -2838,19 +2838,123 @@ textarea {
   margin-top: -4px;
 }
 
+.card-attachments-legacy-column {
+  min-width: 0;
+  position: relative;
+}
+
+.card-files-section {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border: 2px dashed transparent;
+  border-radius: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow: hidden;
+}
+
+.card-files-section.drop-active {
+  border-color: #c8102e;
+  border-style: dashed;
+  background: #fff5f7;
+  box-shadow: 0 0 0 3px rgba(200, 16, 46, 0.08);
+}
+
+.card-files-section-header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.card-files-drop-hint {
+  font-size: 12px;
+  color: #bbb;
+}
+
+.card-pictures-section {
+  min-width: 0;
+}
+
+.card-attachments-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+  gap: 0 20px;
+  align-items: stretch;
+}
+
+.card-attachments-vertical-divider {
+  width: 1px;
+  background: #e8e8e8;
+  align-self: stretch;
+  min-height: 100%;
+}
+
+.card-attachments-panel-header {
+  margin-bottom: 14px;
+}
+
+.card-attachments-panel-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #262626;
+}
+
+.card-attachments-panel-subtitle {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #7b7b7b;
+}
+
 .card-attachments-dropzone {
   border: 2px dashed #ddd;
   border-radius: 8px;
-  padding: 20px;
+  padding: 12px 16px;
   text-align: center;
   cursor: pointer;
   transition: all 0.2s;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   color: #999;
-  margin-bottom: 20px;
+  margin-bottom: 14px;
+}
+
+.card-attachments-dropzone-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #444;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+
+/* Picture dropzone — borderless, text only */
+.card-attachments-dropzone-picture {
+  border: none;
+  background: none;
+  padding: 4px 0 10px;
+  margin-bottom: 8px;
+  gap: 2px;
+}
+
+.card-pictures-drag-icon {
+  display: none;
+}
+
+.card-pictures-section.drop-active .card-pictures-drag-icon {
+  display: block;
 }
 
 .card-attachments-dropzone:hover {
@@ -2859,7 +2963,8 @@ textarea {
   color: #c8102e;
 }
 
-.card-attachments-dropzone.drop-active {
+/* Files dropzone active */
+.card-attachments-dropzone:not(.card-attachments-dropzone-picture).drop-active {
   border-color: #c8102e;
   border-style: dashed;
   background: #fff5f7;
@@ -2868,19 +2973,50 @@ textarea {
   color: #c8102e;
 }
 
-.card-attachments-dropzone.drop-active i {
+.card-attachments-dropzone:not(.card-attachments-dropzone-picture).drop-active i,
+.card-attachments-dropzone:not(.card-attachments-dropzone-picture).drop-active .card-attachments-dropzone-title {
+  color: #c8102e;
+}
+
+.card-attachments-dropzone:hover .card-attachments-dropzone-title {
+  color: #c8102e;
+}
+
+/* Pictures section — full area drop target */
+.card-pictures-section {
+  position: relative;
+  border-radius: 8px;
+  transition: all 0.2s;
+}
+
+.card-pictures-section.drop-active {
+  outline: 2px dashed #c8102e;
+  outline-offset: 8px;
+  background: #fff5f7;
+  box-shadow: 0 0 0 3px rgba(200, 16, 46, 0.08);
+}
+
+.card-pictures-section.drop-active .card-attachments-dropzone-title,
+.card-pictures-section.drop-active .card-attachments-dropzone-picture {
   color: #c8102e;
 }
 
 .card-attachments-dropzone i {
-  font-size: 32px;
+  font-size: 24px;
 }
 
 .card-attachments-list {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 24px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-right: 2px;
+}
+
+.card-attachments-list:has(.card-attachments-empty) {
+  overflow-y: hidden;
 }
 
 .card-attachment-item {
@@ -2911,6 +3047,124 @@ textarea {
   font-size: 24px;
   color: #c8102e;
   flex-shrink: 0;
+}
+
+.card-attachments-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 1;
+  min-height: 200px;
+  color: #b0b0b0;
+  font-size: 13px;
+  text-align: center;
+}
+
+.card-attachments-empty i {
+  font-size: 32px;
+}
+
+.card-pictures-gallery {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: nowrap;
+  gap: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 6px;
+}
+
+.card-picture-card {
+  flex: 0 0 280px;
+  width: 280px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid #e7e7e7;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.card-picture-preview {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  display: block;
+  cursor: pointer;
+  overflow: hidden;
+  background: #f3f3f3;
+}
+
+.card-picture-thumb {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  transition: transform 0.25s ease;
+}
+
+.card-picture-preview:hover .card-picture-thumb {
+  transform: scale(1.04);
+}
+
+.card-picture-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  pointer-events: none;
+}
+
+.card-picture-preview:hover .card-picture-bar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.card-picture-date {
+  color: #fff;
+  font-size: 11px;
+}
+
+.card-picture-bar-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.card-picture-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  font-size: 15px;
+  transition: color 0.15s;
+}
+
+.card-picture-btn:hover {
+  color: #c8102e;
+}
+
+@media (max-width: 760px) {
+  .card-attachments-columns {
+    grid-template-columns: 1fr;
+  }
+
+  .card-pictures-gallery {
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
 }
 
 .card-attachment-details {
@@ -4542,7 +4796,7 @@ select.detail-input::-ms-expand {
 
 .delete-modal-icon {
   background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
-  padding: 32px;
+  padding: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4553,28 +4807,28 @@ select.detail-input::-ms-expand {
 }
 
 .delete-modal-icon i {
-  font-size: 48px;
+  font-size: 36px;
   color: #ffffff;
 }
 
 .delete-modal-content {
-  padding: 32px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 
 .delete-modal-title {
   margin: 0;
-  font-size: 24px;
+  font-size: 18px;
   font-weight: 700;
   color: #1f2937;
-  letter-spacing: -0.5px;
+  letter-spacing: -0.3px;
 }
 
 .delete-modal-description {
   margin: 0;
-  font-size: 15px;
+  font-size: 13px;
   line-height: 1.6;
   color: #6b7280;
 }
@@ -4596,7 +4850,7 @@ select.detail-input::-ms-expand {
 }
 
 .delete-code-label {
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 500;
   color: #6b7280;
   text-transform: uppercase;
@@ -4604,7 +4858,7 @@ select.detail-input::-ms-expand {
 }
 
 .delete-code-value {
-  font-size: 24px;
+  font-size: 20px;
   font-weight: 700;
   color: #1f2937;
   font-family: 'Courier New', monospace;
@@ -4613,8 +4867,8 @@ select.detail-input::-ms-expand {
 
 .delete-modal-input {
   width: 100%;
-  padding: 14px 16px;
-  font-size: 18px;
+  padding: 10px 14px;
+  font-size: 16px;
   font-weight: 600;
   text-align: center;
   letter-spacing: 6px;
@@ -4638,16 +4892,16 @@ select.detail-input::-ms-expand {
 }
 
 .delete-modal-actions {
-  padding: 20px 32px 32px 32px;
+  padding: 16px 24px 24px 24px;
   display: flex;
-  gap: 12px;
+  gap: 10px;
 }
 
 .delete-btn-cancel,
 .delete-btn-confirm {
   flex: 1;
-  padding: 14px 20px;
-  font-size: 15px;
+  padding: 10px 16px;
+  font-size: 12px;
   font-weight: 600;
   border-radius: 10px;
   border: none;
@@ -4655,7 +4909,7 @@ select.detail-input::-ms-expand {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   transition: all 0.2s ease;
   text-transform: uppercase;
   letter-spacing: 0.5px;
@@ -4672,7 +4926,7 @@ select.detail-input::-ms-expand {
 }
 
 .delete-btn-cancel i {
-  font-size: 18px;
+  font-size: 14px;
 }
 
 .delete-btn-confirm {
@@ -4687,7 +4941,7 @@ select.detail-input::-ms-expand {
 }
 
 .delete-btn-confirm i {
-  font-size: 18px;
+  font-size: 14px;
 }
 
 /* Unsaved Changes modal */
@@ -4778,12 +5032,11 @@ select.detail-input::-ms-expand {
 
 /* Comment delete modal */
 .comment-delete-modal {
-  background: #2e2e2e;
-  border-radius: 18px;
+  background: #ffffff;
+  border-radius: 16px;
   width: 100%;
   max-width: 420px;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
-  border: 1px solid rgba(255, 255, 255, 0.04);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -4792,138 +5045,138 @@ select.detail-input::-ms-expand {
 
 .comment-delete-icon {
   background: linear-gradient(135deg, #3b3b3b 0%, #2a2a2a 100%);
-  padding: 28px;
+  padding: 22px;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
 .comment-delete-icon i {
-  font-size: 44px;
+  font-size: 36px;
   color: #f8fafc;
 }
 
 .comment-delete-content {
-  padding: 28px;
+  padding: 24px;
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
 }
 
 .comment-delete-header h3 {
   margin: 0;
-  font-size: 22px;
-  color: #f1f5f9;
+  font-size: 18px;
+  font-weight: 700;
+  color: #1f2937;
 }
 
 .comment-delete-header p {
-  margin: 6px 0 0 0;
-  color: #d1d5db;
-  font-size: 14px;
+  margin: 4px 0 0 0;
+  color: #6b7280;
+  font-size: 13px;
   line-height: 1.5;
 }
 
 .comment-delete-context {
-  margin-top: 12px;
+  margin-top: 10px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  color: #f97316;
-  background: rgba(249, 115, 22, 0.1);
-  border: 1px solid rgba(249, 115, 22, 0.2);
+  color: #c8102e;
+  background: rgba(200, 16, 46, 0.08);
+  border: 1px solid rgba(200, 16, 46, 0.18);
   border-radius: 999px;
-  padding: 6px 14px;
+  padding: 5px 12px;
 }
 
 .comment-delete-preview {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 14px;
-  background: #252525;
-  padding: 16px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #f9fafb;
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  max-height: 220px;
+  gap: 8px;
+  max-height: 200px;
   overflow: auto;
 }
 
 .comment-delete-preview-meta {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: #d1d5db;
+  gap: 6px;
+  font-size: 12px;
+  color: #6b7280;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
 
 .comment-delete-preview-meta i {
-  font-size: 16px;
+  font-size: 14px;
 }
 
 .comment-delete-preview-text {
   margin: 0;
-  font-size: 14px;
-  line-height: 1.6;
-  color: #f5f5f5;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #374151;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .comment-delete-actions {
-  padding: 0 28px 28px 28px;
+  padding: 0 24px 24px 24px;
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 10px;
 }
 
 .comment-delete-btn {
   flex: 1;
-  min-width: 140px;
-  padding: 12px 16px;
-  min-height: 44px;
-  border-radius: 12px;
+  min-width: 130px;
+  padding: 10px 14px;
+  min-height: 40px;
+  border-radius: 10px;
   border: none;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 8px;
+  gap: 6px;
   transition: all 0.2s ease;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
 
 .comment-delete-btn.cancel {
-  background: #3a3a3a;
-  color: #f3f4f6;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: #f3f4f6;
+  color: #6b7280;
 }
 
 .comment-delete-btn.cancel:hover {
-  background: #464646;
-  border-color: rgba(255, 255, 255, 0.18);
+  background: #e5e7eb;
+  color: #374151;
 }
 
 .comment-delete-btn.confirm {
-  background: linear-gradient(135deg, #b10f2a 0%, #8a0b20 100%);
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
   color: #ffffff;
-  box-shadow: none;
 }
 
 .comment-delete-btn.confirm:hover {
   transform: translateY(-1px);
-  box-shadow: none;
-  background: linear-gradient(135deg, #8a0b20 0%, #6a0716 100%);
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
 }
 
 .comment-delete-btn i {
-  font-size: 14px;
+  font-size: 13px;
 }
 
 @media (max-width: 520px) {
@@ -9105,6 +9358,30 @@ select.detail-input::-ms-expand {
 }
 
 .selection-export-btn i {
+  font-size: 14px;
+}
+
+.selection-delete-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: transparent;
+  color: #c8102e;
+  border: 1px solid #c8102e;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.selection-delete-btn:hover {
+  background: #c8102e;
+  color: #fff;
+}
+
+.selection-delete-btn i {
   font-size: 14px;
 }
 

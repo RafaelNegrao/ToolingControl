@@ -118,6 +118,11 @@
                     <i class="ph ph-square"></i>
                   </button>
                   <span class="selection-counter" id="selectionCounter">0 items selected</span>
+                  <button class="selection-delete-btn" type="button" title="Delete selected"
+                    onclick="confirmBatchDelete()">
+                    <i class="ph ph-trash"></i>
+                    <span>Delete</span>
+                  </button>
                   <button class="selection-export-btn" type="button" title="Export selected"
                     onclick="exportSelectedItems()">
                     <i class="ph ph-export"></i>
@@ -501,6 +506,39 @@
         </div>
       </div>
 
+      <!-- Batch delete confirmation modal -->
+      <div class="modal-overlay" id="batchDeleteConfirmOverlay">
+        <div class="delete-modal">
+          <div class="delete-modal-icon">
+            <i class="ph ph-trash"></i>
+          </div>
+          <div class="delete-modal-content">
+            <h3 class="delete-modal-title">Delete Multiple Toolings</h3>
+            <p class="delete-modal-description">
+              You are about to permanently delete <strong id="batchDeleteCount"></strong> selected toolings.
+              All associated data, attachments and pictures will be lost.<br>
+              <strong style="color:#ef4444;">This action cannot be undone.</strong>
+            </p>
+            <div class="delete-modal-code-box">
+              <span class="delete-code-label">Enter confirmation code</span>
+              <span class="delete-code-value" id="batchDeleteConfirmCode"></span>
+            </div>
+            <input type="text" id="batchDeleteConfirmInput" class="delete-modal-input" maxlength="3" placeholder="000"
+              autocomplete="off" />
+          </div>
+          <div class="delete-modal-actions">
+            <button class="delete-btn-cancel" type="button" onclick="cancelBatchDelete()">
+              <i class="ph ph-x"></i>
+              <span>Cancel</span>
+            </button>
+            <button class="delete-btn-confirm" type="button" onclick="handleBatchDeleteConfirmation()">
+              <i class="ph ph-trash"></i>
+              <span>Delete All</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
       <!-- Unsaved changes confirmation modal -->
       <div class="modal-overlay" id="unsavedChangesOverlay">
         <div class="unsaved-modal">
@@ -551,6 +589,37 @@
             </button>
             <button type="button" class="comment-delete-btn confirm" id="commentDeleteConfirmBtn"
               onclick="confirmCommentDelete()">
+              <i class="ph ph-trash"></i>
+              <span>Delete</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Attachment delete confirmation modal -->
+      <div class="modal-overlay" id="attachmentDeleteOverlay">
+        <div class="comment-delete-modal">
+          <div class="comment-delete-icon" style="background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);">
+            <i class="ph ph-trash"></i>
+          </div>
+          <div class="comment-delete-content">
+            <div class="comment-delete-header">
+              <h3 id="attachmentDeleteTitle">Delete File</h3>
+              <p>This file will be permanently removed. This action cannot be undone.</p>
+            </div>
+            <div class="comment-delete-preview">
+              <div class="comment-delete-preview-meta">
+                <i class="ph ph-file"></i>
+                <span id="attachmentDeleteFileName">—</span>
+              </div>
+            </div>
+          </div>
+          <div class="comment-delete-actions">
+            <button type="button" class="comment-delete-btn cancel" onclick="cancelAttachmentDelete()">
+              <i class="ph ph-arrow-counter-clockwise"></i>
+              <span>Cancel</span>
+            </button>
+            <button type="button" class="comment-delete-btn confirm" onclick="confirmAttachmentDelete()">
               <i class="ph ph-trash"></i>
               <span>Delete</span>
             </button>

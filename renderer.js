@@ -1426,11 +1426,11 @@ document.addEventListener('click', (e) => {
 });
 
 // Carrega fornecedores com estatísticas
-async function loadSuppliers() {
+async function loadSuppliers({ skipSelectedSupplierReload = false } = {}) {
   try {
     suppliersData = await window.api.getSuppliersWithStats();
     if (hasActiveAdvancedFilters()) {
-      await applyAdvancedSupplierFiltersAndRefresh();
+      await applyAdvancedSupplierFiltersAndRefresh({ skipSelectedSupplierReload });
     } else {
       applyExpirationFilter();
     }
@@ -1484,11 +1484,11 @@ function applyActiveToolingFiltersToData(data) {
   return filtered;
 }
 
-async function applyAdvancedSupplierFiltersAndRefresh() {
+async function applyAdvancedSupplierFiltersAndRefresh({ skipSelectedSupplierReload = false } = {}) {
   if (!hasActiveAdvancedFilters()) {
     stepsFilteredSuppliers = null;
     applyExpirationFilter();
-    if (selectedSupplier) {
+    if (selectedSupplier && !skipSelectedSupplierReload) {
       await loadToolingBySupplier(selectedSupplier);
     }
     return;
@@ -1520,7 +1520,7 @@ async function applyAdvancedSupplierFiltersAndRefresh() {
     console.error('Error applying advanced filters:', error);
   }
 
-  if (selectedSupplier) {
+  if (selectedSupplier && !skipSelectedSupplierReload) {
     await loadToolingBySupplier(selectedSupplier);
   }
 }
@@ -2295,6 +2295,115 @@ async function exportSelectedItems() {
   }
 }
 
+// ── Batch Delete ──
+let batchDeleteState = { ids: [], code: '' };
+
+function confirmBatchDelete() {
+  if (selectedToolingIds.size === 0) {
+    showToast('Select at least one item to delete', 'error');
+    return;
+  }
+
+  const overlay = document.getElementById('batchDeleteConfirmOverlay');
+  const countEl = document.getElementById('batchDeleteCount');
+  const codeEl = document.getElementById('batchDeleteConfirmCode');
+  const inputEl = document.getElementById('batchDeleteConfirmInput');
+  if (!overlay || !countEl || !codeEl || !inputEl) return;
+
+  const ids = Array.from(selectedToolingIds);
+  batchDeleteState = { ids, code: generateConfirmationCode() };
+
+  countEl.textContent = ids.length === 1 ? '1 tooling' : `${ids.length} toolings`;
+  codeEl.textContent = batchDeleteState.code;
+  inputEl.value = '';
+
+  overlay.classList.add('active');
+  setTimeout(() => inputEl.focus(), 50);
+}
+
+function cancelBatchDelete() {
+  const overlay = document.getElementById('batchDeleteConfirmOverlay');
+  const inputEl = document.getElementById('batchDeleteConfirmInput');
+  if (overlay) overlay.classList.remove('active');
+  if (inputEl) inputEl.value = '';
+  batchDeleteState = { ids: [], code: '' };
+}
+
+async function handleBatchDeleteConfirmation() {
+  const overlay = document.getElementById('batchDeleteConfirmOverlay');
+  const inputEl = document.getElementById('batchDeleteConfirmInput');
+  if (!inputEl) return;
+
+  const userCode = inputEl.value.trim().toUpperCase();
+  if (!batchDeleteState.ids.length || !batchDeleteState.code) {
+    cancelBatchDelete();
+    return;
+  }
+
+  if (userCode !== batchDeleteState.code) {
+    showNotification('Incorrect code. Try again.', 'error');
+    inputEl.select();
+    return;
+  }
+
+  const idsToDelete = [...batchDeleteState.ids];
+  cancelBatchDelete();
+
+  let deletedCount = 0;
+  for (const id of idsToDelete) {
+    try {
+      const result = await window.api.deleteTooling(id);
+      if (result && result.success) {
+        deletedCount++;
+        // Remove row with animation
+        const row = document.querySelector(`#spreadsheetBody tr[data-id="${id}"]`);
+        const detailRow = row?.nextElementSibling;
+        const hasDetail = detailRow && detailRow.classList.contains('spreadsheet-detail-row');
+        if (row) {
+          row.style.pointerEvents = 'none';
+          row.animate(
+            [{ opacity: 1, maxHeight: row.scrollHeight + 'px' }, { opacity: 0, maxHeight: '0px' }],
+            { duration: 200, easing: 'ease-in', fill: 'forwards' }
+          ).onfinish = () => row.remove();
+        }
+        if (hasDetail && detailRow) {
+          detailRow.style.pointerEvents = 'none';
+          detailRow.animate(
+            [{ opacity: 1, maxHeight: detailRow.scrollHeight + 'px' }, { opacity: 0, maxHeight: '0px' }],
+            { duration: 200, easing: 'ease-in', fill: 'forwards' }
+          ).onfinish = () => detailRow.remove();
+        }
+        toolingData = toolingData.filter(item => String(item.id) !== String(id));
+        selectedToolingIds.delete(id);
+      }
+    } catch (e) { /* skip failed */ }
+  }
+
+  if (deletedCount > 0) {
+    showNotification(`${deletedCount} tooling(s) deleted successfully!`);
+    toggleSelectionMode();
+
+    if (toolingData.length === 0) {
+      const spreadsheetContainer = document.getElementById('spreadsheetContainer');
+      const emptyState = document.getElementById('emptyState');
+      if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
+      if (emptyState) emptyState.style.display = 'flex';
+    } else {
+      renderSpreadsheetView();
+    }
+
+    if (selectedSupplier) {
+      refreshSupplierCardMetricsFromDB(selectedSupplier);
+      loadDataRevision(selectedSupplier);
+    }
+    refreshSidebarAfterSave();
+    loadAnalytics();
+    refreshReplacementIdOptions(true);
+  } else {
+    showNotification('No items could be deleted.', 'error');
+  }
+}
+
 // Exportar dados do supplier para Excel
 async function exportSupplierData() {
   if (!currentSupplier) {
@@ -2924,12 +3033,29 @@ async function handleAttachmentFiles(files) {
 
 // Initialize drag and drop for card attachment dropzones
 function initCardAttachmentDragAndDrop(dropzoneElement, itemId) {
-  if (!dropzoneElement) return;
+  if (!dropzoneElement || dropzoneElement.dataset.dndInitialized === 'true') return;
 
-  dropzoneElement.addEventListener('dragenter', (e) => handleCardDropzoneDragEnter(e, dropzoneElement), false);
-  dropzoneElement.addEventListener('dragover', (e) => handleCardDropzoneDragOver(e, dropzoneElement), false);
-  dropzoneElement.addEventListener('dragleave', (e) => handleCardDropzoneDragLeave(e, dropzoneElement), false);
-  dropzoneElement.addEventListener('drop', (e) => handleCardDropzoneDrop(e, dropzoneElement, itemId), false);
+  dropzoneElement.dataset.dndInitialized = 'true';
+  // .card-files-section doesn't carry data-attachment-kind; treat as 'file'
+  const attachmentKind = dropzoneElement.dataset.attachmentKind === 'picture' ? 'picture' : 'file';
+
+  // For picture dropzones, register events on the whole section so dragging over images also works
+  const target = attachmentKind === 'picture'
+    ? (dropzoneElement.closest('.card-pictures-section') || dropzoneElement)
+    : (dropzoneElement.closest('.card-files-section') || dropzoneElement);
+
+  if (target !== dropzoneElement) target.dataset.dndInitialized = 'true';
+
+  target.addEventListener('dragenter', (e) => handleCardDropzoneDragEnter(e, dropzoneElement), false);
+  target.addEventListener('dragover',  (e) => handleCardDropzoneDragOver(e, dropzoneElement), false);
+  target.addEventListener('dragleave', (e) => handleCardDropzoneDragLeave(e, dropzoneElement), false);
+  target.addEventListener('drop',      (e) => handleCardDropzoneDrop(e, dropzoneElement, itemId, attachmentKind), false);
+}
+
+function _pictureSection(dropzone) {
+  return dropzone.dataset.attachmentKind === 'picture'
+    ? dropzone.closest('.card-pictures-section')
+    : dropzone.closest('.card-files-section');
 }
 
 function handleCardDropzoneDragEnter(event, dropzone) {
@@ -2937,6 +3063,7 @@ function handleCardDropzoneDragEnter(event, dropzone) {
   event.preventDefault();
   event.stopPropagation();
   dropzone.classList.add('drop-active');
+  _pictureSection(dropzone)?.classList.add('drop-active');
 }
 
 function handleCardDropzoneDragOver(event, dropzone) {
@@ -2947,6 +3074,7 @@ function handleCardDropzoneDragOver(event, dropzone) {
     event.dataTransfer.dropEffect = 'copy';
   }
   dropzone.classList.add('drop-active');
+  _pictureSection(dropzone)?.classList.add('drop-active');
 }
 
 function handleCardDropzoneDragLeave(event, dropzone) {
@@ -2954,26 +3082,81 @@ function handleCardDropzoneDragLeave(event, dropzone) {
   event.preventDefault();
   event.stopPropagation();
 
-  // Only remove class if leaving the dropzone itself
-  if (event.target === dropzone) {
+  const section = _pictureSection(dropzone);
+  if (section) {
+    if (!section.contains(event.relatedTarget)) {
+      dropzone.classList.remove('drop-active');
+      section.classList.remove('drop-active');
+    }
+  } else if (event.target === dropzone) {
     dropzone.classList.remove('drop-active');
   }
 }
 
-async function handleCardDropzoneDrop(event, dropzone, itemId) {
+async function handleCardDropzoneDrop(event, dropzone, itemId, attachmentKind = 'file') {
   if (!isFileDrag(event)) return;
 
   event.preventDefault();
   event.stopPropagation();
   dropzone.classList.remove('drop-active');
+  _pictureSection(dropzone)?.classList.remove('drop-active');
 
   const files = Array.from(event.dataTransfer?.files || []);
   if (!files.length) return;
 
-  await handleCardAttachmentFiles(files, itemId);
+  await handleCardAttachmentFiles(files, itemId, attachmentKind);
 }
 
-async function handleCardAttachmentFiles(files, itemId) {
+const IMAGE_ATTACHMENT_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg']);
+
+function isImageAttachment(fileName = '') {
+  const extension = String(fileName || '').split('.').pop().toLowerCase();
+  return IMAGE_ATTACHMENT_EXTENSIONS.has(extension);
+}
+
+// Ctrl+V paste image into Pictures (only when attachments tab is active)
+document.addEventListener('paste', async (e) => {
+  const items = Array.from(e.clipboardData?.items || []);
+  const imageItem = items.find(item => item.type.startsWith('image/'));
+  if (!imageItem) return;
+
+  // Find the visible attachments tab
+  const activeTab = document.querySelector('.card-tab-content[data-tab="attachments"].active');
+  if (!activeTab) return;
+
+  const cardAttachments = activeTab.querySelector('.card-attachments');
+  if (!cardAttachments) return;
+
+  const itemId = cardAttachments.dataset.cardId;
+  if (!itemId) return;
+
+  const { normalizedId, toolingItem } = findToolingItem(itemId);
+  if (!normalizedId || !toolingItem?.supplier) return;
+
+  e.preventDefault();
+
+  const blob = imageItem.getAsFile();
+  if (!blob) return;
+
+  const reader = new FileReader();
+  reader.onload = async () => {
+    const base64 = reader.result.split(',')[1];
+    try {
+      const result = await window.api.savePastedImage(toolingItem.supplier, normalizedId, base64);
+      if (result?.success) {
+        showNotification('Image pasted successfully.', 'success');
+        await loadCardAttachments(normalizedId);
+      } else {
+        showNotification(result?.error || 'Failed to paste image.', 'error');
+      }
+    } catch (err) {
+      showNotification('Error pasting image.', 'error');
+    }
+  };
+  reader.readAsDataURL(blob);
+});
+
+async function handleCardAttachmentFiles(files, itemId, attachmentKind = 'file') {
   if (!files || files.length === 0) return;
   // Try to get item from toolingData first
   let { normalizedId, toolingItem } = findToolingItem(itemId);
@@ -3009,8 +3192,21 @@ async function handleCardAttachmentFiles(files, itemId) {
     return;
   }
 
+  if (attachmentKind === 'picture') {
+    const invalidFiles = files.filter(file => !isImageAttachment(file?.name || file?.path || ''));
+    if (invalidFiles.length > 0) {
+      showNotification('Pictures accepts only image files.', 'error');
+      return;
+    }
+  }
+
   try {
-    const result = await window.api.uploadAttachmentFromPaths(toolingItem.supplier, paths, normalizedId);
+    const result = await window.api.uploadAttachmentFromPaths(
+      toolingItem.supplier,
+      paths,
+      normalizedId,
+      attachmentKind === 'picture' ? { kind: 'picture' } : {}
+    );
 
     if (!result) {
       showNotification('Unable to attach the files.', 'error');
@@ -3309,11 +3505,29 @@ async function openCardAttachmentFile(supplierName, fileName, itemId) {
 }
 
 // Exclui arquivo anexado do card
-async function deleteCardAttachmentFile(supplierName, fileName, itemId) {
-  if (!confirm(`Are you sure you want to delete the file "${fileName}"?`)) {
-    return;
-  }
+let pendingAttachmentDelete = null;
 
+function openAttachmentDeleteModal(supplierName, fileName, itemId, isImage) {
+  pendingAttachmentDelete = { supplierName, fileName, itemId };
+  const overlay = document.getElementById('attachmentDeleteOverlay');
+  const titleEl = document.getElementById('attachmentDeleteTitle');
+  const nameEl = document.getElementById('attachmentDeleteFileName');
+  if (!overlay) return;
+  titleEl.textContent = isImage ? 'Delete Image' : 'Delete File';
+  nameEl.textContent = fileName;
+  overlay.classList.add('active');
+}
+
+function cancelAttachmentDelete() {
+  const overlay = document.getElementById('attachmentDeleteOverlay');
+  if (overlay) overlay.classList.remove('active');
+  pendingAttachmentDelete = null;
+}
+
+async function confirmAttachmentDelete() {
+  if (!pendingAttachmentDelete) return;
+  const { supplierName, fileName, itemId } = pendingAttachmentDelete;
+  cancelAttachmentDelete();
   try {
     const result = await window.api.deleteAttachment(supplierName, fileName, itemId);
     if (result.success) {
@@ -3323,6 +3537,10 @@ async function deleteCardAttachmentFile(supplierName, fileName, itemId) {
   } catch (error) {
     showNotification('Error deleting file', 'error');
   }
+}
+
+async function deleteCardAttachmentFile(supplierName, fileName, itemId, isImage = false) {
+  openAttachmentDeleteModal(supplierName, fileName, itemId, isImage);
 }
 
 // Carrega ferramentais por fornecedor
@@ -5416,9 +5634,9 @@ async function navigateToLinkedCard(targetId) {
         targetCard.setAttribute('data-body-loaded', 'true');
         applyInitialThousandsMask(targetCard);
 
-        const dropzone = targetCard.querySelector('.card-attachments-dropzone');
-        if (dropzone && itemId) {
-          initCardAttachmentDragAndDrop(dropzone, itemId);
+        const dropzones = targetCard.querySelectorAll('.card-attachments-dropzone, .card-files-section');
+        if (itemId && dropzones.length > 0) {
+          dropzones.forEach(dropzone => initCardAttachmentDragAndDrop(dropzone, itemId));
         }
       }
     }
@@ -6401,49 +6619,6 @@ function calculateExpirationFromFormula({ remaining, forecast, productionDate })
 }
 
 
-
-
-/*
-//Função para calcular a data de expiração com base na fórmula: data_produced + (remaining/annual_volume*365)
-function calculateExpirationFromFormula({
-  remaining,
-  forecast,
-  productionDate
-}) {
-  // Data base é a data de produção (obrigatória)
-  if (!productionDate) {
-    return null;
-  }
-  
-  // Se não houver forecast (annual volume), não calcula
-  if (!forecast || forecast <= 0) {
-    return null;
-  }
-  
-  const baseDate = new Date(productionDate);
-  if (Number.isNaN(baseDate.getTime())) {
-    return null;
-  }
-
-  // Fórmula: data_produced + (remaining/annual_volume*365)
-  // remaining pode ser negativo (já expirou) - o cálculo vai resultar em data passada
-  const totalDays = Math.round((remaining / forecast) * 365);
-
-  if (Number.isNaN(totalDays)) {
-    return null;
-  }
-
-  const expirationDate = new Date(baseDate);
-  expirationDate.setDate(expirationDate.getDate() + totalDays);
-  if (Number.isNaN(expirationDate.getTime())) {
-    return null;
-  }
-  return expirationDate.toISOString().split('T')[0];
-}
-
-*/
-
-
 function generateConfirmationCode(length = 3) {
   const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
   let code = '';
@@ -7400,16 +7575,54 @@ async function deleteToolingItem(id) {
     }
 
     showNotification('Tooling deleted successfully!');
-    await loadSuppliers();
-    await loadAnalytics();
-    await refreshReplacementIdOptions(true);
-    if (selectedSupplier) {
-      // loadToolingBySupplier já atualiza as métricas via displayTooling
-      await loadToolingBySupplier(selectedSupplier);
-      loadDataRevision(selectedSupplier);
+
+    // Anima a remoção da linha na spreadsheet antes de atualizar dados
+    const rowToRemove = document.querySelector(`#spreadsheetBody tr[data-id="${id}"]`);
+    const detailRow = rowToRemove?.nextElementSibling;
+    const hasDetail = detailRow && detailRow.classList.contains('spreadsheet-detail-row');
+
+    const animateOut = (el) => {
+      if (!el) return Promise.resolve();
+      return new Promise(resolve => {
+        el.style.pointerEvents = 'none';
+        const anim = el.animate(
+          [
+            { opacity: 1, transform: 'translateX(0)', maxHeight: el.scrollHeight + 'px' },
+            { opacity: 0, transform: 'translateX(-30px)', maxHeight: '0px' }
+          ],
+          { duration: 280, easing: 'ease-in', fill: 'forwards' }
+        );
+        anim.onfinish = () => { el.remove(); resolve(); };
+      });
+    };
+
+    // Anima row e detail row em paralelo
+    const animations = [animateOut(rowToRemove)];
+    if (hasDetail) animations.push(animateOut(detailRow));
+    await Promise.all(animations);
+
+    // Remove o item de toolingData localmente (preserva filtros e ordenação)
+    toolingData = toolingData.filter(item => String(item.id) !== String(id));
+
+    // Se não há mais itens, mostra empty state
+    if (toolingData.length === 0) {
+      const spreadsheetContainer = document.getElementById('spreadsheetContainer');
+      const emptyState = document.getElementById('emptyState');
+      if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
+      if (emptyState) emptyState.style.display = 'flex';
     } else {
-      displayTooling([]);
+      // Re-renderiza a spreadsheet mantendo a segmentação atual
+      renderSpreadsheetView();
     }
+
+    // Atualiza métricas do supplier card e dados auxiliares em background
+    if (selectedSupplier) {
+      refreshSupplierCardMetricsFromDB(selectedSupplier);
+      loadDataRevision(selectedSupplier);
+    }
+    refreshSidebarAfterSave();
+    loadAnalytics();
+    refreshReplacementIdOptions(true);
   } catch (error) {
     showNotification('Error deleting tooling', 'error');
   }
@@ -8505,9 +8718,9 @@ function _doToggleSpreadsheetRow(itemId, itemIndex) {
         highlightEmptyDateFields(cardContainer, itemId);
 
         // Initialize drag and drop for attachment dropzone
-        const dropzone = cardContainer.querySelector('.card-attachments-dropzone');
-        if (dropzone) {
-          initCardAttachmentDragAndDrop(dropzone, itemId);
+        const dropzones = cardContainer.querySelectorAll('.card-attachments-dropzone, .card-files-section');
+        if (dropzones.length > 0) {
+          dropzones.forEach(dropzone => initCardAttachmentDragAndDrop(dropzone, itemId));
         }
 
         // Initialize carousel buttons state
@@ -8625,25 +8838,32 @@ async function loadCardAttachmentsForSpreadsheet(itemId, container) {
       footerAttachmentIcon.removeAttribute('hidden');
     }
 
-    list.innerHTML = attachments.map(att => `
+    list.innerHTML = attachments.map(att => {
+      const supplierArg = JSON.stringify(att.supplierName || '');
+      const fileArg = JSON.stringify(att.fileName || '');
+      const itemArg = Number(att.itemId);
+      const fileSize = att.fileSize ? (att.fileSize / 1024).toFixed(1) + ' KB' : '';
+      const uploadDate = att.uploadDate ? new Date(att.uploadDate).toLocaleDateString('pt-BR') : '';
+      return `
       <div class="card-attachment-item">
         <div class="card-attachment-info">
-          <i class="ph ${getFileIcon(att.name)}"></i>
+          <i class="ph ${getFileIcon(att.fileName)}"></i>
           <div class="card-attachment-details">
-            <span class="card-attachment-name" title="${escapeHtml(att.name)}">${escapeHtml(att.name)}</span>
-            <span class="card-attachment-meta">${formatFileSize(att.size)} • ${formatDate(att.date)}</span>
+            <span class="card-attachment-name" title="${escapeHtml(att.fileName)}">${escapeHtml(att.fileName)}</span>
+            <span class="card-attachment-meta">${fileSize}${fileSize && uploadDate ? ' • ' : ''}${uploadDate}</span>
           </div>
         </div>
         <div class="card-attachment-actions">
-          <button class="card-attachment-btn" onclick="openToolingAttachment('${escapeHtml(att.path)}')" title="Open">
-            <i class="ph ph-folder-open"></i>
+          <button class="card-attachment-btn" onclick='event.stopPropagation(); openCardAttachmentFile(${supplierArg}, ${fileArg}, ${itemArg})' title="Open">
+            <i class="ph ph-eye"></i>
           </button>
-          <button class="card-attachment-btn danger" onclick="deleteToolingAttachment(${itemId}, '${escapeHtml(att.name)}')" title="Delete">
+          <button class="card-attachment-btn danger" onclick='event.stopPropagation(); deleteCardAttachmentFile(${supplierArg}, ${fileArg}, ${itemArg})' title="Delete">
             <i class="ph ph-trash"></i>
           </button>
         </div>
       </div>
-    `).join('');
+    `;
+    }).join('');
   } catch (error) {
     console.error('Error loading attachments for spreadsheet:', error);
   }
@@ -9342,6 +9562,35 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
       : DEFAULT_REPLACEMENT_PICKER_LABEL
   );
   const replacementEditorVisibilityAttr = isObsolete ? 'aria-hidden="false"' : 'hidden aria-hidden="true"';
+
+function buildCardAttachmentsTabHTML(itemId) {
+  return `
+      <div class="card-tab-content" data-tab="attachments">
+        <div class="card-attachments" data-card-id="${itemId}">
+          <div class="card-attachments-columns">
+            <section class="card-attachments-legacy-column">
+              <div class="card-files-section" data-attachment-kind="file" onclick="uploadCardAttachment(${itemId}, 'file')">
+                <div class="card-files-section-header">
+                  <span class="card-attachments-dropzone-title">Attachments</span>
+                  <span class="card-files-drop-hint">Click or drop files here</span>
+                </div>
+                <div class="card-attachments-list" id="cardAttachmentsFiles-${itemId}"></div>
+              </div>
+            </section>
+            <div class="card-attachments-vertical-divider"></div>
+            <section class="card-pictures-section">
+              <div class="card-attachments-dropzone card-attachments-dropzone-picture" data-attachment-kind="picture" onclick="uploadCardAttachment(${itemId}, 'picture')">
+                <span class="card-attachments-dropzone-title">Pictures</span>
+                <i class="ph ph-image card-pictures-drag-icon"></i>
+                <span class="card-files-drop-hint">Click or drop images here</span>
+              </div>
+              <div class="card-pictures-gallery" id="cardAttachmentsPictures-${itemId}"></div>
+            </section>
+          </div>
+        </div>
+      </div>
+  `;
+}
   const lastUpdateDisplay = formatDateTime(item.last_update);
 
   // Resto do body vem da função original buildToolingCardHTML...
@@ -9654,15 +9903,7 @@ function buildToolingCardBodyHTML(item, index, chainMembership, supplierContext)
       </div>
 
       <!-- Aba Attachments -->
-      <div class="card-tab-content" data-tab="attachments">
-        <div class="card-attachments" data-card-id="${item.id}">
-          <div class="card-attachments-dropzone" onclick="uploadCardAttachment(${item.id})">
-            <i class="ph ph-upload-simple"></i>
-            <span>Click or drop files here</span>
-          </div>
-          <div class="card-attachments-list" id="cardAttachments-${item.id}"></div>
-        </div>
-      </div>
+      ${buildCardAttachmentsTabHTML(item.id)}
 
       <!-- Footer com Botões -->
       <div class="tooling-card-footer">
@@ -10148,15 +10389,7 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
           </div>
 
           <!-- Aba Attachments -->
-          <div class="card-tab-content" data-tab="attachments">
-            <div class="card-attachments" data-card-id="${item.id}">
-              <div class="card-attachments-dropzone" onclick="uploadCardAttachment(${item.id})">
-                <i class="ph ph-upload-simple"></i>
-                <span>Click or drop files here</span>
-              </div>
-              <div class="card-attachments-list" id="cardAttachments-${item.id}"></div>
-            </div>
-          </div>
+          ${buildCardAttachmentsTabHTML(item.id)}
 
           <div class="card-actions">
             <button class="btn-delete" onclick="confirmDeleteTooling(${item.id})">
@@ -10446,9 +10679,9 @@ function toggleCard(index) {
         highlightEmptyDateFields(card, itemId);
 
         // Initialize drag and drop for attachment dropzone
-        const dropzone = card.querySelector('.card-attachments-dropzone');
-        if (dropzone) {
-          initCardAttachmentDragAndDrop(dropzone, itemId);
+        const dropzones = card.querySelectorAll('.card-attachments-dropzone, .card-files-section');
+        if (dropzones.length > 0) {
+          dropzones.forEach(dropzone => initCardAttachmentDragAndDrop(dropzone, itemId));
         }
 
       }
@@ -10808,6 +11041,70 @@ function updateAttachmentCount(itemId, count) {
 }
 
 // Carrega anexos específicos do card
+function renderCardAttachmentEmptyState(message, variant = 'document') {
+  const icon = variant === 'picture' ? 'ph-image' : 'ph-file-dashed';
+  return `<div class="card-attachments-empty"><i class="ph ${icon}"></i><span>${escapeHtml(message)}</span></div>`;
+}
+
+function buildCardDocumentAttachmentMarkup(attachments) {
+  return attachments.map(att => {
+    const supplierArg = JSON.stringify(att.supplierName || '');
+    const fileArg = JSON.stringify(att.fileName || '');
+    const itemArg = Number(att.itemId);
+    const fileSize = (att.fileSize / 1024).toFixed(1);
+    const uploadDate = new Date(att.uploadDate).toLocaleDateString('pt-BR');
+
+    return `
+      <div class="card-attachment-item">
+        <div class="card-attachment-info">
+          <i class="ph ph-file"></i>
+          <div class="card-attachment-details">
+            <span class="card-attachment-name">${escapeHtml(att.fileName)}</span>
+            <span class="card-attachment-meta">${fileSize} KB • ${uploadDate}</span>
+          </div>
+        </div>
+        <div class="card-attachment-actions">
+          <button class="btn-attachment" onclick='event.stopPropagation(); openCardAttachmentFile(${supplierArg}, ${fileArg}, ${itemArg})' title="Open">
+            <i class="ph ph-eye"></i>
+          </button>
+          <button class="btn-attachment" onclick='event.stopPropagation(); deleteCardAttachmentFile(${supplierArg}, ${fileArg}, ${itemArg})' title="Delete">
+            <i class="ph ph-trash"></i>
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function buildCardPictureAttachmentMarkup(attachments) {
+  return attachments.map(att => {
+    const supplierArg = JSON.stringify(att.supplierName || '');
+    const fileArg = JSON.stringify(att.fileName || '');
+    const itemArg = Number(att.itemId);
+    const previewUrl = att.previewUrl || '';
+    const uploadDate = att.uploadDate ? new Date(att.uploadDate).toLocaleDateString('pt-BR') : '';
+
+    return `
+      <article class="card-picture-card">
+        <div class="card-picture-preview" onclick='openCardAttachmentFile(${supplierArg}, ${fileArg}, ${itemArg})' title="${escapeHtml(att.fileName)}">
+          <img class="card-picture-thumb" src="${escapeHtml(previewUrl)}" alt="${escapeHtml(att.fileName)}" loading="lazy">
+          <div class="card-picture-bar">
+            <span class="card-picture-date">${uploadDate}</span>
+            <div class="card-picture-bar-actions">
+              <button type="button" class="card-picture-btn" onclick='event.stopPropagation(); openCardAttachmentFile(${supplierArg}, ${fileArg}, ${itemArg})' title="Open image">
+                <i class="ph ph-eye"></i>
+              </button>
+              <button type="button" class="card-picture-btn" onclick='event.stopPropagation(); deleteCardAttachmentFile(${supplierArg}, ${fileArg}, ${itemArg}, true)' title="Delete image">
+                <i class="ph ph-trash"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
 async function loadCardAttachments(itemId) {
   try {
     const { normalizedId, toolingItem } = findToolingItem(itemId);
@@ -10830,47 +11127,33 @@ async function loadCardAttachments(itemId) {
       }
     }
 
-    const container = document.getElementById(`cardAttachments-${normalizedId}`);
+    const documentsContainer = document.getElementById(`cardAttachmentsFiles-${normalizedId}`);
+    const picturesContainer = document.getElementById(`cardAttachmentsPictures-${normalizedId}`);
 
-    if (!container) {
+    if (!documentsContainer && !picturesContainer) {
       return;
     }
 
-    if (!attachments || attachments.length === 0) {
-      container.innerHTML = '<p style="color: #999; font-size: 13px; text-align: center; padding: 20px;">Nenhum anexo disponível</p>';
-      return;
+    const documentAttachments = attachments.filter(att => !att.isImage);
+    const pictureAttachments = attachments.filter(att => att.isImage);
+
+    if (documentsContainer) {
+      documentsContainer.innerHTML = documentAttachments.length > 0
+        ? buildCardDocumentAttachmentMarkup(documentAttachments)
+        : renderCardAttachmentEmptyState('No files attached yet.');
     }
 
-    container.innerHTML = attachments.map(att => {
-      const fileSize = (att.fileSize / 1024).toFixed(1);
-      const uploadDate = new Date(att.uploadDate).toLocaleDateString('pt-BR');
-
-      return `
-        <div class="card-attachment-item">
-          <div class="card-attachment-info">
-            <i class="ph ph-file"></i>
-            <div class="card-attachment-details">
-              <span class="card-attachment-name">${att.fileName}</span>
-              <span class="card-attachment-meta">${fileSize} KB • ${uploadDate}</span>
-            </div>
-          </div>
-          <div class="card-attachment-actions">
-            <button class="btn-attachment" onclick="openCardAttachmentFile('${att.supplierName}', '${att.fileName}', ${att.itemId})" title="Open">
-              <i class="ph ph-eye"></i>
-            </button>
-            <button class="btn-attachment" onclick="deleteCardAttachmentFile('${att.supplierName}', '${att.fileName}', ${att.itemId})" title="Delete">
-              <i class="ph ph-trash"></i>
-            </button>
-          </div>
-        </div>
-      `;
-    }).join('');
+    if (picturesContainer) {
+      picturesContainer.innerHTML = pictureAttachments.length > 0
+        ? buildCardPictureAttachmentMarkup(pictureAttachments)
+        : renderCardAttachmentEmptyState('No pictures attached yet.', 'picture');
+    }
   } catch (error) {
   }
 }
 
 // Upload de anexo específico do card
-async function uploadCardAttachment(itemId) {
+async function uploadCardAttachment(itemId, attachmentKind = 'file') {
   try {
     const { normalizedId, toolingItem } = findToolingItem(itemId);
     if (normalizedId === null) {
@@ -10883,7 +11166,11 @@ async function uploadCardAttachment(itemId) {
       return;
     }
 
-    const result = await window.api.uploadAttachment(toolingItem.supplier, normalizedId);
+    const result = await window.api.uploadAttachment(
+      toolingItem.supplier,
+      normalizedId,
+      attachmentKind === 'picture' ? { kind: 'picture' } : {}
+    );
 
     if (result && result.success) {
       showNotification(result.message || 'File(s) attached successfully!');
@@ -10899,9 +11186,32 @@ async function refreshSidebarAfterSave() {
     if (currentSupplier) loadDataRevision(currentSupplier);
     suppliersData = await window.api.getSuppliersWithStats();
 
-    // Re-renderiza apenas o sidebar de suppliers (não toca nos cards de tooling)
+    const supplierStillExists = Array.isArray(suppliersData)
+      ? suppliersData.some(supplier => String(supplier.supplier || '').trim() === String(selectedSupplier || '').trim())
+      : false;
+
+    if (selectedSupplier && !supplierStillExists) {
+      selectedSupplier = null;
+      currentSupplier = null;
+
+      const attachmentsContainer = document.getElementById('attachmentsContainer');
+      const spreadsheetContainer = document.getElementById('spreadsheetContainer');
+      const toolingList = document.getElementById('toolingList');
+      const emptyState = document.getElementById('emptyState');
+
+      if (attachmentsContainer) attachmentsContainer.style.display = 'none';
+      if (toolingList) toolingList.style.display = 'none';
+      if (spreadsheetContainer) spreadsheetContainer.style.display = 'none';
+      if (emptyState) emptyState.style.display = 'flex';
+
+      updateSupplierDataButtons(false);
+    }
+
+    const supplierSearchInput = document.getElementById('supplierSearchInput');
     const statusSupplierSearchInput = document.getElementById('statusSupplierSearchInput');
-    const activeSidebarFilter = statusSupplierSearchInput ? statusSupplierSearchInput.value.trim() : '';
+    const globalSupplierFilter = supplierSearchInput ? supplierSearchInput.value.trim() : '';
+    const statusSidebarFilter = statusSupplierSearchInput ? statusSupplierSearchInput.value.trim() : '';
+    const activeSidebarFilter = globalSupplierFilter || statusSidebarFilter;
     let displayList = suppliersData;
 
     if (activeSidebarFilter) {
@@ -10935,6 +11245,7 @@ async function refreshSidebarAfterSave() {
     if (stepsFilteredSuppliers !== null) {
       displayList = displayList.filter(s => stepsFilteredSuppliers.includes(String(s.supplier || '')));
     }
+
     displaySuppliers(displayList);
 
     const analytics = await window.api.getAnalytics();
