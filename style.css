@@ -2843,6 +2843,10 @@ textarea {
   position: relative;
 }
 
+.card-attachments-legacy-column.card-attachments-standalone {
+  min-height: 340px;
+}
+
 .card-files-section {
   position: absolute;
   top: 0;
@@ -2886,9 +2890,13 @@ textarea {
   min-width: 0;
 }
 
+.card-pictures-section.card-pictures-standalone {
+  padding: 12px 0;
+}
+
 .card-attachments-columns {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 3fr) 1px minmax(0, 7fr);
   gap: 0 20px;
   align-items: stretch;
 }
@@ -3077,8 +3085,8 @@ textarea {
 }
 
 .card-picture-card {
-  flex: 0 0 280px;
-  width: 280px;
+  flex: 0 0 322px;
+  width: 322px;
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid #e7e7e7;
@@ -8597,8 +8605,8 @@ select.detail-input::-ms-expand {
 }
 
 .spreadsheet-table th.col-icons {
-  width: 96px;
-  min-width: 96px;
+  width: 116px;
+  min-width: 116px;
 }
 
 .spreadsheet-table th.col-steps {
@@ -9255,6 +9263,7 @@ select.detail-input::-ms-expand {
   white-space: nowrap;
   padding: 6px 4px !important;
   overflow: visible;
+  min-width: 90px;
 }
 
 .spreadsheet-icons>span {
@@ -9264,7 +9273,8 @@ select.detail-input::-ms-expand {
 }
 
 .spreadsheet-icon-chain,
-.spreadsheet-icon-attachment {
+.spreadsheet-icon-attachment,
+.spreadsheet-icon-picture {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -9279,7 +9289,8 @@ select.detail-input::-ms-expand {
 }
 
 .spreadsheet-icon-chain:hover,
-.spreadsheet-icon-attachment:hover {
+.spreadsheet-icon-attachment:hover,
+.spreadsheet-icon-picture:hover {
   color: #c8102e;
   transform: scale(1.1);
 }
@@ -9289,6 +9300,10 @@ select.detail-input::-ms-expand {
 }
 
 .spreadsheet-icon-attachment {
+  color: #dc2626;
+}
+
+.spreadsheet-icon-picture {
   color: #dc2626;
 }
 

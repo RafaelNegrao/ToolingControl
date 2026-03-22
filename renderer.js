@@ -3114,14 +3114,14 @@ function isImageAttachment(fileName = '') {
   return IMAGE_ATTACHMENT_EXTENSIONS.has(extension);
 }
 
-// Ctrl+V paste image into Pictures (only when attachments tab is active)
+// Ctrl+V paste image into Pictures (only when pictures tab is active)
 document.addEventListener('paste', async (e) => {
   const items = Array.from(e.clipboardData?.items || []);
   const imageItem = items.find(item => item.type.startsWith('image/'));
   if (!imageItem) return;
 
-  // Find the visible attachments tab
-  const activeTab = document.querySelector('.card-tab-content[data-tab="attachments"].active');
+  // Find the visible pictures tab
+  const activeTab = document.querySelector('.card-tab-content[data-tab="pictures"].active');
   if (!activeTab) return;
 
   const cardAttachments = activeTab.querySelector('.card-attachments');
@@ -3388,6 +3388,24 @@ function openToolingAttachmentsFromSpreadsheet(itemId) {
   setTimeout(() => {
     // Muda para a aba de attachments
     switchCardTab(itemIndex, 'attachments');
+  }, 100);
+}
+
+function openToolingPicturesFromSpreadsheet(itemId) {
+  const itemIndex = toolingData.findIndex(t => String(t.id) === String(itemId));
+  if (itemIndex === -1) return;
+
+  const row = document.querySelector(`tr[data-id="${itemId}"]`);
+  if (!row) return;
+
+  const isExpanded = row.classList.contains('row-expanded');
+
+  if (!isExpanded) {
+    toggleSpreadsheetRow(itemId, itemIndex);
+  }
+
+  setTimeout(() => {
+    switchCardTab(itemIndex, 'pictures');
   }, 100);
 }
 
@@ -8057,6 +8075,9 @@ function renderSpreadsheetView() {
           <span class="spreadsheet-icon-attachment" data-attachment-icon="${item.id}" hidden title="Has attachments" onclick="event.stopPropagation(); openToolingAttachmentsFromSpreadsheet(${item.id})">
             <i class="ph ph-paperclip"></i>
           </span>
+          <span class="spreadsheet-icon-picture" data-picture-icon="${item.id}" hidden title="Has pictures" onclick="event.stopPropagation(); openToolingPicturesFromSpreadsheet(${item.id})">
+            <i class="ph ph-image"></i>
+          </span>
         </td>
         <td class="col-expand">
           <button class="spreadsheet-expand-btn" onclick="toggleSpreadsheetRow(${item.id}, ${itemIndex})" title="Expand details">
@@ -8549,9 +8570,17 @@ async function loadSpreadsheetAttachmentIcons(data) {
     try {
       const attachments = await window.api.getAttachments(supplierContext, item.id);
       if (attachments && attachments.length > 0) {
+        const hasFiles = attachments.some(att => !att.isImage);
+        const hasImages = attachments.some(att => att.isImage);
         const icon = document.querySelector(`[data-attachment-icon="${item.id}"]`);
         if (icon) {
-          icon.removeAttribute('hidden');
+          if (hasFiles) icon.removeAttribute('hidden');
+          else icon.setAttribute('hidden', '');
+        }
+        const picIcon = document.querySelector(`[data-picture-icon="${item.id}"]`);
+        if (picIcon) {
+          if (hasImages) picIcon.removeAttribute('hidden');
+          else picIcon.setAttribute('hidden', '');
         }
       }
     } catch (error) {
@@ -9567,26 +9596,32 @@ function buildCardAttachmentsTabHTML(itemId) {
   return `
       <div class="card-tab-content" data-tab="attachments">
         <div class="card-attachments" data-card-id="${itemId}">
-          <div class="card-attachments-columns">
-            <section class="card-attachments-legacy-column">
-              <div class="card-files-section" data-attachment-kind="file" onclick="uploadCardAttachment(${itemId}, 'file')">
-                <div class="card-files-section-header">
-                  <span class="card-attachments-dropzone-title">Attachments</span>
-                  <span class="card-files-drop-hint">Click or drop files here</span>
-                </div>
-                <div class="card-attachments-list" id="cardAttachmentsFiles-${itemId}"></div>
+          <section class="card-attachments-legacy-column card-attachments-standalone">
+            <div class="card-files-section" data-attachment-kind="file" onclick="uploadCardAttachment(${itemId}, 'file')">
+              <div class="card-files-section-header">
+                <span class="card-attachments-dropzone-title">Attachments</span>
+                <span class="card-files-drop-hint">Click or drop files here</span>
               </div>
-            </section>
-            <div class="card-attachments-vertical-divider"></div>
-            <section class="card-pictures-section">
-              <div class="card-attachments-dropzone card-attachments-dropzone-picture" data-attachment-kind="picture" onclick="uploadCardAttachment(${itemId}, 'picture')">
-                <span class="card-attachments-dropzone-title">Pictures</span>
-                <i class="ph ph-image card-pictures-drag-icon"></i>
-                <span class="card-files-drop-hint">Click or drop images here</span>
-              </div>
-              <div class="card-pictures-gallery" id="cardAttachmentsPictures-${itemId}"></div>
-            </section>
-          </div>
+              <div class="card-attachments-list" id="cardAttachmentsFiles-${itemId}"></div>
+            </div>
+          </section>
+        </div>
+      </div>
+  `;
+}
+
+function buildCardPicturesTabHTML(itemId) {
+  return `
+      <div class="card-tab-content" data-tab="pictures">
+        <div class="card-attachments" data-card-id="${itemId}">
+          <section class="card-pictures-section card-pictures-standalone">
+            <div class="card-attachments-dropzone card-attachments-dropzone-picture" data-attachment-kind="picture" onclick="uploadCardAttachment(${itemId}, 'picture')">
+              <span class="card-attachments-dropzone-title">Pictures</span>
+              <i class="ph ph-image card-pictures-drag-icon"></i>
+              <span class="card-files-drop-hint">Click or drop images here</span>
+            </div>
+            <div class="card-pictures-gallery" id="cardAttachmentsPictures-${itemId}"></div>
+          </section>
         </div>
       </div>
   `;
@@ -9610,6 +9645,10 @@ function buildCardAttachmentsTabHTML(itemId) {
         <button class="card-tab" onclick="switchCardTab(${index}, 'attachments')">
           <i class="ph ph-paperclip"></i>
           <span>Attachments</span>
+        </button>
+        <button class="card-tab" onclick="switchCardTab(${index}, 'pictures')">
+          <i class="ph ph-image"></i>
+          <span>Pictures</span>
         </button>
       </div>
 
@@ -9905,6 +9944,9 @@ function buildCardAttachmentsTabHTML(itemId) {
       <!-- Aba Attachments -->
       ${buildCardAttachmentsTabHTML(item.id)}
 
+      <!-- Aba Pictures -->
+      ${buildCardPicturesTabHTML(item.id)}
+
       <!-- Footer com Botões -->
       <div class="tooling-card-footer">
         <div class="card-last-update-snick" data-last-update-id="${item.id}">
@@ -10095,6 +10137,10 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
             <button class="card-tab" onclick="switchCardTab(${index}, 'attachments')">
               <i class="ph ph-paperclip"></i>
               <span>Attachments</span>
+            </button>
+            <button class="card-tab" onclick="switchCardTab(${index}, 'pictures')">
+              <i class="ph ph-image"></i>
+              <span>Pictures</span>
             </button>
           </div>
 
@@ -10390,6 +10436,9 @@ function buildToolingCardHTML(item, index, chainMembership, supplierContext) {
 
           <!-- Aba Attachments -->
           ${buildCardAttachmentsTabHTML(item.id)}
+
+          <!-- Aba Pictures -->
+          ${buildCardPicturesTabHTML(item.id)}
 
           <div class="card-actions">
             <button class="btn-delete" onclick="confirmDeleteTooling(${item.id})">
@@ -10755,7 +10804,7 @@ function switchCardTab(cardIndex, tabName) {
 
   // Carrega conteúdo específico da aba
   const itemId = card.getAttribute('data-item-id');
-  if (itemId && tabName === 'attachments') {
+  if (itemId && (tabName === 'attachments' || tabName === 'pictures')) {
     loadCardAttachments(itemId);
   }
   if (itemId && tabName === 'step-tracking') {
@@ -11118,13 +11167,17 @@ async function loadCardAttachments(itemId) {
     updateAttachmentCount(normalizedId, attachments.length);
 
     // Atualiza o ícone de anexo na coluna info da spreadsheet
+    const hasFiles = attachments.some(att => !att.isImage);
+    const hasImages = attachments.some(att => att.isImage);
     const spreadsheetIcon = document.querySelector(`[data-attachment-icon="${normalizedId}"]`);
     if (spreadsheetIcon) {
-      if (attachments.length > 0) {
-        spreadsheetIcon.removeAttribute('hidden');
-      } else {
-        spreadsheetIcon.setAttribute('hidden', '');
-      }
+      if (hasFiles) spreadsheetIcon.removeAttribute('hidden');
+      else spreadsheetIcon.setAttribute('hidden', '');
+    }
+    const spreadsheetPicIcon = document.querySelector(`[data-picture-icon="${normalizedId}"]`);
+    if (spreadsheetPicIcon) {
+      if (hasImages) spreadsheetPicIcon.removeAttribute('hidden');
+      else spreadsheetPicIcon.setAttribute('hidden', '');
     }
 
     const documentsContainer = document.getElementById(`cardAttachmentsFiles-${normalizedId}`);

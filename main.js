@@ -3408,7 +3408,33 @@ function renameAttachmentsFolder(oldSupplierName, newSupplierName) {
 
 // Lista anexos de um item
 ipcMain.handle('get-attachments', async (event, supplierName, itemId = null) => {
-  if (!itemId) return [];
+  if (!itemId) {
+    // Supplier-level attachments (general, no specific item)
+    try {
+      const attachmentsDir = getAttachmentsDir();
+      const supplierDir = path.join(attachmentsDir, sanitizeFileName(supplierName));
+      const longSupplierDir = getLongPath(supplierDir);
+      if (!fs.existsSync(longSupplierDir)) return [];
+
+      const entries = fs.readdirSync(longSupplierDir, { withFileTypes: true });
+      const files = entries.filter(e => e.isFile());
+      return files.map(entry => {
+        const filePath = path.join(supplierDir, entry.name);
+        const stats = fs.statSync(getLongPath(filePath));
+        return {
+          fileName: entry.name,
+          supplierName,
+          itemId: null,
+          fileSize: stats.size,
+          uploadDate: stats.birthtime,
+          isImage: false,
+          previewUrl: null
+        };
+      });
+    } catch (error) {
+      return [];
+    }
+  }
 
   try {
     // ── Files: read from {itemId}/ directory (per-item, excluding pictures subfolder) ──
