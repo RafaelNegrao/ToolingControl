@@ -8600,34 +8600,13 @@ function toggleSpreadsheetRow(itemId, itemIndex) {
 }
 
 function animateSpreadsheetDetailRowOpen(detailRow) {
-  const cardContainer = detailRow?.querySelector('.spreadsheet-card-container');
-  if (!cardContainer) {
-    detailRow?.classList.add('is-open');
-    return;
-  }
-
-  detailRow.classList.add('is-open');
-  // Mantém overflow hidden durante a animação para que o conteúdo não
-  // apareça antes de terminar (o CSS de is-open define overflow: visible).
-  cardContainer.style.overflow = 'hidden';
-  const targetHeight = cardContainer.scrollHeight;
-
-  const anim = cardContainer.animate(
-    [
-      { maxHeight: '0px', opacity: 0, transform: 'translateY(-8px)' },
-      { maxHeight: targetHeight + 'px', opacity: 1, transform: 'translateY(0)' }
-    ],
-    { duration: 350, easing: 'cubic-bezier(0.22, 0.61, 0.36, 1)', fill: 'forwards' }
-  );
-
-  // Cancela o fill 'forwards' ao terminar para que o CSS (max-height: none)
-  // volte a valer — evitando que novos campos (ex.: Analysis Notes) sejam
-  // cortados quando aparecem após a abertura do card.
-  // Restaura overflow para o valor do CSS (visible), agora que a animação terminou.
-  anim.onfinish = () => {
-    anim.cancel();
-    cardContainer.style.overflow = '';
-  };
+  // Duplo rAF: garante que o browser pinte o estado inicial (grid-template-rows: 0fr)
+  // antes de adicionar is-open e disparar a CSS transition.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      detailRow?.classList.add('is-open');
+    });
+  });
 }
 
 function animateSpreadsheetDetailRowClose(detailRow) {
@@ -8642,18 +8621,24 @@ function animateSpreadsheetDetailRowClose(detailRow) {
   }
 
   detailRow.dataset.closing = 'true';
-  const currentHeight = cardContainer.scrollHeight;
-  cardContainer.style.overflow = 'hidden';
+  detailRow.classList.remove('is-open');
 
-  const anim = cardContainer.animate(
-    [
-      { maxHeight: currentHeight + 'px', opacity: 1 },
-      { maxHeight: '0px', opacity: 0 }
-    ],
-    { duration: 220, easing: 'ease-in', fill: 'forwards' }
-  );
+  let removed = false;
+  const onDone = () => {
+    if (removed) return;
+    removed = true;
+    detailRow.remove();
+  };
 
-  anim.onfinish = () => detailRow.remove();
+  // Remove o elemento ao fim da CSS transition de grid-template-rows
+  cardContainer.addEventListener('transitionend', function handler(e) {
+    if (e.propertyName === 'grid-template-rows') {
+      cardContainer.removeEventListener('transitionend', handler);
+      onDone();
+    }
+  });
+  // Fallback caso a transição não dispare (ex.: elemento fora da viewport)
+  setTimeout(onDone, 400);
 }
 
 function _doToggleSpreadsheetRow(itemId, itemIndex) {
@@ -8727,7 +8712,11 @@ function _doToggleSpreadsheetRow(itemId, itemIndex) {
       detailRow.innerHTML = `
         <td colspan="${colCount}" class="spreadsheet-detail-cell">
           <div class="spreadsheet-card-container" data-item-id="${itemId}" data-item-index="${itemIndex}">
-            ${bodyHTML}
+            <div class="spreadsheet-card-inner">
+              <div class="spreadsheet-card-content">
+                ${bodyHTML}
+              </div>
+            </div>
           </div>
         </td>
       `;

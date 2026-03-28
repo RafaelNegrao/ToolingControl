@@ -193,13 +193,14 @@ textarea {
 }
 
 .tab-button:hover {
-  color: #c8102e;
-  border-bottom-color: rgba(200, 16, 46, 0.35);
+  color: #d4d4d4;
+  border-bottom-color: rgba(212, 212, 212, 0.35);
 }
 
 .tab-button.active {
-  color: #c8102e;
-  border-bottom-color: #c8102e;
+  color: #d4d4d4;
+  border-bottom-color: #d4d4d4;
+  font-weight: 700;
 }
 
 .app-brand {
@@ -293,7 +294,7 @@ textarea {
   display: flex !important;
   justify-content: center !important;
   padding: 12px 8px !important;
-  margin-bottom: 0 !important;
+  margin: 0 !important;
 }
 
 /* Supplier list compacto */
@@ -502,7 +503,7 @@ textarea {
   align-items: center;
   gap: 10px;
   font-weight: 700;
-  margin-bottom: 16px;
+  margin: 0 16px 16px 16px;
   color: #e0e0e0;
   font-size: 13px;
   text-transform: uppercase;
@@ -524,7 +525,7 @@ textarea {
 .supplier-filter-btn {
   background: transparent;
   border: none;
-  color: #b0b0b0;
+  color: #666666;
   cursor: pointer;
   padding: 4px 8px;
   display: flex;
@@ -847,24 +848,19 @@ textarea {
 }
 
 .supplier-card.active {
-  background: #c8102e;
+  background: #3d3d3d;
   color: #ffffff;
   box-shadow: none;
   border-color: transparent;
 }
 
 .supplier-card.active:hover {
-  background: #a80d25;
+  background: #464646;
 }
 
 .supplier-card.active .supplier-card-header h4,
 .supplier-card.active .supplier-card-header i {
-  color: #ffffff;
-}
-
-.supplier-card.active .stat-badge {
-  background: rgba(255, 255, 255, 0.2);
-  color: #ffffff;
+  color: #e0e0e0;
 }
 
 .supplier-card.active .stat-badge i {
@@ -883,6 +879,7 @@ textarea {
 }
 
 .supplier-card-header i {
+  display: none;
   font-size: 16px;
   color: #c8102e;
 }
@@ -899,7 +896,7 @@ textarea {
 
 .supplier-card-header h4 {
   font-size: 15px;
-  color: #e0e0e0;
+  color: #999999;
   font-weight: 600;
   margin: 0;
   flex: 1;
@@ -976,14 +973,17 @@ textarea {
   font-weight: 800;
 }
 
-.supplier-card.active .supplier-info-row .info-label,
+.supplier-card.active .supplier-info-row .info-label {
+  color: #666;
+}
+
 .supplier-card.active .supplier-info-row .info-value {
-  color: #ffffff;
+  color: #b0b0b0;
 }
 
 .supplier-card.active .supplier-info-row .info-value.critical,
 .supplier-card.active .supplier-info-row .info-value.expired {
-  color: #ffeb3b;
+  color: #d32f2f;
   font-weight: 800;
 }
 
@@ -9598,17 +9598,30 @@ select.detail-input::-ms-expand {
 }
 
 .spreadsheet-detail-row .spreadsheet-card-container {
-  overflow: hidden;
-  max-height: 0;
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transform: translateY(-6px);
+  transition:
+    grid-template-rows 0.32s cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 0.28s ease,
+    transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .spreadsheet-detail-row.is-open .spreadsheet-card-container {
-  max-height: none;
-  overflow: visible;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transform: translateY(0);
 }
 
-/* Container do card dentro da planilha */
-.spreadsheet-card-container {
+
+
+.spreadsheet-card-inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.spreadsheet-card-content {
   padding: 16px 24px 24px;
   background: linear-gradient(to bottom, #f8f9fa, #fff);
   border-top: 1px solid #e8e8e8;
