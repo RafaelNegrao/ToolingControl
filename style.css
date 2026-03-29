@@ -9570,7 +9570,6 @@ select.detail-input::-ms-expand {
 }
 
 .spreadsheet-table tr.row-expanded td:not(.col-expand):not(.col-id) {
-  opacity: 0.40;
   pointer-events: none;
 }
 

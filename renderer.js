@@ -12015,13 +12015,7 @@ function showSuppliersTooltip(anchorEl, suppliersList) {
   const closeModal = () => {
     const current = document.querySelector('.matrix-suppliers-modal');
     if (current) current.remove();
-    document.removeEventListener('mousedown', onOutsideClick, true);
     document.removeEventListener('keydown', onEscape, true);
-  };
-  const onOutsideClick = (event) => {
-    if (!modal.contains(event.target) && !anchorEl.contains(event.target)) {
-      closeModal();
-    }
   };
   const onEscape = (event) => {
     if (event.key === 'Escape') closeModal();
@@ -12036,7 +12030,6 @@ function showSuppliersTooltip(anchorEl, suppliersList) {
   }
 
   setTimeout(() => {
-    document.addEventListener('mousedown', onOutsideClick, true);
     document.addEventListener('keydown', onEscape, true);
   }, 0);
 }

@@ -1,20 +1,15 @@
 const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const { pathToFileURL } = require('url');
-const sqlite3 = require('sqlite3').verbose();
 const fs = require('fs');
 const ExcelJS = require('exceljs');
 const { exec } = require('child_process');
+const { ToolingDatabase } = require('./tooling-database');
 
 let mainWindow;
-let db;
 const DATABASE_FILE_NAME = 'ferramental_database.db';
 const REPLACEMENT_COLUMN_NAME = 'replacement_tooling_id';
 const REPLACEMENT_COLUMN_TYPE = 'INTEGER';
-let replacementColumnEnsured = false;
-let replacementColumnEnsuringPromise = null;
-let supplierMetadataEnsured = false;
-let supplierMetadataPromise = null;
 
 const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -297,30 +292,6 @@ function classifyToolingExpirationState(item) {
   return { state: 'ok', expirationDate: expirationDateValue, diffDays };
 }
 
-function dbGet(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(row);
-    });
-  });
-}
-
-function dbRun(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function onRun(err) {
-      if (err) {
-        reject(err);
-        return;
-      }
-      resolve(this.changes || 0);
-    });
-  });
-}
-
 function cellValueToString(value) {
   if (value === null || value === undefined) {
     return '';
@@ -600,137 +571,6 @@ function buildUpdatedComments(existing, supplierComment, currentDateStr, tooling
   }
 
   return JSON.stringify(comments);
-}
-
-function ensureSupplierMetadataTable() {
-  if (supplierMetadataEnsured) {
-    return supplierMetadataPromise || Promise.resolve();
-  }
-
-  supplierMetadataPromise = new Promise((resolve, reject) => {
-    db.run(
-      `CREATE TABLE IF NOT EXISTS ${SUPPLIER_METADATA_TABLE} (
-        supplier TEXT PRIMARY KEY,
-        last_import_timestamp TEXT
-      )`,
-      err => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        // Ensure data_revision column exists (migration for existing DBs)
-        db.run(
-          `ALTER TABLE ${SUPPLIER_METADATA_TABLE} ADD COLUMN data_revision INTEGER DEFAULT 0`,
-          alterErr => {
-            // Ignore error if column already exists
-            supplierMetadataEnsured = true;
-            resolve();
-          }
-        );
-      }
-    );
-  });
-
-  return supplierMetadataPromise;
-}
-
-async function getSupplierImportTimestamp(supplierName) {
-  if (!supplierName) {
-    return null;
-  }
-  await ensureSupplierMetadataTable();
-  return new Promise((resolve, reject) => {
-    db.get(
-      `SELECT last_import_timestamp FROM ${SUPPLIER_METADATA_TABLE} WHERE supplier = ?`,
-      [supplierName],
-      (err, row) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(row?.last_import_timestamp || null);
-        }
-      }
-    );
-  });
-}
-
-async function setSupplierImportTimestamp(supplierName, timestamp) {
-  if (!supplierName) {
-    return;
-  }
-  await ensureSupplierMetadataTable();
-  return new Promise((resolve, reject) => {
-    db.run(
-      `INSERT INTO ${SUPPLIER_METADATA_TABLE} (supplier, last_import_timestamp)
-       VALUES (?, ?)
-       ON CONFLICT(supplier) DO UPDATE SET last_import_timestamp = excluded.last_import_timestamp`,
-      [supplierName, timestamp],
-      err => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
-      }
-    );
-  });
-}
-
-async function getSupplierDataRevision(supplierName) {
-  if (!supplierName) return 0;
-  await ensureSupplierMetadataTable();
-  return new Promise((resolve, reject) => {
-    db.get(
-      `SELECT data_revision FROM ${SUPPLIER_METADATA_TABLE} WHERE supplier = ?`,
-      [supplierName],
-      (err, row) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(row?.data_revision || 0);
-        }
-      }
-    );
-  });
-}
-
-async function incrementSupplierDataRevision(supplierName) {
-  if (!supplierName) return;
-  await ensureSupplierMetadataTable();
-  return new Promise((resolve, reject) => {
-    db.run(
-      `INSERT INTO ${SUPPLIER_METADATA_TABLE} (supplier, data_revision)
-       VALUES (?, 1)
-       ON CONFLICT(supplier) DO UPDATE SET data_revision = COALESCE(data_revision, 0) + 1`,
-      [supplierName],
-      err => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve();
-        }
-      }
-    );
-  });
-}
-
-// Debounced revision increment — consolidates multiple rapid field updates
-// (e.g. tooling_life change + expiration_date recalc) into a single revision bump
-const _revisionTimers = {};
-function scheduleRevisionIncrement(supplierName) {
-  if (!supplierName) return;
-  const key = String(supplierName).trim().toLowerCase();
-  if (_revisionTimers[key]) {
-    clearTimeout(_revisionTimers[key]);
-  }
-  _revisionTimers[key] = setTimeout(async () => {
-    delete _revisionTimers[key];
-    try {
-      await incrementSupplierDataRevision(String(supplierName).trim());
-    } catch (err) {
-      console.error('[DataRevision] Debounced increment failed:', err);
-    }
-  }, 3000);
 }
 
 function upsertSupplierInfoRow(sheet, label, value = '') {
@@ -1083,1186 +923,121 @@ function ensureDatabaseFile(baseDir) {
   }
 }
 
-// Conectar ao banco de dados
-function configureDatabasePragmas() {
-  return new Promise((resolve, reject) => {
-    // busy_timeout: SQLite retries acquiring the file lock for up to 8 seconds
-    // before returning SQLITE_BUSY — essential for multiple users on OneDrive.
-    // journal_mode DELETE (default) is safer than WAL on network/cloud drives
-    // because WAL requires a shared-memory file (.shm) that OneDrive does not sync.
-    // synchronous NORMAL avoids full fsync on every write while still protecting
-    // against crashes (only power loss at the worst moment could corrupt the DB).
-    db.serialize(() => {
-      db.run('PRAGMA busy_timeout = 8000');
-      db.run('PRAGMA journal_mode = DELETE');
-      db.run('PRAGMA synchronous = NORMAL', (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-  });
-}
-
 function connectDatabase() {
-  const baseDir = getAppBaseDir();
-  const dbPath = ensureDatabaseFile(baseDir);
-  return new Promise((resolve, reject) => {
-    db = new sqlite3.Database(dbPath, (err) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      configureDatabasePragmas()
-        .then(() => checkAndAddColumns())
-        .then(() => ensureTodosTable())
-        .then(() => ensureStepHistoryTable())
-        .then(resolve)
-        .catch((schemaError) => {
-          reject(schemaError);
-        });
-    });
-  });
+  return toolingDatabase.connect();
 }
 
-// Verificar e adicionar colunas que possam estar faltando
-function checkAndAddColumns() {
-  const columnsToCheck = [
-    { name: 'pn', type: 'TEXT' },
-    { name: 'pn_description', type: 'TEXT' },
-    { name: 'supplier', type: 'TEXT' },
-    { name: 'tool_description', type: 'TEXT' },
-    { name: 'tool_number_arb', type: 'TEXT' },
-    { name: 'asset_number', type: 'TEXT' },
-    { name: 'tool_ownership', type: 'TEXT' },
-    { name: 'customer', type: 'TEXT' },
-    { name: 'tooling_life_qty', type: 'TEXT' },
-    { name: 'produced', type: 'TEXT' },
-    { name: 'remaining_tooling_life_pcs', type: 'TEXT' },
-    { name: 'percent_tooling_life', type: 'TEXT' },
-    { name: 'annual_volume_forecast', type: 'TEXT' },
-    { name: 'date_remaining_tooling_life', type: 'TEXT' },
-    { name: 'date_annual_volume', type: 'TEXT' },
-    { name: 'expiration_date', type: 'TEXT' },
-    { name: 'finish_due_date', type: 'TEXT' },
-    { name: 'amount_brl', type: 'TEXT' },
-    { name: 'tool_quantity', type: 'TEXT' },
-    { name: 'bailment_agreement_signed', type: 'TEXT' },
-    { name: 'tooling_book', type: 'TEXT' },
-    { name: 'disposition', type: 'TEXT' },
-    { name: 'status', type: 'TEXT' },
-    { name: 'steps', type: 'TEXT' },
-    { name: 'bu', type: 'TEXT' },
-    { name: 'category', type: 'TEXT' },
-    { name: 'cummins_responsible', type: 'TEXT' },
-    { name: 'comments', type: 'TEXT' },
-    { name: 'todos', type: 'TEXT' },
-    { name: 'stim_tooling_management', type: 'TEXT' },
-    { name: 'invoice', type: 'TEXT' },
-    { name: 'vpcr', type: 'TEXT' },
-    { name: 'analysis_notes', type: 'TEXT' },
-    { name: 'replacement_tooling_id', type: 'INTEGER' },
-    { name: 'analysis_completed', type: 'INTEGER' }
-  ];
-
-  return new Promise((resolve, reject) => {
-    db.all('PRAGMA table_info(ferramental)', [], (err, columns) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-
-      const existingColumns = new Set(columns.map(col => col.name));
-      if (existingColumns.has(REPLACEMENT_COLUMN_NAME)) {
-        replacementColumnEnsured = true;
-      }
-
-      const missingColumns = columnsToCheck.filter(({ name }) => !existingColumns.has(name));
-      if (missingColumns.length === 0) {
-        resolve();
-        return;
-      }
-
-      let completed = 0;
-      let hasFailed = false;
-
-      db.serialize(() => {
-        missingColumns.forEach(({ name, type }) => {
-          const columnType = type || 'TEXT';
-          db.run(`ALTER TABLE ferramental ADD COLUMN ${name} ${columnType}`, (alterErr) => {
-            if (hasFailed) {
-              return;
-            }
-
-            if (alterErr && !/duplicate column/i.test(alterErr.message || '')) {
-              hasFailed = true;
-              reject(alterErr);
-              return;
-            }
-
-            if (name === REPLACEMENT_COLUMN_NAME) {
-              replacementColumnEnsured = true;
-            }
-
-            completed += 1;
-            if (completed === missingColumns.length) {
-              resolve();
-            }
-          });
-        });
-      });
-    });
-  });
-}
-
-function ensureReplacementColumnExists(force = false) {
-  if (force) {
-    replacementColumnEnsured = false;
-    replacementColumnEnsuringPromise = null;
-  }
-
-  if (replacementColumnEnsured) {
-    return Promise.resolve();
-  }
-
-  if (replacementColumnEnsuringPromise) {
-    return replacementColumnEnsuringPromise;
-  }
-
-  replacementColumnEnsuringPromise = new Promise((resolve, reject) => {
-    db.all('PRAGMA table_info(ferramental)', [], (err, columns) => {
-      if (err) {
-        replacementColumnEnsuringPromise = null;
-        reject(err);
-        return;
-      }
-
-      const hasColumn = Array.isArray(columns) && columns.some(col => col.name === REPLACEMENT_COLUMN_NAME);
-      if (hasColumn) {
-        replacementColumnEnsured = true;
-        replacementColumnEnsuringPromise = null;
-        resolve();
-        return;
-      }
-
-      db.run(`ALTER TABLE ferramental ADD COLUMN ${REPLACEMENT_COLUMN_NAME} ${REPLACEMENT_COLUMN_TYPE}`, (alterErr) => {
-        replacementColumnEnsuringPromise = null;
-        if (alterErr && !/duplicate column/i.test(alterErr.message || '')) {
-          reject(alterErr);
-          return;
+function createToolingDatabase() {
+  const toolingDb = new ToolingDatabase({
+    resolveDatabasePath: () => ensureDatabaseFile(getAppBaseDir()),
+    replacementColumnName: REPLACEMENT_COLUMN_NAME,
+    replacementColumnType: REPLACEMENT_COLUMN_TYPE,
+    supplierMetadataTable: SUPPLIER_METADATA_TABLE,
+    silentUpdateFields: SILENT_UPDATE_FIELDS,
+    helpers: {
+      shouldTrackChangeField,
+      collectChangeEntries,
+      mergeChangeEntriesIntoComments,
+      getCurrentTimestampBR,
+      renameAttachmentsFolder,
+      cleanupItemAttachments(supplierName, itemId) {
+        const itemDir = getItemFilesDir(supplierName, itemId);
+        const longItemDir = getLongPath(itemDir);
+        if (fs.existsSync(longItemDir)) {
+          fs.rmSync(longItemDir, { recursive: true, force: true });
         }
-        replacementColumnEnsured = true;
-        resolve();
-      });
-    });
-  });
-
-  return replacementColumnEnsuringPromise;
-}
-
-function ensureStepHistoryTable() {
-  return new Promise((resolve, reject) => {
-    db.run(`
-      CREATE TABLE IF NOT EXISTS step_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        tooling_id INTEGER NOT NULL,
-        old_step TEXT,
-        new_step TEXT NOT NULL,
-        changed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (tooling_id) REFERENCES ferramental(id) ON DELETE CASCADE
-      )
-    `, (err) => {
-      if (err) {
-        console.error('[StepHistory] Error creating step_history table:', err);
-        reject(err);
-      } else {
-        console.log('[StepHistory] step_history table ensured');
-        resolve();
       }
-    });
+    }
   });
-}
 
-function recordStepChange(toolingId, oldStep, newStep) {
-  return new Promise((resolve, reject) => {
-    if (oldStep === newStep) {
-      resolve({ recorded: false, reason: 'no_change' });
+  toolingDb.on('change', (changeEvent) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
       return;
     }
-
-    db.run(
-      `INSERT INTO step_history (tooling_id, old_step, new_step) VALUES (?, ?, ?)`,
-      [toolingId, oldStep || null, newStep],
-      function (err) {
-        if (err) {
-          console.error('[StepHistory] Error recording step change:', err);
-          reject(err);
-        } else {
-          console.log(`[StepHistory] Recorded step change for tooling ${toolingId}: ${oldStep} -> ${newStep}`);
-          resolve({ recorded: true, id: this.lastID });
-        }
-      }
-    );
+    mainWindow.webContents.send('data-updated', changeEvent);
   });
+
+  return toolingDb;
 }
 
-function getStepHistory(toolingId) {
-  return new Promise((resolve, reject) => {
-    db.all(
-      `SELECT * FROM step_history WHERE tooling_id = ? ORDER BY changed_at DESC`,
-      [toolingId],
-      (err, rows) => {
-        if (err) {
-          console.error('[StepHistory] Error getting step history:', err);
-          reject(err);
-        } else {
-          resolve(rows || []);
-        }
-      }
-    );
-  });
-}
-
-function clearStepHistory(toolingId) {
-  return new Promise((resolve, reject) => {
-    db.run(
-      `DELETE FROM step_history WHERE tooling_id = ?`,
-      [toolingId],
-      function (err) {
-        if (err) {
-          console.error('[StepHistory] Error clearing step history:', err);
-          reject(err);
-        } else {
-          console.log(`[StepHistory] Cleared ${this.changes} entries for tooling ${toolingId}`);
-          resolve({ success: true, deleted: this.changes });
-        }
-      }
-    );
-  });
-}
-
-function clearAllStepHistory() {
-  return new Promise((resolve, reject) => {
-    // First, ensure the step_history table exists
-    db.run(`CREATE TABLE IF NOT EXISTS step_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tooling_id INTEGER NOT NULL,
-      old_step TEXT,
-      new_step TEXT NOT NULL,
-      changed_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`, (createErr) => {
-      if (createErr) {
-        console.error('[StepHistory] Error ensuring step_history table:', createErr);
-      }
-
-      // Delete all step history records
-      db.run(`DELETE FROM step_history`, function (err) {
-        if (err) {
-          console.error('[StepHistory] Error clearing step_history table:', err);
-          // Continue anyway to clear the steps field
-        }
-
-        const historyDeleted = this ? this.changes : 0;
-        console.log(`[StepHistory] Cleared ${historyDeleted} entries from step_history`);
-
-        // Clear steps field and analysis_completed from all ferramental records
-        db.run(`UPDATE ferramental SET steps = NULL, analysis_completed = 0, last_update = datetime('now')`, function (updateErr) {
-          if (updateErr) {
-            console.error('[StepHistory] Error clearing steps:', updateErr);
-            reject(updateErr);
-          } else {
-            console.log(`[StepHistory] Cleared steps and analysis_completed from ${this.changes} tooling records`);
-            resolve({ success: true, historyDeleted, toolingsUpdated: this.changes });
-          }
-        });
-      });
-    });
-  });
-}
-
-function isMissingReplacementColumnError(err) {
-  if (!err || typeof err.message !== 'string') {
-    return false;
-  }
-  return err.message.includes(`no such column: ${REPLACEMENT_COLUMN_NAME}`);
-}
-
-function ensureTodosTable() {
-  return new Promise((resolve, reject) => {
-    // First check if table exists
-    db.get("SELECT name FROM sqlite_master WHERE type='table' AND name='todos'", (err, row) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-
-      if (!row) {
-        // Table doesn't exist, create it
-        db.run(`
-          CREATE TABLE todos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tooling_id INTEGER NOT NULL,
-            text TEXT NOT NULL,
-            completed INTEGER DEFAULT 0,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (tooling_id) REFERENCES ferramental(id) ON DELETE CASCADE
-          )
-        `, (createErr) => {
-          if (createErr) {
-            reject(createErr);
-          } else {
-            resolve();
-          }
-        });
-      } else {
-        // Table exists, verify columns
-        db.all("PRAGMA table_info(todos)", (pragmaErr, columns) => {
-          if (pragmaErr) {
-            reject(pragmaErr);
-            return;
-          }
-
-          const columnNames = columns.map(col => col.name);
-          const requiredColumns = ['id', 'tooling_id', 'text', 'completed', 'created_at'];
-          const missingColumns = requiredColumns.filter(col => !columnNames.includes(col));
-
-          if (missingColumns.length > 0) {
-            // Recreate table with all columns
-            db.serialize(() => {
-              db.run('DROP TABLE IF EXISTS todos_backup', (dropErr) => {
-              });
-
-              db.run('ALTER TABLE todos RENAME TO todos_backup', (renameErr) => {
-                if (renameErr) {
-                  reject(renameErr);
-                  return;
-                }
-
-                db.run(`
-                  CREATE TABLE todos (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    tooling_id INTEGER NOT NULL,
-                    text TEXT NOT NULL,
-                    completed INTEGER DEFAULT 0,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (tooling_id) REFERENCES ferramental(id) ON DELETE CASCADE
-                  )
-                `, (createErr) => {
-                  if (createErr) {
-                    reject(createErr);
-                    return;
-                  }
-
-                  // Try to copy data if possible
-                  db.run(`
-                    INSERT INTO todos (id, tooling_id, text, completed, created_at)
-                    SELECT id, tooling_id, text, completed, created_at FROM todos_backup
-                  `, (copyErr) => {
-                    if (copyErr) {
-                    }
-
-                    db.run('DROP TABLE todos_backup', (dropErr) => {
-                    });
-                    resolve();
-                  });
-                });
-              });
-            });
-          } else {
-            resolve();
-          }
-        });
-      }
-    });
-  });
-}
-
-function executeToolingUpdate(id, payload, attempt = 1, options = {}) {
-  return new Promise((resolve, reject) => {
-    const data = { ...payload };
-    const skipWhenNoTrackedChanges = options?.skipWhenNoTrackedChanges === true;
-
-    if (!data || Object.keys(data).length === 0) {
-      resolve({ success: true, changes: 0, comments: null, skipped: true });
-      return;
-    }
-
-    if (data.hasOwnProperty('tooling_life_qty') || data.hasOwnProperty('produced')) {
-      const toolingLife = parseFloat(data.tooling_life_qty) || 0;
-      const produced = parseFloat(data.produced) || 0;
-      const remaining = toolingLife - produced;
-      const percentUsed = toolingLife > 0 ? ((produced / toolingLife) * 100).toFixed(1) : 0;
-
-      data.remaining_tooling_life_pcs = remaining >= 0 ? remaining : 0;
-      data.percent_tooling_life = percentUsed;
-    }
-
-    const trackableFields = Object.keys(data).filter(field => shouldTrackChangeField(field));
-    const requiresLookup = trackableFields.length > 0;
-
-    const finalizeUpdate = (existingRecord) => {
-      let changeEntries = [];
-      if (existingRecord) {
-        changeEntries = collectChangeEntries(existingRecord, data);
-        if (changeEntries.length > 0) {
-          console.debug('[Ferramental][ChangeDebug]', {
-            id,
-            updates: changeEntries.map((entry) => ({
-              field: entry.field,
-              before: entry.oldFormatted,
-              after: entry.newFormatted
-            }))
-          });
-          const customTimestamp = options?.commentTimestamp;
-          data.comments = mergeChangeEntriesIntoComments(
-            existingRecord.comments,
-            data.comments,
-            changeEntries,
-            customTimestamp || getCurrentTimestampBR()
-          );
-        }
-      }
-
-      const validFields = Object.keys(data).filter(key => {
-        if (!key || typeof key !== 'string' || key.trim() === '') {
-          return false;
-        }
-        const fieldName = key.trim();
-        if (fieldName.startsWith('_') || fieldName.startsWith('$')) {
-          return false;
-        }
-        return data[key] !== undefined;
-      });
-
-      if (validFields.length === 0) {
-        resolve({ success: true, changes: 0, comments: existingRecord?.comments ?? null, skipped: true });
-        return;
-      }
-
-      const hasNonTrackableUpdates = validFields.some(field => !shouldTrackChangeField(field));
-      if (
-        skipWhenNoTrackedChanges &&
-        existingRecord &&
-        changeEntries.length === 0 &&
-        !hasNonTrackableUpdates
-      ) {
-        resolve({
-          success: true,
-          changes: 0,
-          comments: existingRecord?.comments ?? null,
-          skipped: true
-        });
-        return;
-      }
-
-      const validValues = validFields.map(key => data[key]);
-      const setClause = validFields.map(field => `${field.trim()} = ?`).join(', ');
-
-      // Verifica se o payload ORIGINAL do cliente contém campos editáveis pelo usuário.
-      // Usa o payload original (antes do backend adicionar campos derivados como comments,
-      // remaining_tooling_life_pcs, etc.) para evitar que cascatas automáticas do sistema
-      // (ex: recalcular expiration_date) disparem incrementos de revisão indesejados.
-      const hasUserEditableFields = Object.keys(payload).some(field => !SILENT_UPDATE_FIELDS.has(field));
-      const query = hasUserEditableFields
-        ? `UPDATE ferramental SET ${setClause}, last_update = datetime('now') WHERE id = ?`
-        : `UPDATE ferramental SET ${setClause} WHERE id = ?`;
-
-      db.run(
-        query,
-        [...validValues, id],
-        async function (err) {
-          if (err && isMissingReplacementColumnError(err) && attempt === 1) {
-            try {
-              await ensureReplacementColumnExists(true);
-              const retryResult = await executeToolingUpdate(id, payload, attempt + 1, options);
-              resolve(retryResult);
-              return;
-            } catch (retryError) {
-              reject(retryError);
-              return;
-            }
-          }
-
-          if (err) {
-            reject(err);
-          } else {
-            // Record step change if steps field was modified
-            if (data.hasOwnProperty('steps') && existingRecord) {
-              const oldStep = existingRecord.steps || null;
-              const newStep = data.steps || null;
-              if (oldStep !== newStep) {
-                try {
-                  await recordStepChange(id, oldStep, newStep);
-                } catch (stepErr) {
-                  console.error('[StepHistory] Failed to record step change:', stepErr);
-                }
-              }
-            }
-
-            // Schedule debounced data revision increment for the supplier
-            // This consolidates rapid cascading updates into a single revision bump
-            if (this.changes > 0 && hasUserEditableFields) {
-              const supplierForRevision = existingRecord?.supplier || data.supplier;
-              if (supplierForRevision) {
-                scheduleRevisionIncrement(String(supplierForRevision).trim());
-              }
-            }
-
-            resolve({
-              success: true,
-              changes: this.changes,
-              comments: data.comments ?? existingRecord?.comments ?? null,
-              skipped: false,
-              lastUpdateModified: hasUserEditableFields
-            });
-          }
-        }
-      );
-    };
-
-    if (requiresLookup) {
-      const selectFields = new Set(['id', 'comments', 'supplier']);
-      trackableFields.forEach(field => selectFields.add(field));
-      const columnList = Array.from(selectFields).join(', ');
-      db.get(`SELECT ${columnList} FROM ferramental WHERE id = ?`, [id], (selectErr, row) => {
-        if (selectErr) {
-          reject(selectErr);
-          return;
-        }
-        finalizeUpdate(row || null);
-      });
-    } else {
-      finalizeUpdate(null);
-    }
-  });
-}
+const toolingDatabase = createToolingDatabase();
 
 // Handlers IPC para operações do banco
 ipcMain.handle('get-data-revision', async (event, supplierName) => {
-  return getSupplierDataRevision(supplierName);
+  return toolingDatabase.getDataRevision(supplierName);
 });
 
 ipcMain.handle('load-tooling', async () => {
-  return new Promise((resolve, reject) => {
-    db.all('SELECT * FROM ferramental ORDER BY id DESC', [], (err, rows) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(rows);
-      }
-    });
-  });
+  return toolingDatabase.loadTooling();
 });
 
 ipcMain.handle('get-suppliers-with-stats', async () => {
-  return new Promise((resolve, reject) => {
-    db.all(
-      `SELECT * FROM ferramental WHERE supplier IS NOT NULL AND supplier != ''`,
-      [],
-      (err, rows) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-
-        // Agrupa itens por supplier - NÃO faz contagem aqui
-        // A contagem será feita no frontend usando ExpirationMetrics.fromItems()
-        const supplierMap = new Map();
-
-        rows.forEach(item => {
-          const supplierName = String(item.supplier || '').trim();
-          if (!supplierName) {
-            return;
-          }
-
-          if (!supplierMap.has(supplierName)) {
-            supplierMap.set(supplierName, {
-              supplier: supplierName,
-              items: []
-            });
-          }
-
-          supplierMap.get(supplierName).items.push(item);
-        });
-
-        const result = Array.from(supplierMap.values()).sort((a, b) =>
-          a.supplier.localeCompare(b.supplier, 'pt-BR', { sensitivity: 'base' })
-        );
-        resolve(result);
-      }
-    );
-  });
+  return toolingDatabase.getSuppliersWithStats();
 });
 
 ipcMain.handle('rename-supplier', async (event, currentName, newName) => {
-  return new Promise(async (resolve) => {
-    const normalizedCurrent = String(currentName || '').trim();
-    const normalizedNew = String(newName || '').trim();
-
-    if (!normalizedCurrent || !normalizedNew) {
-      resolve({ success: false, message: 'Invalid supplier name.' });
-      return;
-    }
-
-    if (normalizedCurrent === normalizedNew) {
-      resolve({ success: true, supplierName: normalizedNew, updated: 0 });
-      return;
-    }
-
-    try {
-      await ensureSupplierMetadataTable();
-    } catch (err) {
-    }
-
-    db.get(
-      `SELECT COUNT(1) as count FROM ferramental 
-       WHERE LOWER(TRIM(supplier)) = LOWER(TRIM(?))
-         AND LOWER(TRIM(supplier)) != LOWER(TRIM(?))`,
-      [normalizedNew, normalizedCurrent],
-      (checkErr, row) => {
-        if (checkErr) {
-          resolve({ success: false, message: 'Error validating supplier.' });
-          return;
-        }
-
-        if ((row?.count || 0) > 0) {
-          resolve({ success: false, message: 'A supplier with this name already exists.' });
-          return;
-        }
-
-        db.run(
-          'UPDATE ferramental SET supplier = ? WHERE TRIM(supplier) = ?',
-          [normalizedNew, normalizedCurrent],
-          function updateSupplier(err) {
-            if (err) {
-              resolve({ success: false, message: 'Error updating supplier.' });
-              return;
-            }
-
-            db.run(
-              `UPDATE ${SUPPLIER_METADATA_TABLE} SET supplier = ? WHERE supplier = ?`,
-              [normalizedNew, normalizedCurrent],
-              () => { }
-            );
-
-            try {
-              renameAttachmentsFolder(normalizedCurrent, normalizedNew);
-            } catch (renameErr) {
-              resolve({
-                success: false,
-                message: 'Supplier renamed, but there was an error moving the attachments.'
-              });
-              return;
-            }
-
-            resolve({ success: true, supplierName: normalizedNew, updated: this.changes || 0 });
-          }
-        );
-      }
-    );
-  });
+  return toolingDatabase.renameSupplier(currentName, newName);
 });
 
 ipcMain.handle('get-tooling-by-supplier', async (event, supplier) => {
-  return new Promise((resolve, reject) => {
-    db.all(`
-      SELECT * FROM ferramental 
-      WHERE supplier = ?
-      ORDER BY 
-        CASE 
-          WHEN julianday('now') > julianday(expiration_date) THEN 1
-          WHEN julianday(expiration_date) - julianday('now') < 365 THEN 2
-          ELSE 3
-        END,
-        expiration_date
-    `, [supplier], (err, rows) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(rows);
-      }
-    });
-  });
+  return toolingDatabase.getToolingBySupplier(supplier);
 });
 
 ipcMain.handle('search-tooling', async (event, term) => {
-  return new Promise((resolve, reject) => {
-    const searchTerm = `%${term}%`;
-    db.all(`
-      SELECT * FROM ferramental 
-      WHERE pn LIKE ? 
-         OR pn_description LIKE ? 
-         OR supplier LIKE ?
-         OR tool_description LIKE ?
-         OR tool_number_arb LIKE ?
-         OR asset_number LIKE ?
-         OR tool_ownership LIKE ?
-         OR customer LIKE ?
-         OR tooling_life_qty LIKE ?
-         OR produced LIKE ?
-         OR annual_volume_forecast LIKE ?
-         OR status LIKE ?
-         OR steps LIKE ?
-         OR bu LIKE ?
-         OR category LIKE ?
-         OR cummins_responsible LIKE ?
-         OR comments LIKE ?
-         OR stim_tooling_management LIKE ?
-         OR vpcr LIKE ?
-         OR disposition LIKE ?
-         OR CAST(id AS TEXT) LIKE ?
-      ORDER BY id DESC
-    `, [
-      searchTerm, searchTerm, searchTerm, searchTerm, searchTerm,
-      searchTerm, searchTerm, searchTerm, searchTerm, searchTerm,
-      searchTerm, searchTerm, searchTerm, searchTerm, searchTerm,
-      searchTerm, searchTerm, searchTerm, searchTerm, searchTerm,
-      searchTerm
-    ], (err, rows) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(rows);
-      }
-    });
-  });
+  return toolingDatabase.searchTooling(term);
 });
 
 ipcMain.handle('get-tooling-by-id', async (event, id) => {
-  return new Promise((resolve, reject) => {
-    db.get('SELECT * FROM ferramental WHERE id = ?', [id], (err, row) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(row);
-      }
-    });
-  });
+  return toolingDatabase.getToolingById(id);
 });
 
 ipcMain.handle('get-tooling-by-replacement-id', async (event, replacementId) => {
-  return new Promise((resolve, reject) => {
-    const numericReplacementId = Number(replacementId);
-    if (!Number.isFinite(numericReplacementId)) {
-      resolve([]);
-      return;
-    }
-    db.all(
-      'SELECT * FROM ferramental WHERE replacement_tooling_id = ? ORDER BY id ASC',
-      [numericReplacementId],
-      (err, rows) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(rows);
-        }
-      }
-    );
-  });
+  return toolingDatabase.getToolingByReplacementId(replacementId);
 });
 
 ipcMain.handle('get-all-tooling-ids', async () => {
-  return new Promise((resolve, reject) => {
-    db.all(
-      `SELECT id, pn, pn_description, supplier, tool_description, status, replacement_tooling_id
-       FROM ferramental
-       WHERE UPPER(TRIM(COALESCE(status, ''))) != 'OBSOLETE'
-         AND (replacement_tooling_id IS NULL OR TRIM(CAST(replacement_tooling_id AS TEXT)) = '')
-       ORDER BY id ASC`,
-      [],
-      (err, rows) => {
-        if (err) {
-          reject(err);
-        } else {
-          resolve(rows);
-        }
-      }
-    );
-  });
+  return toolingDatabase.getAllToolingIds();
 });
 
 // Busca IDs que são apontados por outros itens (têm incoming links)
 ipcMain.handle('get-ids-with-incoming-links', async (event, targetIds) => {
-  return new Promise((resolve, reject) => {
-    if (!Array.isArray(targetIds) || targetIds.length === 0) {
-      resolve([]);
-      return;
-    }
-
-    // Cria placeholders para a query
-    const placeholders = targetIds.map(() => '?').join(',');
-
-    db.all(
-      `SELECT DISTINCT replacement_tooling_id FROM ferramental 
-       WHERE replacement_tooling_id IN (${placeholders})
-       AND replacement_tooling_id IS NOT NULL 
-       AND replacement_tooling_id != ''`,
-      targetIds,
-      (err, rows) => {
-        if (err) {
-          reject(err);
-        } else {
-          // Retorna array de IDs que são apontados por outros
-          const idsWithLinks = rows.map(row => String(row.replacement_tooling_id));
-          resolve(idsWithLinks);
-        }
-      }
-    );
-  });
+  return toolingDatabase.getIdsWithIncomingLinks(targetIds);
 });
 
 ipcMain.handle('get-unique-responsibles', async () => {
-  return new Promise((resolve, reject) => {
-    db.all(
-      `SELECT DISTINCT cummins_responsible 
-       FROM ferramental 
-       WHERE cummins_responsible IS NOT NULL 
-         AND TRIM(cummins_responsible) != '' 
-       ORDER BY cummins_responsible ASC`,
-      [],
-      (err, rows) => {
-        if (err) {
-          reject(err);
-        } else {
-          const responsibles = rows
-            .map(row => String(row.cummins_responsible || '').trim())
-            .filter(name => name.length > 0);
-          resolve(responsibles);
-        }
-      }
-    );
-  });
+  return toolingDatabase.getUniqueResponsibles();
 });
 
 ipcMain.handle('get-analytics', async () => {
-  return new Promise((resolve, reject) => {
-    db.all(`
-      WITH filtered AS (
-        SELECT *
-        FROM ferramental
-        WHERE supplier IS NOT NULL
-          AND TRIM(supplier) != ''
-      )
-      SELECT 
-        COUNT(*) as total,
-        COUNT(DISTINCT supplier) as suppliers,
-        COUNT(DISTINCT cummins_responsible) as responsibles,
-        SUM(CASE 
-          WHEN UPPER(status) = 'ACTIVE' THEN 1
-          ELSE 0
-        END) as active,
-        SUM(CASE 
-          WHEN ((percent_tooling_life IS NOT NULL AND CAST(percent_tooling_life AS REAL) >= 100.0)
-            OR (tooling_life_qty > 0 AND produced >= tooling_life_qty))
-            AND NOT (UPPER(status) = 'OBSOLETE' AND replacement_tooling_id IS NOT NULL AND replacement_tooling_id != '')
-          THEN 1
-          ELSE 0
-        END) as expired_total,
-        SUM(CASE 
-          WHEN NOT ((percent_tooling_life IS NOT NULL AND CAST(percent_tooling_life AS REAL) >= 100.0)
-                OR (tooling_life_qty > 0 AND produced >= tooling_life_qty))
-            AND expiration_date IS NOT NULL 
-            AND julianday(expiration_date) - julianday('now') > 0
-            AND julianday(expiration_date) - julianday('now') <= 730
-            AND NOT (UPPER(status) = 'OBSOLETE' AND replacement_tooling_id IS NOT NULL AND replacement_tooling_id != '')
-          THEN 1
-          ELSE 0
-        END) as expiring_two_years
-      FROM filtered
-    `, [], (err, rows) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(rows[0]);
-      }
-    });
-  });
+  return toolingDatabase.getAnalytics();
 });
 
 ipcMain.handle('get-steps-summary', async () => {
-  return new Promise((resolve, reject) => {
-    // First query: counts per step
-    db.all(`
-      SELECT 
-        steps,
-        COUNT(*) as count
-      FROM ferramental
-      WHERE steps IS NOT NULL 
-        AND TRIM(steps) != '' 
-        AND TRIM(steps) != '0'
-      GROUP BY steps
-      ORDER BY CAST(steps AS INTEGER)
-    `, [], (err, rows) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-
-      // Second query: get all tools mapped to their supplier and step 
-      db.all(`
-        SELECT *
-        FROM ferramental
-        WHERE steps IS NOT NULL 
-          AND TRIM(steps) != '' 
-          AND TRIM(steps) != '0'
-          AND supplier IS NOT NULL
-          AND TRIM(supplier) != ''
-        ORDER BY CAST(steps AS INTEGER), supplier COLLATE NOCASE
-      `, [], (err2, supplierRows) => {
-        if (err2) {
-          reject(err2);
-          return;
-        }
-
-        // Build a map of suppliers per step with their items
-        const suppliersMap = {};
-        (supplierRows || []).forEach(item => {
-          if (!suppliersMap[item.steps]) {
-            suppliersMap[item.steps] = {};
-          }
-
-          const supplierName = String(item.supplier || '').trim();
-          if (!suppliersMap[item.steps][supplierName]) {
-            suppliersMap[item.steps][supplierName] = {
-              supplier: supplierName,
-              items: []
-            };
-          }
-          suppliersMap[item.steps][supplierName].items.push(item);
-        });
-
-        // Merge suppliers into step rows
-        const result = (rows || []).map(row => {
-          // map the obj to array
-          const stepSuppliersMap = suppliersMap[row.steps] || {};
-          const suppliersArr = Object.values(stepSuppliersMap);
-
-          return {
-            steps: row.steps,
-            count: row.count,
-            suppliers: suppliersArr
-          };
-        });
-
-        resolve(result);
-      });
-    });
-  });
+  return toolingDatabase.getStepsSummary();
 });
 
 // handler que retorna métricas (total/expired/expiring) por fornecedor para um passo
 ipcMain.handle('get-step-suppliers-metrics', async (event, step) => {
-  return new Promise((resolve, reject) => {
-    db.all(`
-      SELECT supplier,
-             COUNT(*) as total,
-             SUM(CASE
-                    WHEN ((percent_tooling_life IS NOT NULL AND CAST(percent_tooling_life AS REAL) >= 100.0)
-                          OR (tooling_life_qty > 0 AND produced >= tooling_life_qty))
-                         AND NOT (UPPER(status) = 'OBSOLETE' AND replacement_tooling_id IS NOT NULL AND replacement_tooling_id != '')
-                    THEN 1 ELSE 0 END) as expired,
-             SUM(CASE
-                    WHEN NOT ((percent_tooling_life IS NOT NULL AND CAST(percent_tooling_life AS REAL) >= 100.0)
-                          OR (tooling_life_qty > 0 AND produced >= tooling_life_qty))
-                         AND expiration_date IS NOT NULL
-                         AND julianday(expiration_date) - julianday('now') > 0
-                         AND julianday(expiration_date) - julianday('now') <= 730
-                         AND NOT (UPPER(status) = 'OBSOLETE' AND replacement_tooling_id IS NOT NULL AND replacement_tooling_id != '')
-                    THEN 1 ELSE 0 END) as expiring
-      FROM ferramental
-      WHERE steps = ?
-        AND supplier IS NOT NULL AND TRIM(supplier) != ''
-      GROUP BY supplier
-    `, [step], (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows || []);
-    });
-  });
+  return toolingDatabase.getStepSuppliersMetrics(step);
 });
 
 ipcMain.handle('update-tooling', async (event, id, data) => {
-  try {
-    await ensureReplacementColumnExists();
-  } catch (error) {
-  }
-  // Don't skip tracked changes for manual edits
-  return executeToolingUpdate(id, data, 1, {
-    skipWhenNoTrackedChanges: false
-  });
+  return toolingDatabase.updateTooling(id, data);
 });
 
 ipcMain.handle('create-tooling', async (event, data) => {
-  return new Promise((resolve, reject) => {
-    try {
-      const pn = (data?.pn || '').trim();
-      const pnDescription = (data?.pn_description || '').trim();
-      const supplier = (data?.supplier || '').trim();
-      const toolingLife = parseFloat(data?.tooling_life_qty) || 0;
-      const produced = parseFloat(data?.produced) || 0;
-      const toolDescription = (data?.tool_description || '').trim();
-      const productionDateValue = (data?.date_remaining_tooling_life || '').trim();
-      const productionDate = productionDateValue.length > 0 ? productionDateValue : null;
-      const forecastRaw = data?.annual_volume_forecast;
-      const parsedForecast =
-        forecastRaw === null || forecastRaw === undefined
-          ? null
-          : (typeof forecastRaw === 'number' ? forecastRaw : parseFloat(forecastRaw));
-      const annualForecast = Number.isFinite(parsedForecast) && parsedForecast > 0 ? parsedForecast : null;
-      const forecastDateValue = (data?.date_annual_volume || '').trim();
-      const forecastDate = forecastDateValue.length > 0 ? forecastDateValue : null;
-      const comments = data?.comments || null;
-
-      if (!pn || !supplier) {
-        resolve({ success: false, error: 'PN and supplier are required.' });
-        return;
-      }
-
-      const remaining = toolingLife - produced;
-      const percent = toolingLife > 0 ? ((produced / toolingLife) * 100).toFixed(1) : 0;
-
-      db.run(
-        `INSERT INTO ferramental (
-          pn,
-          pn_description,
-          supplier,
-          tool_description,
-          tooling_life_qty,
-          produced,
-          remaining_tooling_life_pcs,
-          percent_tooling_life,
-          annual_volume_forecast,
-          date_annual_volume,
-          status,
-          last_update,
-          date_remaining_tooling_life,
-          comments
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?)`,
-        [
-          pn,
-          pnDescription,
-          supplier,
-          toolDescription,
-          toolingLife,
-          produced,
-          remaining >= 0 ? remaining : 0,
-          percent,
-          annualForecast,
-          forecastDate,
-          'ACTIVE',
-          productionDate,
-          comments
-        ],
-        async function (err) {
-          if (err) {
-            reject(err);
-          } else {
-            // Increment data revision for the supplier
-            if (supplier) {
-              try {
-                await incrementSupplierDataRevision(supplier);
-              } catch (revErr) {
-                console.error('[DataRevision] Failed to increment on create:', revErr);
-              }
-            }
-            resolve({ success: true, id: this.lastID });
-          }
-        }
-      );
-    } catch (error) {
-      reject(error);
-    }
-  });
+  return toolingDatabase.createTooling(data);
 });
 
 ipcMain.handle('delete-tooling', async (event, id) => {
-  // Fetch record data before deleting (supplier, pn)
-  const record = await dbGet('SELECT supplier, pn FROM ferramental WHERE id = ?', [id]);
-  const supplier = record?.supplier ? String(record.supplier).trim() : '';
-  const pn = record?.pn ? String(record.pn).trim() : '';
-
-  return new Promise((resolve, reject) => {
-    db.run('DELETE FROM ferramental WHERE id = ?', [id], async function (err) {
-      if (err) {
-        reject(err);
-      } else {
-        // Increment data revision for the supplier
-        if (supplier && this.changes > 0) {
-          try {
-            await incrementSupplierDataRevision(supplier);
-          } catch (revErr) {
-            console.error('[DataRevision] Failed to increment on delete:', revErr);
-          }
-
-          // ── Attachment cleanup ──
-          try {
-            // Delete the entire per-item directory (files + pictures)
-            const itemDir = getItemFilesDir(supplier, id);
-            const longItemDir = getLongPath(itemDir);
-            if (fs.existsSync(longItemDir)) {
-              fs.rmSync(longItemDir, { recursive: true, force: true });
-            }
-          } catch (cleanupErr) {
-            console.error('[Cleanup] Error cleaning up attachments on delete:', cleanupErr);
-          }
-        }
-        resolve({ success: true, changes: this.changes });
-      }
-    });
-  });
+  return toolingDatabase.deleteTooling(id);
 });
 
 // Exportar dados do supplier para Excel
 ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds = null) => {
-  return new Promise((resolve, reject) => {
-    // Construir query baseada nos IDs filtrados
-    let query;
-    let params;
-
-    if (filteredIds && Array.isArray(filteredIds) && filteredIds.length > 0) {
-      // Exportar apenas os IDs filtrados
-      const placeholders = filteredIds.map(() => '?').join(',');
-      query = `
-        SELECT 
-          id,
-          pn,
-          pn_description,
-          tool_description,
-          tooling_life_qty,
-          produced,
-          date_remaining_tooling_life as production_date,
-          annual_volume_forecast as forecast,
-          date_annual_volume as forecast_date
-        FROM ferramental 
-        WHERE supplier = ? AND id IN (${placeholders})
-        ORDER BY id
-      `;
-      params = [supplierName, ...filteredIds];
-    } else {
-      // Exportar todos do supplier (fallback)
-      query = `
-        SELECT 
-          id,
-          pn,
-          pn_description,
-          tool_description,
-          tooling_life_qty,
-          produced,
-          date_remaining_tooling_life as production_date,
-          annual_volume_forecast as forecast,
-          date_annual_volume as forecast_date
-        FROM ferramental 
-        WHERE supplier = ?
-        ORDER BY id
-      `;
-      params = [supplierName];
-    }
-
-    db.all(query, params, async (err, rows) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-
+  return new Promise(async (resolve, reject) => {
       try {
+        const rows = await toolingDatabase.getSupplierExportRows(supplierName, filteredIds);
         const workbook = new ExcelJS.Workbook();
 
         // Criar aba de dados
@@ -2307,8 +1082,7 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         supplierRow.commit();
 
         // Row 3: Data Revision
-        await ensureSupplierMetadataTable();
-        const currentRevision = await getSupplierDataRevision(supplierName);
+        const currentRevision = await toolingDatabase.getDataRevision(supplierName);
         const revisionRow = worksheet.getRow(3);
         revisionRow.getCell(1).value = 'Revision';
         revisionRow.getCell(1).font = { bold: true };
@@ -2487,7 +1261,7 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
         });
 
         // Criar segunda aba com instruções (sem Supplier Name — agora está na aba Tooling Data)
-        const lastImportTimestamp = await getSupplierImportTimestamp(supplierName);
+        const lastImportTimestamp = await toolingDatabase.getSupplierImportTimestamp(supplierName);
         const supplierSheet = workbook.addWorksheet(SUPPLIER_INFO_SHEET_NAME);
 
         // Remover gridlines da aba Instructions
@@ -2632,7 +1406,6 @@ ipcMain.handle('export-supplier-data', async (event, supplierName, filteredIds =
       } catch (error) {
         reject(error);
       }
-    });
   });
 });
 
@@ -2734,46 +1507,26 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
       // Criar novo registro
       const mergedComments = buildUpdatedComments('', supplierComment, todayStr, toolingLifeQty, true);
 
-      await dbRun(
-        `INSERT INTO ferramental (
-          supplier, pn, pn_description, tool_description, tooling_life_qty, produced,
-          date_remaining_tooling_life, annual_volume_forecast,
-          date_annual_volume, comments, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          supplierName,
-          pn || '',
-          pnDescription || '',
-          toolDescription || '',
-          toolingLifeQty,
-          producedQty,
-          productionDateISO,
-          forecastQty,
-          forecastDateISO,
-          mergedComments,
-          'ACTIVE'
-        ]
-      );
+      await toolingDatabase.createImportedToolingRecord({
+        supplierName,
+        pn,
+        pnDescription,
+        toolDescription,
+        toolingLifeQty,
+        producedQty,
+        productionDateISO,
+        forecastQty,
+        forecastDateISO,
+        comments: mergedComments,
+        status: 'ACTIVE'
+      });
 
       created += 1;
       continue;
     }
 
     // Se há ID, atualizar registro existente
-    const record = await dbGet(
-      `SELECT pn,
-              pn_description,
-              tool_description,
-              tooling_life_qty,
-              produced,
-              date_remaining_tooling_life,
-              annual_volume_forecast,
-              date_annual_volume,
-              comments
-         FROM ferramental
-        WHERE id = ? AND supplier = ?`,
-      [id, supplierName]
-    );
+    const record = await toolingDatabase.getImportedToolingRecord(id, supplierName);
 
     if (!record) {
       skipped += 1;
@@ -2805,44 +1558,31 @@ ipcMain.handle('import-supplier-data', async (event, supplierName) => {
       changeEntries
     );
 
-    await dbRun(
-      `UPDATE ferramental 
-         SET pn = ?,
-             pn_description = ?,
-             tool_description = ?,
-             tooling_life_qty = ?,
-             produced = ?,
-             date_remaining_tooling_life = ?,
-             annual_volume_forecast = ?,
-             date_annual_volume = ?,
-             comments = ?
-       WHERE id = ? AND supplier = ?`,
-      [
-        pn || '',
-        pnDescription || '',
-        toolDescription || '',
-        toolingLifeQty,
-        producedQty,
-        productionDateISO,
-        forecastQty,
-        forecastDateISO,
-        mergedComments,
-        id,
-        supplierName
-      ]
-    );
+    await toolingDatabase.updateImportedToolingRecord({
+      id,
+      supplierName,
+      pn,
+      pnDescription,
+      toolDescription,
+      toolingLifeQty,
+      producedQty,
+      productionDateISO,
+      forecastQty,
+      forecastDateISO,
+      comments: mergedComments
+    });
 
     updated += 1;
   }
 
   const timestampStr = getCurrentTimestampBR();
   updateSupplierInfoTimestamp(workbook, timestampStr);
-  await setSupplierImportTimestamp(supplierName, timestampStr);
+  await toolingDatabase.setSupplierImportTimestamp(supplierName, timestampStr);
 
   // Increment data revision if any changes were made
   if (updated > 0 || created > 0) {
     try {
-      await incrementSupplierDataRevision(supplierName);
+      await toolingDatabase.incrementDataRevision(supplierName);
     } catch (revErr) {
       console.error('[DataRevision] Failed to increment on import:', revErr);
     }
@@ -3212,18 +1952,9 @@ ipcMain.handle('import-new-supplier', async () => {
     }
 
     // Verificar se o supplier já existe no banco de dados
-    const existingSupplier = await new Promise((resolve, reject) => {
-      db.get(
-        `SELECT COUNT(*) as count FROM ferramental WHERE LOWER(TRIM(supplier)) = LOWER(TRIM(?))`,
-        [supplierName],
-        (err, row) => {
-          if (err) reject(err);
-          else resolve(row);
-        }
-      );
-    });
+    const existingSupplierCount = await toolingDatabase.countSupplierRecordsByName(supplierName);
 
-    if (existingSupplier && existingSupplier.count > 0) {
+    if (existingSupplierCount > 0) {
       return {
         success: false,
         supplierExists: true,
@@ -3261,26 +1992,19 @@ ipcMain.handle('import-new-supplier', async () => {
       // Criar novo registro
       const mergedComments = buildUpdatedComments('', supplierComment, todayStr, toolingLifeQty, true);
 
-      await dbRun(
-        `INSERT INTO ferramental (
-          supplier, pn, pn_description, tool_description, tooling_life_qty, produced,
-          date_remaining_tooling_life, annual_volume_forecast,
-          date_annual_volume, comments, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          supplierName,
-          pn || '',
-          pnDescription || '',
-          toolDescription || '',
-          toolingLifeQty,
-          producedQty,
-          productionDateISO,
-          forecastQty,
-          forecastDateISO,
-          mergedComments,
-          'ACTIVE'
-        ]
-      );
+      await toolingDatabase.createImportedToolingRecord({
+        supplierName,
+        pn,
+        pnDescription,
+        toolDescription,
+        toolingLifeQty,
+        producedQty,
+        productionDateISO,
+        forecastQty,
+        forecastDateISO,
+        comments: mergedComments,
+        status: 'ACTIVE'
+      });
 
       created += 1;
     }
@@ -3295,7 +2019,7 @@ ipcMain.handle('import-new-supplier', async () => {
     // Atualizar timestamp
     const timestampStr = getCurrentTimestampBR();
     updateSupplierInfoTimestamp(workbook, timestampStr);
-    await setSupplierImportTimestamp(supplierName, timestampStr);
+    await toolingDatabase.setSupplierImportTimestamp(supplierName, timestampStr);
 
     const verificationSheet = workbook.getWorksheet(VERIFICATION_SHEET_NAME);
     if (verificationSheet) {
@@ -3878,57 +2602,25 @@ app.whenReady().then(async () => {
 
 // Todos handlers
 ipcMain.handle('get-todos', async (event, toolingId) => {
-  return new Promise((resolve, reject) => {
-    db.all('SELECT * FROM todos WHERE tooling_id = ? ORDER BY created_at ASC', [toolingId], (err, rows) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve(rows);
-      }
-    });
-  });
+  return toolingDatabase.getTodos(toolingId);
 });
 
 ipcMain.handle('add-todo', async (event, toolingId, text) => {
-  return new Promise((resolve, reject) => {
-    db.run('INSERT INTO todos (tooling_id, text, completed) VALUES (?, ?, 0)', [toolingId, text], function (err) {
-      if (err) {
-        reject(err);
-      } else {
-        resolve({ id: this.lastID, tooling_id: toolingId, text, completed: 0 });
-      }
-    });
-  });
+  return toolingDatabase.addTodo(toolingId, text);
 });
 
 ipcMain.handle('update-todo', async (event, todoId, text, completed) => {
-  return new Promise((resolve, reject) => {
-    db.run('UPDATE todos SET text = ?, completed = ? WHERE id = ?', [text, completed, todoId], (err) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve({ success: true });
-      }
-    });
-  });
+  return toolingDatabase.updateTodo(todoId, text, completed);
 });
 
 ipcMain.handle('delete-todo', async (event, todoId) => {
-  return new Promise((resolve, reject) => {
-    db.run('DELETE FROM todos WHERE id = ?', [todoId], (err) => {
-      if (err) {
-        reject(err);
-      } else {
-        resolve({ success: true });
-      }
-    });
-  });
+  return toolingDatabase.deleteTodo(todoId);
 });
 
 // Step History handlers
 ipcMain.handle('get-step-history', async (event, toolingId) => {
   try {
-    const history = await getStepHistory(toolingId);
+    const history = await toolingDatabase.getStepHistory(toolingId);
     return history;
   } catch (err) {
     console.error('[IPC] Error getting step history:', err);
@@ -3938,7 +2630,7 @@ ipcMain.handle('get-step-history', async (event, toolingId) => {
 
 ipcMain.handle('clear-step-history', async (event, toolingId) => {
   try {
-    const result = await clearStepHistory(toolingId);
+    const result = await toolingDatabase.clearStepHistory(toolingId);
     return result;
   } catch (err) {
     console.error('[IPC] Error clearing step history:', err);
@@ -3948,7 +2640,7 @@ ipcMain.handle('clear-step-history', async (event, toolingId) => {
 
 ipcMain.handle('clear-all-step-history', async () => {
   try {
-    const result = await clearAllStepHistory();
+    const result = await toolingDatabase.clearAllStepHistory();
     return result;
   } catch (err) {
     console.error('[IPC] Error clearing all step history:', err);
@@ -3957,42 +2649,7 @@ ipcMain.handle('clear-all-step-history', async () => {
 });
 
 ipcMain.handle('get-step-change-average', async () => {
-  return new Promise((resolve, reject) => {
-    const query = `
-      SELECT
-        AVG(diff_days) AS avg_days,
-        COUNT(*) AS intervals_count
-      FROM (
-        SELECT
-          tooling_id,
-          (julianday(changed_at) - julianday(prev_changed_at)) AS diff_days
-        FROM (
-          SELECT
-            tooling_id,
-            changed_at,
-            LAG(changed_at) OVER (
-              PARTITION BY tooling_id
-              ORDER BY datetime(changed_at) ASC
-            ) AS prev_changed_at
-          FROM step_history
-        ) ranked
-        WHERE prev_changed_at IS NOT NULL
-      ) intervals
-    `;
-
-    db.get(query, [], (err, row) => {
-      if (err) {
-        console.error('[StepHistory] Error getting average step change interval:', err);
-        reject(err);
-        return;
-      }
-
-      resolve({
-        avgDays: row?.avg_days !== null && row?.avg_days !== undefined ? Number(row.avg_days) : null,
-        intervalsCount: row?.intervals_count ? Number(row.intervals_count) : 0
-      });
-    });
-  });
+  return toolingDatabase.getStepChangeAverage();
 });
 
 // Window control handlers
@@ -4033,24 +2690,9 @@ ipcMain.on('close-devtools', () => {
 
 // Export Annual Volume for Supplier (PN unique, Supplier, Annual Volume, Annual Volume Date)
 ipcMain.handle('export-forecast-supplier', async () => {
-  return new Promise((resolve, reject) => {
-    db.all(`
-      SELECT 
-        pn,
-        supplier,
-        annual_volume_forecast as forecast,
-        date_annual_volume as forecast_date
-      FROM ferramental 
-      WHERE pn IS NOT NULL AND pn != ''
-      GROUP BY pn
-      ORDER BY pn
-    `, [], async (err, rows) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-
+  return new Promise(async (resolve, reject) => {
       try {
+        const rows = await toolingDatabase.getForecastSupplierRows();
         const workbook = new ExcelJS.Workbook();
         const worksheet = workbook.addWorksheet('Forecast Data');
 
@@ -4188,7 +2830,6 @@ ipcMain.handle('export-forecast-supplier', async () => {
       } catch (error) {
         reject(error);
       }
-    });
   });
 });
 
@@ -4272,13 +2913,7 @@ ipcMain.handle('import-forecast-supplier', async () => {
 
         // Only update if there's data to update
         if (Object.keys(updateData).length > 0) {
-          // Find all records with this PN and update them
-          const idsToUpdate = await new Promise((resolve, reject) => {
-            db.all('SELECT id FROM ferramental WHERE pn = ?', [pnStr], (err, rows) => {
-              if (err) reject(err);
-              else resolve(rows.map(r => r.id));
-            });
-          });
+          const idsToUpdate = await toolingDatabase.getToolingIdsByPn(pnStr);
 
           if (idsToUpdate.length === 0) {
             errors.push(`Row ${rowNumber} (PN ${pnStr}): No records found with this PN`);
@@ -4287,7 +2922,7 @@ ipcMain.handle('import-forecast-supplier', async () => {
 
           // Update all records with this PN
           for (const id of idsToUpdate) {
-            const result = await executeToolingUpdate(id, updateData, 1, {
+            const result = await toolingDatabase.updateTooling(id, updateData, {
               commentTimestamp: `Import: ${importDateStamp}`,
               skipWhenNoTrackedChanges: true
             });
@@ -4315,14 +2950,9 @@ ipcMain.handle('import-forecast-supplier', async () => {
 
 // Export Full Database for Manager
 ipcMain.handle('export-forecast-manager', async () => {
-  return new Promise((resolve, reject) => {
-    db.all(`SELECT * FROM ferramental ORDER BY id`, [], async (err, rows) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-
+  return new Promise(async (resolve, reject) => {
       try {
+        const rows = await toolingDatabase.getAllToolingRows();
         const workbook = new ExcelJS.Workbook();
         const worksheet = workbook.addWorksheet('Full Database');
 
@@ -4550,7 +3180,6 @@ ipcMain.handle('export-forecast-manager', async () => {
       } catch (error) {
         reject(error);
       }
-    });
   });
 });
 
@@ -4693,7 +3322,7 @@ ipcMain.handle('import-forecast-manager', async () => {
 
         // Only update if there's data to update
         if (Object.keys(updateData).length > 0) {
-          const result = await executeToolingUpdate(id, updateData, 1, {
+          const result = await toolingDatabase.updateTooling(id, updateData, {
             commentTimestamp: `Import: ${importDateStamp}`,
             skipWhenNoTrackedChanges: true
           });
@@ -4719,9 +3348,7 @@ ipcMain.handle('import-forecast-manager', async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (db) {
-    db.close();
-  }
+  toolingDatabase.close().catch(() => { });
   if (process.platform !== 'darwin') {
     app.quit();
   }
