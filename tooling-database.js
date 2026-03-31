@@ -122,6 +122,9 @@ class ToolingDatabase extends EventEmitter {
   }
 
   async ensureBaseSchema() {
+    await this.run(`CREATE TABLE IF NOT EXISTS ferramental (
+      id INTEGER PRIMARY KEY AUTOINCREMENT
+    )`);
     await this.checkAndAddColumns();
     await this.ensureTodosTable();
     await this.ensureStepHistoryTable();

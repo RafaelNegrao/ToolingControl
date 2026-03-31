@@ -1063,6 +1063,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Carrega dados específicos da aba
     if (tabName === 'analytics') {
       loadAnalytics();
+    } else {
+      const suppliersModal = document.querySelector('.matrix-suppliers-modal');
+      if (suppliersModal) suppliersModal.remove();
     }
   }
 

@@ -892,10 +892,6 @@ function getAppBaseDir() {
     return path.dirname(process.execPath);
   }
 
-  if (process.resourcesPath && !process.resourcesPath.endsWith('app.asar')) {
-    return path.join(process.resourcesPath, '..');
-  }
-
   return __dirname;
 }
 
